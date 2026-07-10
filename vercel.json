@@ -1,9 +1,13 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "PORT=3000 BASE_PATH=/ pnpm --filter @workspace/inventory-adjustments build",
+  "buildCommand": "PORT=3000 BASE_PATH=/ pnpm --filter @workspace/inventory-adjustments build && pnpm --filter @workspace/api-server exec node build-serverless.mjs",
+  "functions": {
+    "api/index.mjs": { "maxDuration": 300 }
+  },
   "outputDirectory": "artifacts/inventory-adjustments/dist/public",
   "framework": null,
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

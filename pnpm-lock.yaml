@@ -77,6 +77,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@google-cloud/storage':
+        specifier: ^7.19.0
+        version: 7.19.0
     devDependencies:
       prettier:
         specifier: ^3.8.1
