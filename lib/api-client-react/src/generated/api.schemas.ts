@@ -40,6 +40,12 @@ export interface Vendor {
   primarySecondary?: string | null;
   waveSprint?: string | null;
   specInDate?: string | null;
+  specInLink?: string | null;
+  ndaLink?: string | null;
+  supplierSelectedDate?: string | null;
+  supplierSelectedLink?: string | null;
+  poReadyDate?: string | null;
+  poReadyLink?: string | null;
   ndaDate?: string | null;
   msaDate?: string | null;
   capabilityVerified?: string | null;
@@ -91,6 +97,12 @@ export interface VendorInput {
   primarySecondary?: string | null;
   waveSprint?: string | null;
   specInDate?: string | null;
+  specInLink?: string | null;
+  ndaLink?: string | null;
+  supplierSelectedDate?: string | null;
+  supplierSelectedLink?: string | null;
+  poReadyDate?: string | null;
+  poReadyLink?: string | null;
   ndaDate?: string | null;
   msaDate?: string | null;
   capabilityVerified?: string | null;

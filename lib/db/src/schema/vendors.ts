@@ -49,8 +49,15 @@ export const vendorTable = pgTable("vendor", {
   subCapability: text("sub_capability"),
   primarySecondary: text("primary_secondary"),
   waveSprint: text("wave_sprint"),
-  // Day 0 of the 45-day sourcing SLA (spec in → PO-ready). ISO YYYY-MM-DD.
-  specInDate: text("spec_in_date"),
+  // 45-day sourcing SLA steps (spec in → PO-ready). Dates are ISO YYYY-MM-DD;
+  // each step also carries an evidence/document link.
+  specInDate: text("spec_in_date"), // SLA Day 0
+  specInLink: text("spec_in_link"),
+  ndaLink: text("nda_link"),
+  supplierSelectedDate: text("supplier_selected_date"), // target day 28
+  supplierSelectedLink: text("supplier_selected_link"),
+  poReadyDate: text("po_ready_date"), // target day 35; freezes the SLA clock
+  poReadyLink: text("po_ready_link"),
   ndaDate: text("nda_date"),
   msaDate: text("msa_date"),
   capabilityVerified: text("capability_verified"),

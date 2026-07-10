@@ -43,6 +43,7 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FilterX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -108,15 +109,22 @@ function addDaysIso(start: Date, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Days elapsed on the SLA clock; frozen at onboarding. Null = clock not started. */
+/**
+ * Days elapsed on the SLA clock. The clock freezes at PO-ready (the SLA
+ * endpoint) or, failing that, at onboarding. Null = clock not started.
+ */
 function slaDaysElapsed(r: AslRow): number | null {
   const start = parseIsoDate(r.vendor.specInDate);
   if (!start) return null;
   const end =
-    r.entry.status === "onboarded" && r.entry.onboardedOn
-      ? (parseIsoDate(r.entry.onboardedOn) ?? new Date())
-      : new Date();
+    parseIsoDate(r.vendor.poReadyDate) ??
+    (r.entry.status === "onboarded" ? parseIsoDate(r.entry.onboardedOn) : null) ??
+    new Date();
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86_400_000));
+}
+
+function slaDone(r: AslRow): boolean {
+  return !!r.vendor.poReadyDate || r.entry.status === "onboarded";
 }
 
 function SlaCell({ r }: { r: AslRow }) {
@@ -131,7 +139,7 @@ function SlaCell({ r }: { r: AslRow }) {
       </span>
     );
   }
-  if (r.entry.status === "onboarded") {
+  if (slaDone(r)) {
     const ok = days <= SLA_TOTAL_DAYS;
     return (
       <Badge
@@ -140,6 +148,7 @@ function SlaCell({ r }: { r: AslRow }) {
           "whitespace-nowrap",
           ok ? STATUS_STYLES["onboarded"] : "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
         )}
+        title={r.vendor.poReadyDate ? `PO-ready ${r.vendor.poReadyDate}` : "Onboarded"}
       >
         Done · {days}d
       </Badge>
@@ -172,52 +181,175 @@ function SlaCell({ r }: { r: AslRow }) {
   );
 }
 
-/** Milestone chips for the expanded row: targets from specIn, actuals where tracked. */
-function SlaTimeline({ r }: { r: AslRow }) {
-  const start = parseIsoDate(r.vendor.specInDate);
-  if (!start) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Set the <span className="font-medium">Spec In</span> date to track this vendor against the
-        45-day sourcing SLA.
-      </p>
-    );
-  }
-  const onboarded = r.entry.status === "onboarded";
-  const milestones: { label: string; day: number; actual?: string | null }[] = [
-    { label: "Spec in", day: 0, actual: r.vendor.specInDate },
-    { label: "NDA executed", day: 11, actual: r.vendor.ndaDate },
-    { label: "Supplier selected", day: 28 },
-    { label: "PO-ready", day: SLA_PO_READY_DAY },
-    { label: "SLA deadline", day: SLA_TOTAL_DAYS },
-  ];
-  const now = Date.now();
+// ---------------------------------------------------------------------
+// Inline SLA milestone editor (expanded row). Each step has an editable
+// completed date + evidence link that save on blur — no dialog needed.
+// ---------------------------------------------------------------------
+
+function InlineDate({
+  value,
+  onSave,
+  disabled,
+}: {
+  value: string | null | undefined;
+  onSave: (v: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [v, setV] = React.useState(value ?? "");
+  React.useEffect(() => setV(value ?? ""), [value]);
+  const commit = () => {
+    const next = v || null;
+    if (next !== (value ?? null)) onSave(next);
+  };
   return (
-    <div className="flex flex-wrap items-center gap-y-1.5">
-      {milestones.map((m, i) => {
-        const target = addDaysIso(start, m.day);
-        const actual = parseIsoDate(m.actual ?? null);
-        const targetEnd = Date.parse(`${target}T23:59:59`);
-        const done = !!actual || onboarded;
-        const late = actual ? actual.getTime() > targetEnd : !onboarded && now > targetEnd;
+    <Input
+      type="date"
+      className="h-7 w-[9.5rem] text-xs"
+      value={v}
+      disabled={disabled}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+    />
+  );
+}
+
+function InlineLink({
+  value,
+  onSave,
+  disabled,
+}: {
+  value: string | null | undefined;
+  onSave: (v: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [v, setV] = React.useState(value ?? "");
+  React.useEffect(() => setV(value ?? ""), [value]);
+  const commit = () => {
+    const trimmed = v.trim();
+    const next = trimmed === "" ? null : trimmed;
+    if (next !== (value ?? null)) onSave(next);
+  };
+  const href = value && /^https?:\/\//.test(value) ? value : value ? `https://${value}` : null;
+  return (
+    <div className="flex items-center gap-1 min-w-0">
+      <Input
+        type="url"
+        placeholder="Paste doc link…"
+        className="h-7 text-xs flex-1 min-w-0"
+        value={v}
+        disabled={disabled}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      />
+      {href && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          title={href}
+          className="text-primary hover:text-primary/80 shrink-0 p-1"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      )}
+    </div>
+  );
+}
+
+type SlaStep = {
+  label: string;
+  day: number;
+  dateKey: VendorKey;
+  linkKey: VendorKey;
+};
+
+const SLA_STEPS: SlaStep[] = [
+  { label: "Spec in", day: 0, dateKey: "specInDate", linkKey: "specInLink" },
+  { label: "NDA executed", day: 11, dateKey: "ndaDate", linkKey: "ndaLink" },
+  { label: "Supplier selected", day: 28, dateKey: "supplierSelectedDate", linkKey: "supplierSelectedLink" },
+  { label: "PO-ready", day: SLA_PO_READY_DAY, dateKey: "poReadyDate", linkKey: "poReadyLink" },
+];
+
+function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void> }) {
+  const { toast } = useToast();
+  const update = useUpdateVendor();
+  const start = parseIsoDate(r.vendor.specInDate);
+  const now = Date.now();
+
+  const save = async (patch: Partial<Record<VendorKey, string | null>>) => {
+    try {
+      await update.mutateAsync({
+        vendorId: r.vendor.id,
+        data: { name: r.vendor.name, ...patch } as never,
+      });
+      await onChanged();
+    } catch (e) {
+      toast({ title: "Save failed", description: String(e), variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="rounded-md border bg-background/60 overflow-hidden">
+      <div className="grid grid-cols-[minmax(9rem,13rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+        <span>45-day SLA step</span>
+        <span>Target</span>
+        <span>Completed</span>
+        <span>Link</span>
+      </div>
+      {SLA_STEPS.map((s) => {
+        const actualRaw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
+        const actual = parseIsoDate(actualRaw);
+        const target = start ? addDaysIso(start, s.day) : null;
+        const targetEnd = target ? Date.parse(`${target}T23:59:59`) : null;
+        const late = actual && targetEnd ? actual.getTime() > targetEnd : false;
+        const overdue = !actual && targetEnd != null && now > targetEnd && !slaDone(r);
         return (
-          <React.Fragment key={m.label}>
-            {i > 0 && <span className="mx-1.5 text-muted-foreground/40">→</span>}
+          <div
+            key={s.label}
+            className="grid grid-cols-[minmax(9rem,13rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b last:border-b-0"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span
+                className={cn(
+                  "w-1.5 h-1.5 rounded-full shrink-0",
+                  actual && !late && "bg-emerald-500",
+                  actual && late && "bg-amber-500",
+                  overdue && "bg-red-500",
+                  !actual && !overdue && "bg-muted-foreground/30",
+                )}
+              />
+              <span className="text-xs font-medium truncate">{s.label}</span>
+              <span className="text-[10px] text-muted-foreground shrink-0">D{s.day}</span>
+            </div>
             <span
               className={cn(
-                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap",
-                done && !late && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
-                late && "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
-                !done && !late && "text-muted-foreground border-border",
+                "text-xs tabular-nums",
+                overdue ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground",
               )}
-              title={m.actual ? `Actual: ${m.actual} (target ${target})` : `Target: day ${m.day}`}
+              title={overdue ? "Target passed with no completion date" : undefined}
             >
-              <span className="font-medium">{m.label}</span>
-              <span className="tabular-nums">{m.actual ?? target}</span>
+              {target ?? "—"}
             </span>
-          </React.Fragment>
+            <InlineDate
+              value={actualRaw}
+              onSave={(v) => save({ [s.dateKey]: v })}
+              disabled={update.isPending}
+            />
+            <InlineLink
+              value={(r.vendor[s.linkKey] as string | null | undefined) ?? null}
+              onSave={(v) => save({ [s.linkKey]: v })}
+              disabled={update.isPending}
+            />
+          </div>
         );
       })}
+      {!start && (
+        <p className="px-3 py-1.5 text-[11px] text-muted-foreground bg-muted/30">
+          Set the <span className="font-medium">Spec in</span> completed date to start the 45-day
+          clock and compute the step targets.
+        </p>
+      )}
     </div>
   );
 }
@@ -353,7 +485,13 @@ const PIPELINE_EDIT_FIELDS: EditField[] = [
   { key: "waveSprint", label: "Wave/Sprint" },
   { key: "website", label: "Website" },
   { key: "specInDate", label: "Spec In (SLA Day 0)", date: true },
-  { key: "ndaDate", label: "NDA Date" },
+  { key: "specInLink", label: "Spec In Link" },
+  { key: "ndaDate", label: "NDA Date", date: true },
+  { key: "ndaLink", label: "NDA Link" },
+  { key: "supplierSelectedDate", label: "Supplier Selected (D28)", date: true },
+  { key: "supplierSelectedLink", label: "Supplier Selected Link" },
+  { key: "poReadyDate", label: "PO-Ready (D35)", date: true },
+  { key: "poReadyLink", label: "PO-Ready Link" },
   { key: "msaDate", label: "MSA Date" },
   { key: "capabilityVerified", label: "Capability Verified" },
   { key: "factoryTourDate", label: "Factory Tour" },
@@ -1024,7 +1162,7 @@ function PipelineTable({
                           <TableRow className="bg-muted/20 hover:bg-muted/20">
                             <TableCell colSpan={colSpan} className="pt-0 pb-4 px-6">
                               <div className="space-y-3">
-                                <SlaTimeline r={r} />
+                                <SlaMilestoneEditor r={r} onChanged={onChanged} />
                                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
                                   {detailCols.map((c) => (
                                     <div key={c.key} className="min-w-0">

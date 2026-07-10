@@ -1072,6 +1072,12 @@ components:
         primarySecondary: { type: string, nullable: true }
         waveSprint: { type: string, nullable: true }
         specInDate: { type: string, nullable: true }
+        specInLink: { type: string, nullable: true }
+        ndaLink: { type: string, nullable: true }
+        supplierSelectedDate: { type: string, nullable: true }
+        supplierSelectedLink: { type: string, nullable: true }
+        poReadyDate: { type: string, nullable: true }
+        poReadyLink: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }
@@ -1124,6 +1130,12 @@ components:
         primarySecondary: { type: string, nullable: true }
         waveSprint: { type: string, nullable: true }
         specInDate: { type: string, nullable: true }
+        specInLink: { type: string, nullable: true }
+        ndaLink: { type: string, nullable: true }
+        supplierSelectedDate: { type: string, nullable: true }
+        supplierSelectedLink: { type: string, nullable: true }
+        poReadyDate: { type: string, nullable: true }
+        poReadyLink: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }
