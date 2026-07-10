@@ -1115,6 +1115,7 @@ components:
         nextAction: { type: string, nullable: true }
         nextActionDue: { type: string, nullable: true }
         notes: { type: string, nullable: true }
+        createdAt: { type: string, nullable: true }
     VendorInput:
       type: object
       required: [name]

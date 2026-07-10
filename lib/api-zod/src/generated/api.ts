@@ -1146,6 +1146,7 @@ export const ListVendorsResponse = zod.object({
       nextAction: zod.string().nullish(),
       nextActionDue: zod.string().nullish(),
       notes: zod.string().nullish(),
+      createdAt: zod.string().nullish(),
     }),
   ),
 });
@@ -1292,6 +1293,7 @@ export const CreateVendorResponse = zod.object({
   nextAction: zod.string().nullish(),
   nextActionDue: zod.string().nullish(),
   notes: zod.string().nullish(),
+  createdAt: zod.string().nullish(),
 });
 
 export const UpdateVendorParams = zod.object({
@@ -1437,6 +1439,7 @@ export const UpdateVendorResponse = zod.object({
   nextAction: zod.string().nullish(),
   nextActionDue: zod.string().nullish(),
   notes: zod.string().nullish(),
+  createdAt: zod.string().nullish(),
 });
 
 export const DeleteVendorParams = zod.object({
@@ -1615,6 +1618,7 @@ export const GetVendorScorecardsResponse = zod.object({
         nextAction: zod.string().nullish(),
         nextActionDue: zod.string().nullish(),
         notes: zod.string().nullish(),
+        createdAt: zod.string().nullish(),
       }),
       hasData: zod.boolean(),
       score: zod.number().nullable().describe("Overall weighted 0-100 roll-up"),
@@ -2182,6 +2186,7 @@ export const GetAslResponse = zod.object({
         nextAction: zod.string().nullish(),
         nextActionDue: zod.string().nullish(),
         notes: zod.string().nullish(),
+        createdAt: zod.string().nullish(),
       }),
     }),
   ),
@@ -2264,6 +2269,7 @@ export const GetAslResponse = zod.object({
         nextAction: zod.string().nullish(),
         nextActionDue: zod.string().nullish(),
         notes: zod.string().nullish(),
+        createdAt: zod.string().nullish(),
       }),
     }),
   ),
@@ -2347,6 +2353,7 @@ export const GetAslResponse = zod.object({
           nextAction: zod.string().nullish(),
           nextActionDue: zod.string().nullish(),
           notes: zod.string().nullish(),
+          createdAt: zod.string().nullish(),
         }),
       }),
     )
@@ -2433,6 +2440,7 @@ export const GetAslResponse = zod.object({
           nextAction: zod.string().nullish(),
           nextActionDue: zod.string().nullish(),
           notes: zod.string().nullish(),
+          createdAt: zod.string().nullish(),
         }),
       }),
     )

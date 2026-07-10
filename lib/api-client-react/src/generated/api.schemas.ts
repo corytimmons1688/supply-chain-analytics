@@ -83,6 +83,7 @@ export interface Vendor {
   nextAction?: string | null;
   nextActionDue?: string | null;
   notes?: string | null;
+  createdAt?: string | null;
 }
 
 export interface VendorInput {

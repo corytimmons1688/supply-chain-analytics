@@ -222,6 +222,7 @@ function vendorOut(r: VendorRow) {
     nextAction: r.nextAction,
     nextActionDue: r.nextActionDue,
     notes: r.notes,
+    createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
   };
 }
 function metricOut(r: VendorMetricRow) {
@@ -512,6 +513,7 @@ function prOut(r: typeof vendorPricingReviewTable.$inferSelect) {
     outcome: r.outcome,
     impactUsd: r.impactUsd,
     notes: r.notes,
+    createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
   };
 }
 router.get(
@@ -844,6 +846,7 @@ function aslEntryOut(r: typeof aslEntryTable.$inferSelect) {
     status: r.status,
     onboardedOn: r.onboardedOn,
     notes: r.notes,
+    createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
   };
 }
 router.get(

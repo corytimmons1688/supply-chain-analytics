@@ -128,7 +128,7 @@ function addDaysIso(start: Date, days: number): string {
  * endpoint) or, failing that, at onboarding. Null = clock not started.
  */
 function slaDaysElapsed(r: AslRow): number | null {
-  const start = parseIsoDate(r.vendor.specInDate);
+  const start = slaAnchor(r);
   if (!start) return null;
   const end =
     parseIsoDate(r.vendor.poReadyDate) ??
@@ -153,7 +153,7 @@ function SlaCell({ r }: { r: AslRow }) {
     return (
       <span
         className="text-muted-foreground/50"
-        title="Set the Spec In date (via Edit) to start the 45-day clock"
+        title="Clock not started — check the Vendor identified / PO-ready dates"
       >
         —
       </span>
@@ -180,7 +180,7 @@ function SlaCell({ r }: { r: AslRow }) {
   return (
     <div
       className="min-w-[6.5rem]"
-      title={`Spec in ${r.vendor.specInDate} · MSA target day ${SLA_WARN_DAY} · PO-ready / SLA day ${SLA_TOTAL_DAYS}`}
+      title={`Identified ${r.vendor.specInDate ?? timestampDateIso(r.vendor.createdAt) ?? "—"} · MSA target day ${SLA_WARN_DAY} · PO-ready / SLA day ${SLA_TOTAL_DAYS}`}
     >
       <div
         className={cn(
@@ -625,10 +625,11 @@ type SlaStep = {
   linkKey: VendorKey;
 };
 
-// Every task row from the 45-day sourcing Gantt, in schedule order.
+// Every task row from the 45-day sourcing Gantt, in schedule order. The first
+// step ("Vendor identified", Day 0) is automatically satisfied by the vendor's
+// createdAt when no explicit date is set — adding a vendor starts the clock.
 const SLA_STEPS: SlaStep[] = [
-  { label: "Spec in", day: 0, dateKey: "specInDate", linkKey: "specInLink" },
-  { label: "Identify & shortlist (credit report)", day: 8, dateKey: "shortlistDate", linkKey: "shortlistLink" },
+  { label: "Vendor identified", day: 0, dateKey: "specInDate", linkKey: "specInLink" },
   { label: "NDA execution", day: 11, dateKey: "ndaDate", linkKey: "ndaLink" },
   { label: "Assessment + initial samples", day: 25, dateKey: "assessmentDate", linkKey: "assessmentLink" },
   { label: "Quality Agreement", day: 28, dateKey: "qualityAgreementDate", linkKey: "qualityAgreementLink" },
@@ -646,11 +647,30 @@ const CREDIT_CHECK_STEP: SlaStep = {
   linkKey: "creditCheckLink",
 };
 
+/**
+ * Day-0 anchor for the SLA clock: the explicit Vendor-identified date when
+ * set, else the date the vendor record was created.
+ */
+function slaAnchor(r: AslRow): Date | null {
+  return parseIsoDate(r.vendor.specInDate) ?? parseIsoDate(timestampDateIso(r.vendor.createdAt));
+}
+
+/**
+ * Effective completed date for a step. "Vendor identified" falls back to the
+ * vendor's createdAt, so it is auto-checked the moment the vendor is added.
+ */
+function stepDate(r: AslRow, s: SlaStep): string | null {
+  const raw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
+  if (raw) return raw;
+  if (s.dateKey === "specInDate") return timestampDateIso(r.vendor.createdAt);
+  return null;
+}
+
 /** SLA steps for a vendor — international vendors get a Credit check step. */
 function slaStepsFor(r: AslRow): SlaStep[] {
   if ((r.vendor.track ?? "").toLowerCase() !== "international") return SLA_STEPS;
   const steps = [...SLA_STEPS];
-  steps.splice(2, 0, CREDIT_CHECK_STEP); // after Identify & shortlist
+  steps.splice(1, 0, CREDIT_CHECK_STEP); // right after Vendor identified
   return steps;
 }
 
@@ -658,7 +678,7 @@ function slaStepsFor(r: AslRow): SlaStep[] {
 function nextOutstanding(r: AslRow): { label: string; index: number } {
   if (r.entry.status === "onboarded") return { label: "Onboarded", index: 98 };
   const steps = slaStepsFor(r);
-  const idx = steps.findIndex((s) => !r.vendor[s.dateKey]);
+  const idx = steps.findIndex((s) => !stepDate(r, s));
   if (idx === -1) return { label: "All steps complete", index: 97 };
   return { label: steps[idx]!.label, index: idx };
 }
@@ -666,7 +686,7 @@ function nextOutstanding(r: AslRow): { label: string; index: number } {
 type StepState = "done" | "late" | "overdue" | "pending";
 
 function stepState(r: AslRow, s: SlaStep, start: Date | null): StepState {
-  const actual = parseIsoDate((r.vendor[s.dateKey] as string | null | undefined) ?? null);
+  const actual = parseIsoDate(stepDate(r, s));
   const target = start ? addDaysIso(start, s.day) : null;
   const targetEnd = target ? Date.parse(`${target}T23:59:59`) : null;
   if (actual) return targetEnd != null && actual.getTime() > targetEnd ? "late" : "done";
@@ -676,9 +696,19 @@ function stepState(r: AslRow, s: SlaStep, start: Date | null): StepState {
 
 // Local-timezone date — toISOString() would roll to tomorrow during the
 // evening for US users because it reports the UTC date.
-function todayIso(): string {
-  const d = new Date();
+function localDateIso(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function todayIso(): string {
+  return localDateIso(new Date());
+}
+
+/** Local calendar date of a full ISO timestamp (slice(0,10) would be UTC). */
+function timestampDateIso(ts: string | null | undefined): string | null {
+  if (!ts) return null;
+  const t = Date.parse(ts);
+  return Number.isNaN(t) ? null : localDateIso(new Date(t));
 }
 
 /**
@@ -689,7 +719,7 @@ function todayIso(): string {
 function SlaStepper({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void> }) {
   const { toast } = useToast();
   const update = useUpdateVendor();
-  const start = parseIsoDate(r.vendor.specInDate);
+  const start = slaAnchor(r);
 
   const save = async (patch: Partial<Record<VendorKey, string | null>>) => {
     try {
@@ -704,9 +734,9 @@ function SlaStepper({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void
   };
 
   const steps = slaStepsFor(r);
-  const doneCount = steps.filter((s) => r.vendor[s.dateKey]).length;
+  const doneCount = steps.filter((s) => stepDate(r, s)).length;
   const days = slaDaysElapsed(r);
-  const nextStep = steps.find((s) => !r.vendor[s.dateKey]);
+  const nextStep = steps.find((s) => !stepDate(r, s));
 
   return (
     <div className="rounded-md border bg-background/60 px-4 pt-3 pb-4">
@@ -727,24 +757,20 @@ function SlaStepper({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void
             </span>
           )}
         </div>
-        {!start ? (
-          <span className="text-[11px] text-amber-600 dark:text-amber-400">
-            Click the Spec in node to set Day 0 and start the 45-day clock
-          </span>
-        ) : (
-          <span className="text-[11px] text-muted-foreground">Click a step to edit its date &amp; link</span>
-        )}
+        <span className="text-[11px] text-muted-foreground">
+          Click a step to edit its date &amp; link · Day 0 = vendor identified
+        </span>
       </div>
 
       <div className="overflow-x-auto">
         <div className="flex" style={{ minWidth: `${steps.length * 6.5}rem` }}>
           {steps.map((s, i) => {
             const state = stepState(r, s, start);
-            const actualRaw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
+            const actualRaw = stepDate(r, s);
             const linkRaw = (r.vendor[s.linkKey] as string | null | undefined) ?? null;
             const target = start ? addDaysIso(start, s.day) : null;
             const isNext = start != null && nextStep?.label === s.label && state !== "overdue";
-            const prevDone = i > 0 && !!r.vendor[steps[i - 1]!.dateKey];
+            const prevDone = i > 0 && !!stepDate(r, steps[i - 1]!);
             const href = linkRaw && /^https?:\/\//.test(linkRaw) ? linkRaw : linkRaw ? `https://${linkRaw}` : null;
             return (
               <div key={s.label} className="flex-1 min-w-0 flex flex-col items-center">
