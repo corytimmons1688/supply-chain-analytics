@@ -1,0 +1,9 @@
+{
+  "installCommand": "pnpm install",
+  "buildCommand": "PORT=3000 BASE_PATH=/ pnpm --filter @workspace/inventory-adjustments build",
+  "outputDirectory": "artifacts/inventory-adjustments/dist/public",
+  "framework": null,
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}
