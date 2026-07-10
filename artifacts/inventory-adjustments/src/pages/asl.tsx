@@ -153,7 +153,7 @@ function SlaCell({ r }: { r: AslRow }) {
     return (
       <span
         className="text-muted-foreground/50"
-        title="Clock not started — check the Vendor identified / PO-ready dates"
+        title="Set the Vendor identified date (click the step in the expanded row) to start the 45-day clock"
       >
         —
       </span>
@@ -180,7 +180,7 @@ function SlaCell({ r }: { r: AslRow }) {
   return (
     <div
       className="min-w-[6.5rem]"
-      title={`Identified ${r.vendor.specInDate ?? timestampDateIso(r.vendor.createdAt) ?? "—"} · MSA target day ${SLA_WARN_DAY} · PO-ready / SLA day ${SLA_TOTAL_DAYS}`}
+      title={`Identified ${r.vendor.specInDate ?? "—"} · MSA target day ${SLA_WARN_DAY} · PO-ready / SLA day ${SLA_TOTAL_DAYS}`}
     >
       <div
         className={cn(
@@ -626,8 +626,7 @@ type SlaStep = {
 };
 
 // Every task row from the 45-day sourcing Gantt, in schedule order. The first
-// step ("Vendor identified", Day 0) is automatically satisfied by the vendor's
-// createdAt when no explicit date is set — adding a vendor starts the clock.
+// step ("Vendor identified", Day 0) anchors the 45-day clock.
 const SLA_STEPS: SlaStep[] = [
   { label: "Vendor identified", day: 0, dateKey: "specInDate", linkKey: "specInLink" },
   { label: "NDA execution", day: 11, dateKey: "ndaDate", linkKey: "ndaLink" },
@@ -647,23 +646,14 @@ const CREDIT_CHECK_STEP: SlaStep = {
   linkKey: "creditCheckLink",
 };
 
-/**
- * Day-0 anchor for the SLA clock: the explicit Vendor-identified date when
- * set, else the date the vendor record was created.
- */
+/** Day-0 anchor for the SLA clock: the Vendor-identified date (manual). */
 function slaAnchor(r: AslRow): Date | null {
-  return parseIsoDate(r.vendor.specInDate) ?? parseIsoDate(timestampDateIso(r.vendor.createdAt));
+  return parseIsoDate(r.vendor.specInDate);
 }
 
-/**
- * Effective completed date for a step. "Vendor identified" falls back to the
- * vendor's createdAt, so it is auto-checked the moment the vendor is added.
- */
+/** Completed date for a step (all steps are set manually, incl. Vendor identified). */
 function stepDate(r: AslRow, s: SlaStep): string | null {
-  const raw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
-  if (raw) return raw;
-  if (s.dateKey === "specInDate") return timestampDateIso(r.vendor.createdAt);
-  return null;
+  return (r.vendor[s.dateKey] as string | null | undefined) ?? null;
 }
 
 /** SLA steps for a vendor — international vendors get a Credit check step. */
@@ -704,12 +694,6 @@ function todayIso(): string {
   return localDateIso(new Date());
 }
 
-/** Local calendar date of a full ISO timestamp (slice(0,10) would be UTC). */
-function timestampDateIso(ts: string | null | undefined): string | null {
-  if (!ts) return null;
-  const t = Date.parse(ts);
-  return Number.isNaN(t) ? null : localDateIso(new Date(t));
-}
 
 /**
  * Interactive SLA stepper: one node per Gantt step on a progress rail.
@@ -757,9 +741,13 @@ function SlaStepper({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void
             </span>
           )}
         </div>
-        <span className="text-[11px] text-muted-foreground">
-          Click a step to edit its date &amp; link · Day 0 = vendor identified
-        </span>
+        {!start ? (
+          <span className="text-[11px] text-amber-600 dark:text-amber-400">
+            Click the Vendor identified node to set Day 0 and start the 45-day clock
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">Click a step to edit its date &amp; link</span>
+        )}
       </div>
 
       <div className="overflow-x-auto">
