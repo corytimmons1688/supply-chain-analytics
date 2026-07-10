@@ -1,4 +1,5 @@
-import { gcsClient, getBucketAndPrefix } from "./gcs-client";
+import { db, snapshotBlobTable } from "@workspace/db";
+import { and, desc, eq } from "drizzle-orm";
 import type { SnapshotRoll } from "./snapshot-store";
 
 export interface MonthlySnapshot {
@@ -16,54 +17,32 @@ export interface MonthlySnapshot {
   rolls: SnapshotRoll[];
 }
 
-const SUBDIR = "monthly-snapshots";
-
-function objectName(monthKey: string): string {
-  const { prefix } = getBucketAndPrefix();
-  return [prefix, SUBDIR, `${monthKey}.json`].filter(Boolean).join("/");
-}
-
-function listPrefix(): string {
-  const { prefix } = getBucketAndPrefix();
-  return [prefix, SUBDIR].filter(Boolean).join("/") + "/";
-}
-
-function bucket() {
-  const { bucketName } = getBucketAndPrefix();
-  return gcsClient.bucket(bucketName);
-}
+const KIND = "monthly";
 
 export async function saveMonthlySnapshot(snap: MonthlySnapshot): Promise<void> {
-  const file = bucket().file(objectName(snap.monthKey));
-  await file.save(JSON.stringify(snap, null, 2), {
-    contentType: "application/json",
-    resumable: false,
-  });
+  await db
+    .insert(snapshotBlobTable)
+    .values({ kind: KIND, key: snap.monthKey, data: snap })
+    .onConflictDoUpdate({
+      target: [snapshotBlobTable.kind, snapshotBlobTable.key],
+      set: { data: snap, updatedAt: new Date() },
+    });
 }
 
 export async function listMonthlySnapshots(): Promise<MonthlySnapshot[]> {
-  const [files] = await bucket().getFiles({ prefix: listPrefix() });
-  const out: MonthlySnapshot[] = [];
-  for (const f of files) {
-    if (!f.name.endsWith(".json")) continue;
-    try {
-      const [buf] = await f.download();
-      out.push(JSON.parse(buf.toString("utf8")) as MonthlySnapshot);
-    } catch {
-      // skip malformed
-    }
-  }
-  return out.sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+  const rows = await db
+    .select()
+    .from(snapshotBlobTable)
+    .where(eq(snapshotBlobTable.kind, KIND))
+    .orderBy(desc(snapshotBlobTable.key));
+  return rows.map((r) => r.data as MonthlySnapshot);
 }
 
 export async function getMonthlySnapshot(monthKey: string): Promise<MonthlySnapshot | null> {
-  const file = bucket().file(objectName(monthKey));
-  try {
-    const [exists] = await file.exists();
-    if (!exists) return null;
-    const [buf] = await file.download();
-    return JSON.parse(buf.toString("utf8")) as MonthlySnapshot;
-  } catch {
-    return null;
-  }
+  const rows = await db
+    .select()
+    .from(snapshotBlobTable)
+    .where(and(eq(snapshotBlobTable.kind, KIND), eq(snapshotBlobTable.key, monthKey)))
+    .limit(1);
+  return rows.length > 0 ? (rows[0]!.data as MonthlySnapshot) : null;
 }

@@ -13,8 +13,5 @@
     "prettier": "^3.8.1",
     "typescript": "~5.9.2",
     "xlsx": "^0.18.5"
-  },
-  "dependencies": {
-    "@google-cloud/storage": "^7.19.0"
   }
 }

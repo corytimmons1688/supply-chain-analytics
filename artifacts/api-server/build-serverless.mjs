@@ -1,9 +1,8 @@
 // Bundles the Express app into /api/index.mjs for Vercel serverless.
-// Mirrors build.mjs but uses the no-listener entry (no cron) and skips the
-// pino worker plugin — in production pino logs synchronously with no
-// transport, so plain bundling is safe. @google-cloud/* stays external
-// (unbundleable) and is declared in the root package.json so it resolves
-// from the /api directory at runtime.
+// Mirrors build.mjs but uses the no-listener entry (scheduling is handled by
+// Vercel Cron hitting /api/cron/snapshots) and skips the pino worker plugin —
+// in production pino logs synchronously with no transport, so plain bundling
+// is safe.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
@@ -17,7 +16,7 @@ await esbuild({
   format: "esm",
   outfile: path.resolve(artifactDir, "../../api/index.mjs"),
   logLevel: "info",
-  external: ["*.node", "pg-native", "@google-cloud/*", "googleapis"],
+  external: ["*.node", "pg-native"],
   banner: {
     js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';

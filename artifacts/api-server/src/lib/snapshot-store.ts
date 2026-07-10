@@ -1,4 +1,5 @@
-import { gcsClient, getBucketAndPrefix } from "./gcs-client";
+import { db, snapshotBlobTable } from "@workspace/db";
+import { and, desc, eq } from "drizzle-orm";
 
 export interface SnapshotRoll {
   direction: "added" | "removed";
@@ -24,55 +25,32 @@ export interface WeeklySnapshot {
   rolls: SnapshotRoll[];
 }
 
-const SUBDIR = "snapshots";
-
-function objectName(weekEnding: string): string {
-  const { prefix } = getBucketAndPrefix();
-  const parts = [prefix, SUBDIR, `${weekEnding}.json`].filter(Boolean);
-  return parts.join("/");
-}
-
-function listPrefix(): string {
-  const { prefix } = getBucketAndPrefix();
-  return [prefix, SUBDIR].filter(Boolean).join("/") + "/";
-}
-
-function bucket() {
-  const { bucketName } = getBucketAndPrefix();
-  return gcsClient.bucket(bucketName);
-}
+const KIND = "weekly";
 
 export async function saveSnapshot(snap: WeeklySnapshot): Promise<void> {
-  const file = bucket().file(objectName(snap.weekEnding));
-  await file.save(JSON.stringify(snap, null, 2), {
-    contentType: "application/json",
-    resumable: false,
-  });
+  await db
+    .insert(snapshotBlobTable)
+    .values({ kind: KIND, key: snap.weekEnding, data: snap })
+    .onConflictDoUpdate({
+      target: [snapshotBlobTable.kind, snapshotBlobTable.key],
+      set: { data: snap, updatedAt: new Date() },
+    });
 }
 
 export async function listSnapshots(): Promise<WeeklySnapshot[]> {
-  const [files] = await bucket().getFiles({ prefix: listPrefix() });
-  const out: WeeklySnapshot[] = [];
-  for (const f of files) {
-    if (!f.name.endsWith(".json")) continue;
-    try {
-      const [buf] = await f.download();
-      out.push(JSON.parse(buf.toString("utf8")) as WeeklySnapshot);
-    } catch {
-      // skip malformed
-    }
-  }
-  return out.sort((a, b) => b.weekEnding.localeCompare(a.weekEnding));
+  const rows = await db
+    .select()
+    .from(snapshotBlobTable)
+    .where(eq(snapshotBlobTable.kind, KIND))
+    .orderBy(desc(snapshotBlobTable.key));
+  return rows.map((r) => r.data as WeeklySnapshot);
 }
 
 export async function getSnapshot(weekEnding: string): Promise<WeeklySnapshot | null> {
-  const file = bucket().file(objectName(weekEnding));
-  try {
-    const [exists] = await file.exists();
-    if (!exists) return null;
-    const [buf] = await file.download();
-    return JSON.parse(buf.toString("utf8")) as WeeklySnapshot;
-  } catch {
-    return null;
-  }
+  const rows = await db
+    .select()
+    .from(snapshotBlobTable)
+    .where(and(eq(snapshotBlobTable.kind, KIND), eq(snapshotBlobTable.key, weekEnding)))
+    .limit(1);
+  return rows.length > 0 ? (rows[0]!.data as WeeklySnapshot) : null;
 }

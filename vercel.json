@@ -6,6 +6,9 @@
   },
   "outputDirectory": "artifacts/inventory-adjustments/dist/public",
   "framework": null,
+  "crons": [
+    { "path": "/api/cron/snapshots", "schedule": "45 5 * * *" }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
