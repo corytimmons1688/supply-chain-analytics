@@ -13,6 +13,7 @@ import DemandDetail from "@/pages/demand-detail";
 import CycleCounts from "@/pages/cycle-counts";
 import Scorecards from "@/pages/scorecards";
 import Asl from "@/pages/asl";
+import VendorNetwork from "@/pages/vendor-network";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,7 @@ function Router() {
       <Route path="/cycle-counts" component={CycleCounts} />
       <Route path="/scorecards" component={Scorecards} />
       <Route path="/asl" component={Asl} />
+      <Route path="/network" component={VendorNetwork} />
       <Route component={NotFound} />
     </Switch>
   );

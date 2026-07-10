@@ -64,6 +64,14 @@ import {
   useUpdateVendor,
 } from "@workspace/api-client-react";
 import type { AslRow, Vendor } from "@workspace/api-client-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  CAPABILITY_TAXONOMY,
+  capabilityTag,
+  parseCapabilities,
+  serializeCapabilities,
+} from "@/lib/capability-taxonomy";
 
 type AslSegment = "raw_materials" | "finished_goods";
 type AslStatus = "identified" | "in_progress" | "onboarded";
@@ -257,6 +265,91 @@ function InlineLink({
   );
 }
 
+/**
+ * Multi-select for vendor capabilities, grouped by product category from the
+ * supply-web taxonomy. Values are stored as qualified "Category: Capability"
+ * tags; legacy free-text values are preserved and shown as removable tags.
+ */
+function CapabilityMultiSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const selected = parseCapabilities(value);
+  const selectedSet = new Set(selected);
+  const known = new Set(
+    CAPABILITY_TAXONOMY.flatMap((c) => c.capabilities.map((cap) => capabilityTag(c.category, cap))),
+  );
+  const legacy = selected.filter((t) => !known.has(t));
+
+  const toggle = (tag: string) => {
+    const next = selectedSet.has(tag) ? selected.filter((t) => t !== tag) : [...selected, tag];
+    onChange(serializeCapabilities(next) ?? "");
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="w-full justify-between font-normal h-9">
+            <span className="truncate text-left">
+              {selected.length === 0 ? (
+                <span className="text-muted-foreground">Select capabilities…</span>
+              ) : (
+                `${selected.length} selected`
+              )}
+            </span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-60 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80 p-0" align="start">
+          <div className="max-h-72 overflow-y-auto p-2">
+            {CAPABILITY_TAXONOMY.map((cat) => (
+              <div key={cat.category} className="mb-2 last:mb-0">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70 px-1.5 py-1">
+                  {cat.category}
+                </div>
+                {cat.capabilities.map((cap) => {
+                  const tag = capabilityTag(cat.category, cap);
+                  return (
+                    <label
+                      key={tag}
+                      className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-accent cursor-pointer text-xs"
+                    >
+                      <Checkbox checked={selectedSet.has(tag)} onCheckedChange={() => toggle(tag)} />
+                      {cap}
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((tag) => (
+            <Badge
+              key={tag}
+              variant="outline"
+              className={cn(
+                "text-[10px] cursor-pointer hover:bg-destructive/10",
+                legacy.includes(tag) && "border-amber-500/50 text-amber-700 dark:text-amber-400",
+              )}
+              title={legacy.includes(tag) ? "Legacy free-text value — click to remove" : "Click to remove"}
+              onClick={() => toggle(tag)}
+            >
+              {tag} ✕
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type SlaStep = {
   label: string;
   day: number;
@@ -264,11 +357,18 @@ type SlaStep = {
   linkKey: VendorKey;
 };
 
+// Every task row from the 45-day sourcing Gantt, in schedule order.
 const SLA_STEPS: SlaStep[] = [
   { label: "Spec in", day: 0, dateKey: "specInDate", linkKey: "specInLink" },
-  { label: "NDA executed", day: 11, dateKey: "ndaDate", linkKey: "ndaLink" },
-  { label: "Supplier selected", day: 28, dateKey: "supplierSelectedDate", linkKey: "supplierSelectedLink" },
+  { label: "Identify & shortlist (credit report)", day: 8, dateKey: "shortlistDate", linkKey: "shortlistLink" },
+  { label: "NDA execution", day: 11, dateKey: "ndaDate", linkKey: "ndaLink" },
+  { label: "Assessment + initial samples", day: 25, dateKey: "assessmentDate", linkKey: "assessmentLink" },
+  { label: "Quality Agreement", day: 28, dateKey: "qualityAgreementDate", linkKey: "qualityAgreementLink" },
+  { label: "Review samples & select", day: 28, dateKey: "supplierSelectedDate", linkKey: "supplierSelectedLink" },
+  { label: "Factory audit (3rd-party)", day: SLA_PO_READY_DAY, dateKey: "factoryTourDate", linkKey: "factoryAuditLink" },
+  { label: "NetSuite setup", day: SLA_PO_READY_DAY, dateKey: "netsuiteSetupDate", linkKey: "netsuiteSetupLink" },
   { label: "PO-ready", day: SLA_PO_READY_DAY, dateKey: "poReadyDate", linkKey: "poReadyLink" },
+  { label: "Full MSA / commercial", day: SLA_TOTAL_DAYS, dateKey: "msaDate", linkKey: "msaLink" },
 ];
 
 function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void> }) {
@@ -291,7 +391,7 @@ function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Prom
 
   return (
     <div className="rounded-md border bg-background/60 overflow-hidden">
-      <div className="grid grid-cols-[minmax(9rem,13rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+      <div className="grid grid-cols-[minmax(13rem,17rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground/70">
         <span>45-day SLA step</span>
         <span>Target</span>
         <span>Completed</span>
@@ -307,7 +407,7 @@ function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Prom
         return (
           <div
             key={s.label}
-            className="grid grid-cols-[minmax(9rem,13rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b last:border-b-0"
+            className="grid grid-cols-[minmax(13rem,17rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b last:border-b-0"
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <span
@@ -423,11 +523,7 @@ const PIPELINE_COLUMNS: Col[] = [
       <span className="text-muted-foreground/50">—</span>
     ),
   },
-  { key: "specInDate", header: "Spec In (SLA Day 0)", width: "min-w-[8rem]", render: (r) => txt(r.vendor.specInDate) },
-  { key: "ndaDate", header: "NDA Date", width: "min-w-[8rem]", render: (r) => txt(r.vendor.ndaDate) },
-  { key: "msaDate", header: "MSA Date", width: "min-w-[8rem]", render: (r) => txt(r.vendor.msaDate) },
   { key: "capabilityVerified", header: "Capability Verified", width: "min-w-[9rem]", render: (r) => txt(r.vendor.capabilityVerified) },
-  { key: "factoryTourDate", header: "Factory Tour", width: "min-w-[8rem]", render: (r) => txt(r.vendor.factoryTourDate) },
   { key: "rfqSent", header: "RFQ Sent", width: "min-w-[8rem]", render: (r) => txt(r.vendor.rfqSent) },
   { key: "quoteReceived", header: "Quote Received", width: "min-w-[8rem]", render: (r) => txt(r.vendor.quoteReceived) },
   { key: "quotedPrice", header: "Quoted Price", width: "min-w-[8rem]", render: (r) => txt(r.vendor.quotedPrice) },
@@ -450,7 +546,14 @@ const PIPELINE_COLUMNS: Col[] = [
 ];
 
 type VendorKey = keyof Omit<Vendor, "id" | "name">;
-type EditField = { key: VendorKey; label: string; multiline?: boolean; date?: boolean };
+type EditField = {
+  key: VendorKey;
+  label: string;
+  multiline?: boolean;
+  date?: boolean;
+  /** Render as the capability multi-select instead of a text input. */
+  capabilities?: boolean;
+};
 
 // Editable vendor fields for the current Approved Supplier List table.
 const ASL_EDIT_FIELDS: EditField[] = [
@@ -458,7 +561,7 @@ const ASL_EDIT_FIELDS: EditField[] = [
   { key: "category", label: "Category" },
   { key: "subCategory", label: "Sub Category" },
   { key: "stage", label: "Stage" },
-  { key: "capabilities", label: "Capabilities", multiline: true },
+  { key: "capabilities", label: "Capabilities", capabilities: true },
   { key: "locations", label: "Locations", multiline: true },
   { key: "documents", label: "Documents" },
   { key: "calyxPoc", label: "Calyx POC" },
@@ -484,17 +587,8 @@ const PIPELINE_EDIT_FIELDS: EditField[] = [
   { key: "owner", label: "Owner" },
   { key: "waveSprint", label: "Wave/Sprint" },
   { key: "website", label: "Website" },
-  { key: "specInDate", label: "Spec In (SLA Day 0)", date: true },
-  { key: "specInLink", label: "Spec In Link" },
-  { key: "ndaDate", label: "NDA Date", date: true },
-  { key: "ndaLink", label: "NDA Link" },
-  { key: "supplierSelectedDate", label: "Supplier Selected (D28)", date: true },
-  { key: "supplierSelectedLink", label: "Supplier Selected Link" },
-  { key: "poReadyDate", label: "PO-Ready (D35)", date: true },
-  { key: "poReadyLink", label: "PO-Ready Link" },
-  { key: "msaDate", label: "MSA Date" },
+  { key: "capabilities", label: "Capabilities", capabilities: true },
   { key: "capabilityVerified", label: "Capability Verified" },
-  { key: "factoryTourDate", label: "Factory Tour" },
   { key: "rfqSent", label: "RFQ Sent" },
   { key: "quoteReceived", label: "Quote Received" },
   { key: "quotedPrice", label: "Quoted Price" },
@@ -1433,9 +1527,14 @@ function EditEntryDialog({
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {fields.map((f) => (
-              <div key={f.key} className={cn(f.multiline && "sm:col-span-2")}>
+              <div key={f.key} className={cn((f.multiline || f.capabilities) && "sm:col-span-2")}>
                 <Label>{f.label}</Label>
-                {f.multiline ? (
+                {f.capabilities ? (
+                  <CapabilityMultiSelect
+                    value={vendorFields[f.key] ?? ""}
+                    onChange={(v) => setField(f.key, v)}
+                  />
+                ) : f.multiline ? (
                   <Textarea
                     rows={2}
                     value={vendorFields[f.key] ?? ""}

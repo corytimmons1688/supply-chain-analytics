@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth } from "@workspace/api-client-react";
 import {
@@ -25,6 +25,7 @@ const INVENTORY_CONTROL_ITEMS = [
 const SUPPLIER_ITEMS = [
   { href: "/scorecards", label: "Vendor Score Cards", icon: Award },
   { href: "/asl", label: "Approved Supplier List", icon: ClipboardCheck },
+  { href: "/network", label: "Vendor Network", icon: Network },
 ] as const;
 
 export function Layout({ children }: LayoutProps) {

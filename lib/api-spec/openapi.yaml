@@ -1073,11 +1073,21 @@ components:
         waveSprint: { type: string, nullable: true }
         specInDate: { type: string, nullable: true }
         specInLink: { type: string, nullable: true }
+        shortlistDate: { type: string, nullable: true }
+        shortlistLink: { type: string, nullable: true }
         ndaLink: { type: string, nullable: true }
+        assessmentDate: { type: string, nullable: true }
+        assessmentLink: { type: string, nullable: true }
+        qualityAgreementDate: { type: string, nullable: true }
+        qualityAgreementLink: { type: string, nullable: true }
         supplierSelectedDate: { type: string, nullable: true }
         supplierSelectedLink: { type: string, nullable: true }
+        factoryAuditLink: { type: string, nullable: true }
+        netsuiteSetupDate: { type: string, nullable: true }
+        netsuiteSetupLink: { type: string, nullable: true }
         poReadyDate: { type: string, nullable: true }
         poReadyLink: { type: string, nullable: true }
+        msaLink: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }
@@ -1131,11 +1141,21 @@ components:
         waveSprint: { type: string, nullable: true }
         specInDate: { type: string, nullable: true }
         specInLink: { type: string, nullable: true }
+        shortlistDate: { type: string, nullable: true }
+        shortlistLink: { type: string, nullable: true }
         ndaLink: { type: string, nullable: true }
+        assessmentDate: { type: string, nullable: true }
+        assessmentLink: { type: string, nullable: true }
+        qualityAgreementDate: { type: string, nullable: true }
+        qualityAgreementLink: { type: string, nullable: true }
         supplierSelectedDate: { type: string, nullable: true }
         supplierSelectedLink: { type: string, nullable: true }
+        factoryAuditLink: { type: string, nullable: true }
+        netsuiteSetupDate: { type: string, nullable: true }
+        netsuiteSetupLink: { type: string, nullable: true }
         poReadyDate: { type: string, nullable: true }
         poReadyLink: { type: string, nullable: true }
+        msaLink: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }

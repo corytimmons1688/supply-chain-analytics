@@ -50,14 +50,25 @@ export const vendorTable = pgTable("vendor", {
   primarySecondary: text("primary_secondary"),
   waveSprint: text("wave_sprint"),
   // 45-day sourcing SLA steps (spec in → PO-ready). Dates are ISO YYYY-MM-DD;
-  // each step also carries an evidence/document link.
+  // each step also carries an evidence/document link. Factory audit reuses
+  // factory_tour_date and the MSA step reuses msa_date for their dates.
   specInDate: text("spec_in_date"), // SLA Day 0
   specInLink: text("spec_in_link"),
-  ndaLink: text("nda_link"),
-  supplierSelectedDate: text("supplier_selected_date"), // target day 28
+  shortlistDate: text("shortlist_date"), // identify & shortlist + credit report, target day 8
+  shortlistLink: text("shortlist_link"),
+  ndaLink: text("nda_link"), // NDA execution, target day 11
+  assessmentDate: text("assessment_date"), // assessment + initial samples, target day 25
+  assessmentLink: text("assessment_link"),
+  qualityAgreementDate: text("quality_agreement_date"), // target day 28
+  qualityAgreementLink: text("quality_agreement_link"),
+  supplierSelectedDate: text("supplier_selected_date"), // review samples & select, target day 28
   supplierSelectedLink: text("supplier_selected_link"),
+  factoryAuditLink: text("factory_audit_link"), // audit date lives in factory_tour_date
+  netsuiteSetupDate: text("netsuite_setup_date"), // target day 35
+  netsuiteSetupLink: text("netsuite_setup_link"),
   poReadyDate: text("po_ready_date"), // target day 35; freezes the SLA clock
   poReadyLink: text("po_ready_link"),
+  msaLink: text("msa_link"), // full MSA / commercial; date lives in msa_date
   ndaDate: text("nda_date"),
   msaDate: text("msa_date"),
   capabilityVerified: text("capability_verified"),
