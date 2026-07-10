@@ -39,6 +39,7 @@ export interface Vendor {
   subCapability?: string | null;
   primarySecondary?: string | null;
   waveSprint?: string | null;
+  specInDate?: string | null;
   ndaDate?: string | null;
   msaDate?: string | null;
   capabilityVerified?: string | null;
@@ -89,6 +90,7 @@ export interface VendorInput {
   subCapability?: string | null;
   primarySecondary?: string | null;
   waveSprint?: string | null;
+  specInDate?: string | null;
   ndaDate?: string | null;
   msaDate?: string | null;
   capabilityVerified?: string | null;

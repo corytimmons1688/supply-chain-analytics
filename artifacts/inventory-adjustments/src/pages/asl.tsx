@@ -30,7 +30,21 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Trash2, Download, CheckCircle2, GitBranch, Pencil, ArrowRightCircle } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Download,
+  CheckCircle2,
+  GitBranch,
+  Pencil,
+  ArrowRightCircle,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  ChevronDown,
+  ChevronRight,
+  FilterX,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -72,6 +86,140 @@ const SEGMENT_LABEL: Record<string, string> = {
 
 function statusLabel(s: string): string {
   return STATUS_OPTIONS.find((o) => o.value === s)?.label ?? s;
+}
+
+// =====================================================================
+// 45-day sourcing SLA (spec in → PO-ready; see the sourcing Gantt).
+// Day 0 = Spec in · Day 11 = NDA executed · Day 28 = supplier selected ·
+// Day 35 = PO-ready (critical path) · Day 45 = SLA deadline.
+// =====================================================================
+const SLA_TOTAL_DAYS = 45;
+const SLA_PO_READY_DAY = 35;
+
+function parseIsoDate(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const t = Date.parse(s.length === 10 ? `${s}T00:00:00` : s);
+  return Number.isNaN(t) ? null : new Date(t);
+}
+
+function addDaysIso(start: Date, days: number): string {
+  const d = new Date(start);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Days elapsed on the SLA clock; frozen at onboarding. Null = clock not started. */
+function slaDaysElapsed(r: AslRow): number | null {
+  const start = parseIsoDate(r.vendor.specInDate);
+  if (!start) return null;
+  const end =
+    r.entry.status === "onboarded" && r.entry.onboardedOn
+      ? (parseIsoDate(r.entry.onboardedOn) ?? new Date())
+      : new Date();
+  return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86_400_000));
+}
+
+function SlaCell({ r }: { r: AslRow }) {
+  const days = slaDaysElapsed(r);
+  if (days == null) {
+    return (
+      <span
+        className="text-muted-foreground/50"
+        title="Set the Spec In date (via Edit) to start the 45-day clock"
+      >
+        —
+      </span>
+    );
+  }
+  if (r.entry.status === "onboarded") {
+    const ok = days <= SLA_TOTAL_DAYS;
+    return (
+      <Badge
+        variant="outline"
+        className={cn(
+          "whitespace-nowrap",
+          ok ? STATUS_STYLES["onboarded"] : "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
+        )}
+      >
+        Done · {days}d
+      </Badge>
+    );
+  }
+  const over = days > SLA_TOTAL_DAYS;
+  const warn = !over && days > SLA_PO_READY_DAY;
+  const pct = Math.min(100, (days / SLA_TOTAL_DAYS) * 100);
+  return (
+    <div
+      className="min-w-[6.5rem]"
+      title={`Spec in ${r.vendor.specInDate} · PO-ready target day ${SLA_PO_READY_DAY} · SLA day ${SLA_TOTAL_DAYS}`}
+    >
+      <div
+        className={cn(
+          "text-xs font-medium tabular-nums",
+          over && "text-red-600 dark:text-red-400",
+          warn && "text-amber-600 dark:text-amber-400",
+        )}
+      >
+        {over ? `+${days - SLA_TOTAL_DAYS}d over SLA` : `Day ${days} / ${SLA_TOTAL_DAYS}`}
+      </div>
+      <div className="h-1 rounded bg-muted mt-1 overflow-hidden">
+        <div
+          className={cn("h-full rounded", over ? "bg-red-500" : warn ? "bg-amber-500" : "bg-emerald-500")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Milestone chips for the expanded row: targets from specIn, actuals where tracked. */
+function SlaTimeline({ r }: { r: AslRow }) {
+  const start = parseIsoDate(r.vendor.specInDate);
+  if (!start) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Set the <span className="font-medium">Spec In</span> date to track this vendor against the
+        45-day sourcing SLA.
+      </p>
+    );
+  }
+  const onboarded = r.entry.status === "onboarded";
+  const milestones: { label: string; day: number; actual?: string | null }[] = [
+    { label: "Spec in", day: 0, actual: r.vendor.specInDate },
+    { label: "NDA executed", day: 11, actual: r.vendor.ndaDate },
+    { label: "Supplier selected", day: 28 },
+    { label: "PO-ready", day: SLA_PO_READY_DAY },
+    { label: "SLA deadline", day: SLA_TOTAL_DAYS },
+  ];
+  const now = Date.now();
+  return (
+    <div className="flex flex-wrap items-center gap-y-1.5">
+      {milestones.map((m, i) => {
+        const target = addDaysIso(start, m.day);
+        const actual = parseIsoDate(m.actual ?? null);
+        const targetEnd = Date.parse(`${target}T23:59:59`);
+        const done = !!actual || onboarded;
+        const late = actual ? actual.getTime() > targetEnd : !onboarded && now > targetEnd;
+        return (
+          <React.Fragment key={m.label}>
+            {i > 0 && <span className="mx-1.5 text-muted-foreground/40">→</span>}
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap",
+                done && !late && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
+                late && "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
+                !done && !late && "text-muted-foreground border-border",
+              )}
+              title={m.actual ? `Actual: ${m.actual} (target ${target})` : `Target: day ${m.day}`}
+            >
+              <span className="font-medium">{m.label}</span>
+              <span className="tabular-nums">{m.actual ?? target}</span>
+            </span>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
 }
 
 type Col = {
@@ -143,6 +291,7 @@ const PIPELINE_COLUMNS: Col[] = [
       <span className="text-muted-foreground/50">—</span>
     ),
   },
+  { key: "specInDate", header: "Spec In (SLA Day 0)", width: "min-w-[8rem]", render: (r) => txt(r.vendor.specInDate) },
   { key: "ndaDate", header: "NDA Date", width: "min-w-[8rem]", render: (r) => txt(r.vendor.ndaDate) },
   { key: "msaDate", header: "MSA Date", width: "min-w-[8rem]", render: (r) => txt(r.vendor.msaDate) },
   { key: "capabilityVerified", header: "Capability Verified", width: "min-w-[9rem]", render: (r) => txt(r.vendor.capabilityVerified) },
@@ -169,7 +318,7 @@ const PIPELINE_COLUMNS: Col[] = [
 ];
 
 type VendorKey = keyof Omit<Vendor, "id" | "name">;
-type EditField = { key: VendorKey; label: string; multiline?: boolean };
+type EditField = { key: VendorKey; label: string; multiline?: boolean; date?: boolean };
 
 // Editable vendor fields for the current Approved Supplier List table.
 const ASL_EDIT_FIELDS: EditField[] = [
@@ -203,6 +352,7 @@ const PIPELINE_EDIT_FIELDS: EditField[] = [
   { key: "owner", label: "Owner" },
   { key: "waveSprint", label: "Wave/Sprint" },
   { key: "website", label: "Website" },
+  { key: "specInDate", label: "Spec In (SLA Day 0)", date: true },
   { key: "ndaDate", label: "NDA Date" },
   { key: "msaDate", label: "MSA Date" },
   { key: "capabilityVerified", label: "Capability Verified" },
@@ -367,13 +517,8 @@ export default function Asl() {
             onEdit={(row) => setEditEntry({ row, variant: "asl" })}
             onChanged={invalidate}
           />
-          <FullTable
-            title="Flex Sourcing Pipeline"
-            description="Candidate suppliers not yet onboarded, with the full sourcing tracker."
-            icon={GitBranch}
-            columns={PIPELINE_COLUMNS}
+          <PipelineTable
             rows={pipeline}
-            emptyText="No pipeline candidates yet — use “Load tracker”."
             onAdd={() => setAddOpen(true)}
             onEdit={(row) => setEditEntry({ row, variant: "pipeline" })}
             onMoveToAsl={handleMoveToAsl}
@@ -519,6 +664,385 @@ function FullTable({
                     </TableCell>
                   </TableRow>
                 ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// =====================================================================
+// Flex Sourcing Pipeline table — curated columns that fit without endless
+// horizontal scrolling, sortable headers, a filter toolbar, and an
+// expandable per-row panel with the full tracker detail + SLA timeline.
+// =====================================================================
+
+// Keys shown as core columns (everything else lives in the expanded panel).
+const PIPELINE_CORE_KEYS = new Set([
+  "status",
+  "externalId",
+  "pipelineStatus",
+  "track",
+  "country",
+  "category",
+  "tier",
+  "owner",
+  "nextActionDue",
+]);
+
+type SortState = { key: string; dir: 1 | -1 } | null;
+
+const PIPELINE_SORT_ACCESSORS: Record<string, (r: AslRow) => string | number> = {
+  vendor: (r) => r.vendor.name.toLowerCase(),
+  status: (r) => r.entry.status,
+  sla: (r) => slaDaysElapsed(r) ?? -1,
+  pipelineStatus: (r) => (r.vendor.pipelineStatus ?? "").toLowerCase(),
+  externalId: (r) => (r.vendor.externalId ?? "").toLowerCase(),
+  track: (r) => (r.vendor.track ?? "").toLowerCase(),
+  country: (r) => (r.vendor.country ?? "").toLowerCase(),
+  category: (r) => (r.vendor.category ?? "").toLowerCase(),
+  tier: (r) => (r.vendor.tier ?? "").toLowerCase(),
+  owner: (r) => (r.vendor.owner ?? "").toLowerCase(),
+  nextActionDue: (r) => r.vendor.nextActionDue ?? "",
+};
+
+function FilterSelect({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  label: string;
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger
+        className={cn("h-8 w-auto min-w-[7.5rem] text-xs", value !== "all" && "border-primary/60 text-foreground")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">{label}: All</SelectItem>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function PipelineTable({
+  rows,
+  onAdd,
+  onEdit,
+  onMoveToAsl,
+  onChanged,
+}: {
+  rows: AslRow[];
+  onAdd: () => void;
+  onEdit: (e: AslRow) => void;
+  onMoveToAsl: (e: AslRow) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const { toast } = useToast();
+  const del = useDeleteAslEntry();
+
+  const [q, setQ] = React.useState("");
+  const [fStatus, setFStatus] = React.useState("all");
+  const [fPipeline, setFPipeline] = React.useState("all");
+  const [fTrack, setFTrack] = React.useState("all");
+  const [fCountry, setFCountry] = React.useState("all");
+  const [fCategory, setFCategory] = React.useState("all");
+  const [fOwner, setFOwner] = React.useState("all");
+  const [sort, setSort] = React.useState<SortState>({ key: "sla", dir: -1 });
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+
+  const distinct = (get: (r: AslRow) => string | null | undefined) =>
+    Array.from(new Set(rows.map(get).filter((v): v is string => !!v)))
+      .sort()
+      .map((v) => ({ value: v, label: v }));
+
+  const pipelineOptions = React.useMemo(() => distinct((r) => r.vendor.pipelineStatus), [rows]);
+  const trackOptions = React.useMemo(() => distinct((r) => r.vendor.track), [rows]);
+  const countryOptions = React.useMemo(() => distinct((r) => r.vendor.country), [rows]);
+  const categoryOptions = React.useMemo(() => distinct((r) => r.vendor.category), [rows]);
+  const ownerOptions = React.useMemo(() => distinct((r) => r.vendor.owner), [rows]);
+
+  const hasFilters =
+    q !== "" ||
+    fStatus !== "all" ||
+    fPipeline !== "all" ||
+    fTrack !== "all" ||
+    fCountry !== "all" ||
+    fCategory !== "all" ||
+    fOwner !== "all";
+
+  const clearFilters = () => {
+    setQ("");
+    setFStatus("all");
+    setFPipeline("all");
+    setFTrack("all");
+    setFCountry("all");
+    setFCategory("all");
+    setFOwner("all");
+  };
+
+  const visible = React.useMemo(() => {
+    const qn = q.trim().toLowerCase();
+    const filtered = rows.filter(
+      (r) =>
+        (qn === "" ||
+          r.vendor.name.toLowerCase().includes(qn) ||
+          (r.vendor.externalId ?? "").toLowerCase().includes(qn)) &&
+        (fStatus === "all" || r.entry.status === fStatus) &&
+        (fPipeline === "all" || r.vendor.pipelineStatus === fPipeline) &&
+        (fTrack === "all" || r.vendor.track === fTrack) &&
+        (fCountry === "all" || r.vendor.country === fCountry) &&
+        (fCategory === "all" || r.vendor.category === fCategory) &&
+        (fOwner === "all" || r.vendor.owner === fOwner),
+    );
+    if (!sort) return filtered;
+    const acc = PIPELINE_SORT_ACCESSORS[sort.key];
+    if (!acc) return filtered;
+    return [...filtered].sort((a, b) => {
+      const av = acc(a);
+      const bv = acc(b);
+      if (av === bv) return a.vendor.name.localeCompare(b.vendor.name);
+      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
+      return cmp * sort.dir;
+    });
+  }, [rows, q, fStatus, fPipeline, fTrack, fCountry, fCategory, fOwner, sort]);
+
+  const toggleSort = (key: string) =>
+    setSort((prev) => (prev?.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }));
+
+  const toggleExpanded = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const remove = async (e: AslRow) => {
+    try {
+      await del.mutateAsync({ id: e.entry.id });
+      await onChanged();
+      toast({ title: "Removed from list", description: e.vendor.name });
+    } catch (err) {
+      toast({ title: "Failed", description: String(err), variant: "destructive" });
+    }
+  };
+
+  const Th = ({ k, children, className }: { k: string; children: React.ReactNode; className?: string }) => (
+    <TableHead
+      className={cn("whitespace-nowrap text-xs cursor-pointer select-none", className)}
+      onClick={() => toggleSort(k)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {children}
+        {sort?.key === k ? (
+          sort.dir === 1 ? (
+            <ArrowUp className="w-3 h-3" />
+          ) : (
+            <ArrowDown className="w-3 h-3" />
+          )
+        ) : (
+          <ArrowUpDown className="w-3 h-3 opacity-30" />
+        )}
+      </span>
+    </TableHead>
+  );
+
+  const detailCols = PIPELINE_COLUMNS.filter((c) => !PIPELINE_CORE_KEYS.has(c.key));
+  const colSpan = 13;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <GitBranch className="w-4 h-4 text-muted-foreground" />
+              Flex Sourcing Pipeline
+              <Badge variant="secondary" className="ml-1">
+                {hasFilters ? `${visible.length} / ${rows.length}` : rows.length}
+              </Badge>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Candidate suppliers tracked against the 45-day sourcing SLA (spec in → PO-ready by day
+              35, SLA at day 45). Expand a row for the full tracker.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onAdd}>
+            <Plus className="w-4 h-4 mr-1" /> Add
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search vendor or ID…"
+            className="h-8 w-52 text-xs"
+          />
+          <FilterSelect
+            value={fStatus}
+            onChange={setFStatus}
+            label="Status"
+            options={STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          />
+          <FilterSelect value={fPipeline} onChange={setFPipeline} label="Pipeline" options={pipelineOptions} />
+          <FilterSelect value={fTrack} onChange={setFTrack} label="Track" options={trackOptions} />
+          <FilterSelect value={fCountry} onChange={setFCountry} label="Country" options={countryOptions} />
+          <FilterSelect value={fCategory} onChange={setFCategory} label="Category" options={categoryOptions} />
+          <FilterSelect value={fOwner} onChange={setFOwner} label="Owner" options={ownerOptions} />
+          {hasFilters && (
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={clearFilters}>
+              <FilterX className="w-3.5 h-3.5 mr-1" /> Clear
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            No pipeline candidates yet — use “Load tracker”.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8" />
+                  <Th k="vendor" className="min-w-[11rem]">Vendor</Th>
+                  <Th k="status">Status</Th>
+                  <Th k="sla">SLA (45d)</Th>
+                  <Th k="pipelineStatus">Pipeline Status</Th>
+                  <Th k="externalId">Vendor ID</Th>
+                  <Th k="track">Track</Th>
+                  <Th k="country">Country</Th>
+                  <Th k="category">Category</Th>
+                  <Th k="tier">Tier</Th>
+                  <Th k="owner">Owner</Th>
+                  <Th k="nextActionDue">Next Due</Th>
+                  <TableHead className="w-20 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={colSpan} className="text-center text-sm text-muted-foreground py-6">
+                      No vendors match the current filters.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  visible.map((r) => {
+                    const isOpen = expanded.has(r.entry.id);
+                    return (
+                      <React.Fragment key={r.entry.id}>
+                        <TableRow className={cn(isOpen && "border-b-0 bg-muted/20")}>
+                          <TableCell className="w-8 pr-0">
+                            <button
+                              type="button"
+                              title={isOpen ? "Collapse" : "Expand full tracker detail"}
+                              className="text-muted-foreground hover:text-foreground p-1"
+                              onClick={() => toggleExpanded(r.entry.id)}
+                            >
+                              {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </button>
+                          </TableCell>
+                          <TableCell className="font-medium max-w-[14rem]">
+                            <span className="block truncate" title={r.vendor.name}>
+                              {r.vendor.name}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={cn("whitespace-nowrap", STATUS_STYLES[r.entry.status])}>
+                              {statusLabel(r.entry.status)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <SlaCell r={r} />
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-[10rem]">
+                            {txt(r.vendor.pipelineStatus)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {txt(r.vendor.externalId)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{txt(r.vendor.track)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-[7rem]">
+                            {txt(r.vendor.country)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-[10rem]">
+                            {txt(r.vendor.category)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{txt(r.vendor.tier)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-[8rem]">
+                            {txt(r.vendor.owner)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {txt(r.vendor.nextActionDue)}
+                          </TableCell>
+                          <TableCell className="w-20">
+                            <div className="flex items-center gap-1 justify-end">
+                              <button
+                                type="button"
+                                title="Move to Approved Supplier List"
+                                className="text-muted-foreground hover:text-emerald-600 p-1"
+                                onClick={() => onMoveToAsl(r)}
+                              >
+                                <ArrowRightCircle className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Edit"
+                                className="text-muted-foreground hover:text-foreground p-1"
+                                onClick={() => onEdit(r)}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Remove"
+                                className="text-muted-foreground hover:text-red-600 p-1"
+                                onClick={() => remove(r)}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        {isOpen && (
+                          <TableRow className="bg-muted/20 hover:bg-muted/20">
+                            <TableCell colSpan={colSpan} className="pt-0 pb-4 px-6">
+                              <div className="space-y-3">
+                                <SlaTimeline r={r} />
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
+                                  {detailCols.map((c) => (
+                                    <div key={c.key} className="min-w-0">
+                                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                                        {c.header}
+                                      </div>
+                                      <div className="text-xs">{c.render(r)}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
               </TableBody>
             </Table>
           </div>
@@ -781,6 +1305,7 @@ function EditEntryDialog({
                   />
                 ) : (
                   <Input
+                    type={f.date ? "date" : "text"}
                     value={vendorFields[f.key] ?? ""}
                     onChange={(e) => setField(f.key, e.target.value)}
                   />

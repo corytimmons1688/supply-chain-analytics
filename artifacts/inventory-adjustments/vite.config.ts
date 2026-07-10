@@ -66,6 +66,11 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    // Local dev only: proxy /api to a locally running api-server, e.g.
+    // API_PROXY_TARGET=http://localhost:4599 pnpm dev
+    ...(process.env.API_PROXY_TARGET
+      ? { proxy: { "/api": { target: process.env.API_PROXY_TARGET, changeOrigin: true } } }
+      : {}),
   },
   preview: {
     port,

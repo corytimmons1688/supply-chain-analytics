@@ -49,6 +49,8 @@ export const vendorTable = pgTable("vendor", {
   subCapability: text("sub_capability"),
   primarySecondary: text("primary_secondary"),
   waveSprint: text("wave_sprint"),
+  // Day 0 of the 45-day sourcing SLA (spec in → PO-ready). ISO YYYY-MM-DD.
+  specInDate: text("spec_in_date"),
   ndaDate: text("nda_date"),
   msaDate: text("msa_date"),
   capabilityVerified: text("capability_verified"),

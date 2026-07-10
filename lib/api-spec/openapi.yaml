@@ -1071,6 +1071,7 @@ components:
         subCapability: { type: string, nullable: true }
         primarySecondary: { type: string, nullable: true }
         waveSprint: { type: string, nullable: true }
+        specInDate: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }
@@ -1122,6 +1123,7 @@ components:
         subCapability: { type: string, nullable: true }
         primarySecondary: { type: string, nullable: true }
         waveSprint: { type: string, nullable: true }
+        specInDate: { type: string, nullable: true }
         ndaDate: { type: string, nullable: true }
         msaDate: { type: string, nullable: true }
         capabilityVerified: { type: string, nullable: true }
