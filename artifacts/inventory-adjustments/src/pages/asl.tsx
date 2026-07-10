@@ -41,8 +41,11 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Check,
   ChevronDown,
+  Clock,
   ChevronRight,
+  CircleAlert,
   ExternalLink,
   FilterX,
 } from "lucide-react";
@@ -100,10 +103,11 @@ function statusLabel(s: string): string {
 // =====================================================================
 // 45-day sourcing SLA (spec in → PO-ready; see the sourcing Gantt).
 // Day 0 = Spec in · Day 11 = NDA executed · Day 28 = supplier selected ·
-// Day 35 = PO-ready (critical path) · Day 45 = SLA deadline.
+// Day 35 = full MSA / commercial · Day 45 = PO-ready (SLA deadline).
 // =====================================================================
 const SLA_TOTAL_DAYS = 45;
-const SLA_PO_READY_DAY = 35;
+// Amber "approaching SLA" threshold (MSA target day).
+const SLA_WARN_DAY = 35;
 
 function parseIsoDate(s: string | null | undefined): Date | null {
   if (!s) return null;
@@ -114,7 +118,9 @@ function parseIsoDate(s: string | null | undefined): Date | null {
 function addDaysIso(start: Date, days: number): string {
   const d = new Date(start);
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  // Format in local time — toISOString() reports the UTC date, which is off
+  // by one for local-midnight dates in positive-offset timezones.
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /**
@@ -128,7 +134,13 @@ function slaDaysElapsed(r: AslRow): number | null {
     parseIsoDate(r.vendor.poReadyDate) ??
     (r.entry.status === "onboarded" ? parseIsoDate(r.entry.onboardedOn) : null) ??
     new Date();
-  return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86_400_000));
+  // Count calendar days from local date components — raw ms division loses an
+  // hour across DST and undercounts by one day.
+  const dayNum = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000;
+  const days = dayNum(end) - dayNum(start);
+  // Negative = inverted dates (typo) or a future spec-in; treat as not started
+  // rather than reporting a false green "Day 0".
+  return days < 0 ? null : days;
 }
 
 function slaDone(r: AslRow): boolean {
@@ -163,12 +175,12 @@ function SlaCell({ r }: { r: AslRow }) {
     );
   }
   const over = days > SLA_TOTAL_DAYS;
-  const warn = !over && days > SLA_PO_READY_DAY;
+  const warn = !over && days > SLA_WARN_DAY;
   const pct = Math.min(100, (days / SLA_TOTAL_DAYS) * 100);
   return (
     <div
       className="min-w-[6.5rem]"
-      title={`Spec in ${r.vendor.specInDate} · PO-ready target day ${SLA_PO_READY_DAY} · SLA day ${SLA_TOTAL_DAYS}`}
+      title={`Spec in ${r.vendor.specInDate} · MSA target day ${SLA_WARN_DAY} · PO-ready / SLA day ${SLA_TOTAL_DAYS}`}
     >
       <div
         className={cn(
@@ -204,11 +216,25 @@ function InlineDate({
   disabled?: boolean;
 }) {
   const [v, setV] = React.useState(value ?? "");
-  React.useEffect(() => setV(value ?? ""), [value]);
+  // Tracks the last value we saved (or received) so the unmount flush never
+  // re-sends a value the blur commit already sent.
+  const committedRef = React.useRef<string | null>(value ?? null);
+  React.useEffect(() => {
+    setV(value ?? "");
+    committedRef.current = value ?? null;
+  }, [value]);
   const commit = () => {
     const next = v || null;
-    if (next !== (value ?? null)) onSave(next);
+    if (next !== committedRef.current) {
+      committedRef.current = next;
+      onSave(next);
+    }
   };
+  // Radix unmounts the popover content without blurring the focused input
+  // (Escape / Safari outside-clicks), so flush any dirty edit on unmount.
+  const commitRef = React.useRef(commit);
+  commitRef.current = commit;
+  React.useEffect(() => () => commitRef.current(), []);
   return (
     <Input
       type="date"
@@ -217,6 +243,7 @@ function InlineDate({
       disabled={disabled}
       onChange={(e) => setV(e.target.value)}
       onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
     />
   );
 }
@@ -231,12 +258,23 @@ function InlineLink({
   disabled?: boolean;
 }) {
   const [v, setV] = React.useState(value ?? "");
-  React.useEffect(() => setV(value ?? ""), [value]);
+  const committedRef = React.useRef<string | null>(value ?? null);
+  React.useEffect(() => {
+    setV(value ?? "");
+    committedRef.current = value ?? null;
+  }, [value]);
   const commit = () => {
     const trimmed = v.trim();
     const next = trimmed === "" ? null : trimmed;
-    if (next !== (value ?? null)) onSave(next);
+    if (next !== committedRef.current) {
+      committedRef.current = next;
+      onSave(next);
+    }
   };
+  // Flush dirty edits when the popover unmounts without blurring (Escape).
+  const commitRef = React.useRef(commit);
+  commitRef.current = commit;
+  React.useEffect(() => () => commitRef.current(), []);
   const href = value && /^https?:\/\//.test(value) ? value : value ? `https://${value}` : null;
   return (
     <div className="flex items-center gap-1 min-w-0">
@@ -261,6 +299,62 @@ function InlineLink({
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
       )}
+    </div>
+  );
+}
+
+/** Grouped capability checkboxes (shared by the dialog and cell popovers). */
+function CapabilityChecklist({
+  selectedSet,
+  toggle,
+}: {
+  selectedSet: Set<string>;
+  toggle: (tag: string) => void;
+}) {
+  return (
+    <div className="max-h-72 overflow-y-auto p-2">
+      {CAPABILITY_TAXONOMY.map((cat) => (
+        <div key={cat.category} className="mb-2 last:mb-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70 px-1.5 py-1">
+            {cat.category}
+          </div>
+          {cat.capabilities.map((cap) => {
+            const tag = capabilityTag(cat.category, cap);
+            return (
+              <label
+                key={tag}
+                className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-accent cursor-pointer text-xs"
+              >
+                <Checkbox checked={selectedSet.has(tag)} onCheckedChange={() => toggle(tag)} />
+                {cap}
+              </label>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Flat product-category checkboxes (shared by the dialog and cell popovers). */
+function CategoryChecklist({
+  selectedSet,
+  toggle,
+}: {
+  selectedSet: Set<string>;
+  toggle: (tag: string) => void;
+}) {
+  return (
+    <div className="max-h-72 overflow-y-auto p-2">
+      {CAPABILITY_TAXONOMY.map((cat) => (
+        <label
+          key={cat.category}
+          className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-accent cursor-pointer text-xs"
+        >
+          <Checkbox checked={selectedSet.has(cat.category)} onCheckedChange={() => toggle(cat.category)} />
+          {cat.category}
+        </label>
+      ))}
     </div>
   );
 }
@@ -305,27 +399,7 @@ function CapabilityMultiSelect({
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-80 p-0" align="start">
-          <div className="max-h-72 overflow-y-auto p-2">
-            {CAPABILITY_TAXONOMY.map((cat) => (
-              <div key={cat.category} className="mb-2 last:mb-0">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70 px-1.5 py-1">
-                  {cat.category}
-                </div>
-                {cat.capabilities.map((cap) => {
-                  const tag = capabilityTag(cat.category, cap);
-                  return (
-                    <label
-                      key={tag}
-                      className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-accent cursor-pointer text-xs"
-                    >
-                      <Checkbox checked={selectedSet.has(tag)} onCheckedChange={() => toggle(tag)} />
-                      {cap}
-                    </label>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+          <CapabilityChecklist selectedSet={selectedSet} toggle={toggle} />
         </PopoverContent>
       </Popover>
       {selected.length > 0 && (
@@ -350,6 +424,200 @@ function CapabilityMultiSelect({
   );
 }
 
+/** Multi-select over the 16 supply-web product categories. */
+function CategoryMultiSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const selected = parseCapabilities(value);
+  const selectedSet = new Set(selected);
+  const toggle = (cat: string) => {
+    const next = selectedSet.has(cat) ? selected.filter((t) => t !== cat) : [...selected, cat];
+    onChange(serializeCapabilities(next) ?? "");
+  };
+  return (
+    <div className="space-y-1.5">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="w-full justify-between font-normal h-9">
+            <span className="truncate text-left">
+              {selected.length === 0 ? (
+                <span className="text-muted-foreground">Select product categories…</span>
+              ) : (
+                `${selected.length} selected`
+              )}
+            </span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-60 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-0" align="start">
+          <CategoryChecklist selectedSet={selectedSet} toggle={toggle} />
+        </PopoverContent>
+      </Popover>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((tag) => (
+            <Badge
+              key={tag}
+              variant="outline"
+              className="text-[10px] cursor-pointer hover:bg-destructive/10"
+              title="Click to remove"
+              onClick={() => toggle(tag)}
+            >
+              {tag} ✕
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Shared save hook for click-to-edit vendor fields (partial PUT). */
+function useVendorFieldSave(r: AslRow, onChanged: () => Promise<void>) {
+  const { toast } = useToast();
+  const update = useUpdateVendor();
+  const save = async (patch: Partial<Record<VendorKey, string | null>>) => {
+    try {
+      await update.mutateAsync({
+        vendorId: r.vendor.id,
+        data: { name: r.vendor.name, ...patch } as never,
+      });
+      await onChanged();
+    } catch (e) {
+      toast({ title: "Save failed", description: String(e), variant: "destructive" });
+    }
+  };
+  return { save, pending: update.isPending };
+}
+
+/** Click the value → input appears → Enter/blur saves, Escape cancels. */
+function InlineEditableText({
+  value,
+  onSave,
+  multiline,
+  display,
+}: {
+  value: string | null | undefined;
+  onSave: (v: string | null) => void;
+  multiline?: boolean;
+  display?: React.ReactNode;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [v, setV] = React.useState(value ?? "");
+  React.useEffect(() => setV(value ?? ""), [value]);
+  const commit = () => {
+    setEditing(false);
+    const next = v.trim() === "" ? null : v.trim();
+    if (next !== ((value ?? "").trim() || null)) onSave(next);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setV(value ?? "");
+  };
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        title="Click to edit"
+        className="block w-full text-left text-xs rounded px-1 -mx-1 py-0.5 hover:bg-accent/60 cursor-text min-h-[1.4rem]"
+        onClick={() => setEditing(true)}
+      >
+        {display ?? (value ? <span className="block truncate">{value}</span> : <span className="text-muted-foreground/50">—</span>)}
+      </button>
+    );
+  }
+  if (multiline) {
+    return (
+      <Textarea
+        autoFocus
+        rows={2}
+        className="text-xs"
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") cancel();
+        }}
+      />
+    );
+  }
+  return (
+    <Input
+      autoFocus
+      className="h-7 text-xs"
+      value={v}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") cancel();
+      }}
+    />
+  );
+}
+
+/** Renders the right inline editor for a column's `editor` kind. */
+function EditableValue({
+  col,
+  r,
+  save,
+}: {
+  col: Col;
+  r: AslRow;
+  save: (patch: Partial<Record<VendorKey, string | null>>) => Promise<void>;
+}) {
+  const key = col.key as VendorKey;
+  const raw = (r.vendor as unknown as Record<string, string | null | undefined>)[col.key] ?? null;
+  if (col.editor === "capabilities" || col.editor === "categories") {
+    const selected = parseCapabilities(raw);
+    const Checklist = col.editor === "capabilities" ? CapabilityChecklist : CategoryChecklist;
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            title="Click to edit"
+            className="block w-full text-left text-xs rounded px-1 -mx-1 py-0.5 hover:bg-accent/60 min-h-[1.4rem]"
+          >
+            {selected.length ? (
+              <span className="flex flex-wrap gap-1">
+                {selected.slice(0, 3).map((t) => (
+                  <Badge key={t} variant="outline" className="text-[10px] font-normal">
+                    {t}
+                  </Badge>
+                ))}
+                {selected.length > 3 && (
+                  <span className="text-[10px] text-muted-foreground">+{selected.length - 3} more</span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground/50">—</span>
+            )}
+          </button>
+        </PopoverTrigger>
+          <PopoverContent className="w-80 p-0" align="start">
+          <Checklist
+            selectedSet={new Set(selected)}
+            toggle={(tag) => {
+              const next = selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag];
+              void save({ [key]: serializeCapabilities(next) });
+            }}
+          />
+        </PopoverContent>
+      </Popover>
+    );
+  }
+  if (col.editor === "text" || col.editor === "multiline") {
+    return (
+      <InlineEditableText
+        value={raw}
+        multiline={col.editor === "multiline"}
+        onSave={(v) => void save({ [key]: v })}
+        display={col.key === "website" ? (raw ? col.render(r) : undefined) : undefined}
+      />
+    );
+  }
+  return <>{col.render(r)}</>;
+}
+
 type SlaStep = {
   label: string;
   day: number;
@@ -365,17 +633,63 @@ const SLA_STEPS: SlaStep[] = [
   { label: "Assessment + initial samples", day: 25, dateKey: "assessmentDate", linkKey: "assessmentLink" },
   { label: "Quality Agreement", day: 28, dateKey: "qualityAgreementDate", linkKey: "qualityAgreementLink" },
   { label: "Review samples & select", day: 28, dateKey: "supplierSelectedDate", linkKey: "supplierSelectedLink" },
-  { label: "Factory audit (3rd-party)", day: SLA_PO_READY_DAY, dateKey: "factoryTourDate", linkKey: "factoryAuditLink" },
-  { label: "NetSuite setup", day: SLA_PO_READY_DAY, dateKey: "netsuiteSetupDate", linkKey: "netsuiteSetupLink" },
-  { label: "PO-ready", day: SLA_PO_READY_DAY, dateKey: "poReadyDate", linkKey: "poReadyLink" },
-  { label: "Full MSA / commercial", day: SLA_TOTAL_DAYS, dateKey: "msaDate", linkKey: "msaLink" },
+  { label: "Factory audit (3rd-party)", day: 35, dateKey: "factoryTourDate", linkKey: "factoryAuditLink" },
+  { label: "NetSuite setup", day: 35, dateKey: "netsuiteSetupDate", linkKey: "netsuiteSetupLink" },
+  { label: "Full MSA / commercial", day: SLA_WARN_DAY, dateKey: "msaDate", linkKey: "msaLink" },
+  { label: "PO-ready", day: SLA_TOTAL_DAYS, dateKey: "poReadyDate", linkKey: "poReadyLink" },
 ];
 
-function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void> }) {
+const CREDIT_CHECK_STEP: SlaStep = {
+  label: "Credit check (intl)",
+  day: 8,
+  dateKey: "creditCheckDate",
+  linkKey: "creditCheckLink",
+};
+
+/** SLA steps for a vendor — international vendors get a Credit check step. */
+function slaStepsFor(r: AslRow): SlaStep[] {
+  if ((r.vendor.track ?? "").toLowerCase() !== "international") return SLA_STEPS;
+  const steps = [...SLA_STEPS];
+  steps.splice(2, 0, CREDIT_CHECK_STEP); // after Identify & shortlist
+  return steps;
+}
+
+/** The next outstanding SLA task — shown in the Pipeline Status column. */
+function nextOutstanding(r: AslRow): { label: string; index: number } {
+  if (r.entry.status === "onboarded") return { label: "Onboarded", index: 98 };
+  const steps = slaStepsFor(r);
+  const idx = steps.findIndex((s) => !r.vendor[s.dateKey]);
+  if (idx === -1) return { label: "All steps complete", index: 97 };
+  return { label: steps[idx]!.label, index: idx };
+}
+
+type StepState = "done" | "late" | "overdue" | "pending";
+
+function stepState(r: AslRow, s: SlaStep, start: Date | null): StepState {
+  const actual = parseIsoDate((r.vendor[s.dateKey] as string | null | undefined) ?? null);
+  const target = start ? addDaysIso(start, s.day) : null;
+  const targetEnd = target ? Date.parse(`${target}T23:59:59`) : null;
+  if (actual) return targetEnd != null && actual.getTime() > targetEnd ? "late" : "done";
+  if (targetEnd != null && Date.now() > targetEnd && !slaDone(r)) return "overdue";
+  return "pending";
+}
+
+// Local-timezone date — toISOString() would roll to tomorrow during the
+// evening for US users because it reports the UTC date.
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Interactive SLA stepper: one node per Gantt step on a progress rail.
+ * Clicking a node opens a popover to set the completed date (with a Today
+ * shortcut) and the evidence link — the always-on input wall is gone.
+ */
+function SlaStepper({ r, onChanged }: { r: AslRow; onChanged: () => Promise<void> }) {
   const { toast } = useToast();
   const update = useUpdateVendor();
   const start = parseIsoDate(r.vendor.specInDate);
-  const now = Date.now();
 
   const save = async (patch: Partial<Record<VendorKey, string | null>>) => {
     try {
@@ -389,66 +703,230 @@ function SlaMilestoneEditor({ r, onChanged }: { r: AslRow; onChanged: () => Prom
     }
   };
 
+  const steps = slaStepsFor(r);
+  const doneCount = steps.filter((s) => r.vendor[s.dateKey]).length;
+  const days = slaDaysElapsed(r);
+  const nextStep = steps.find((s) => !r.vendor[s.dateKey]);
+
   return (
-    <div className="rounded-md border bg-background/60 overflow-hidden">
-      <div className="grid grid-cols-[minmax(13rem,17rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground/70">
-        <span>45-day SLA step</span>
-        <span>Target</span>
-        <span>Completed</span>
-        <span>Link</span>
-      </div>
-      {SLA_STEPS.map((s) => {
-        const actualRaw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
-        const actual = parseIsoDate(actualRaw);
-        const target = start ? addDaysIso(start, s.day) : null;
-        const targetEnd = target ? Date.parse(`${target}T23:59:59`) : null;
-        const late = actual && targetEnd ? actual.getTime() > targetEnd : false;
-        const overdue = !actual && targetEnd != null && now > targetEnd && !slaDone(r);
-        return (
-          <div
-            key={s.label}
-            className="grid grid-cols-[minmax(13rem,17rem)_7rem_10rem_minmax(12rem,1fr)] gap-x-4 items-center px-3 py-1.5 border-b last:border-b-0"
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className={cn(
-                  "w-1.5 h-1.5 rounded-full shrink-0",
-                  actual && !late && "bg-emerald-500",
-                  actual && late && "bg-amber-500",
-                  overdue && "bg-red-500",
-                  !actual && !overdue && "bg-muted-foreground/30",
-                )}
-              />
-              <span className="text-xs font-medium truncate">{s.label}</span>
-              <span className="text-[10px] text-muted-foreground shrink-0">D{s.day}</span>
-            </div>
-            <span
-              className={cn(
-                "text-xs tabular-nums",
-                overdue ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground",
-              )}
-              title={overdue ? "Target passed with no completion date" : undefined}
-            >
-              {target ?? "—"}
+    <div className="rounded-md border bg-background/60 px-4 pt-3 pb-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+        <div className="text-xs">
+          <span className="font-semibold">
+            {doneCount} / {steps.length} steps complete
+          </span>
+          {days != null && (
+            <span className={cn("text-muted-foreground", days > SLA_TOTAL_DAYS && !slaDone(r) && "text-red-600 dark:text-red-400 font-medium")}>
+              {" "}· Day {days} of {SLA_TOTAL_DAYS}
             </span>
-            <InlineDate
-              value={actualRaw}
-              onSave={(v) => save({ [s.dateKey]: v })}
-              disabled={update.isPending}
-            />
-            <InlineLink
-              value={(r.vendor[s.linkKey] as string | null | undefined) ?? null}
-              onSave={(v) => save({ [s.linkKey]: v })}
-              disabled={update.isPending}
-            />
-          </div>
-        );
-      })}
-      {!start && (
-        <p className="px-3 py-1.5 text-[11px] text-muted-foreground bg-muted/30">
-          Set the <span className="font-medium">Spec in</span> completed date to start the 45-day
-          clock and compute the step targets.
+          )}
+          {start && nextStep && (
+            <span className="text-muted-foreground">
+              {" "}· next: <span className="font-medium text-foreground">{nextStep.label}</span> due{" "}
+              {addDaysIso(start, nextStep.day)}
+            </span>
+          )}
+        </div>
+        {!start ? (
+          <span className="text-[11px] text-amber-600 dark:text-amber-400">
+            Click the Spec in node to set Day 0 and start the 45-day clock
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">Click a step to edit its date &amp; link</span>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
+        <div className="flex" style={{ minWidth: `${steps.length * 6.5}rem` }}>
+          {steps.map((s, i) => {
+            const state = stepState(r, s, start);
+            const actualRaw = (r.vendor[s.dateKey] as string | null | undefined) ?? null;
+            const linkRaw = (r.vendor[s.linkKey] as string | null | undefined) ?? null;
+            const target = start ? addDaysIso(start, s.day) : null;
+            const isNext = start != null && nextStep?.label === s.label && state !== "overdue";
+            const prevDone = i > 0 && !!r.vendor[steps[i - 1]!.dateKey];
+            const href = linkRaw && /^https?:\/\//.test(linkRaw) ? linkRaw : linkRaw ? `https://${linkRaw}` : null;
+            return (
+              <div key={s.label} className="flex-1 min-w-0 flex flex-col items-center">
+                <div className="flex items-center w-full">
+                  <div className={cn("h-0.5 flex-1", i === 0 ? "bg-transparent" : prevDone ? "bg-emerald-500/70" : "bg-border")} />
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        title={`${s.label} — ${
+                          actualRaw
+                            ? `completed ${actualRaw}${state === "late" ? ` (late, target ${target})` : ""}`
+                            : target
+                              ? `${state === "overdue" ? "overdue — " : ""}target ${target}`
+                              : "click to edit"
+                        }`}
+                        className={cn(
+                          "w-7 h-7 rounded-full border-2 flex items-center justify-center shrink-0 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                          state === "done" && "bg-emerald-500 border-emerald-500 text-white",
+                          state === "late" && "bg-amber-500 border-amber-500 text-amber-900",
+                          state === "overdue" && "bg-red-500/15 border-red-500 text-red-600 dark:text-red-400",
+                          state === "pending" && "bg-background border-muted-foreground/30 text-muted-foreground",
+                          isNext && "border-dashed border-primary",
+                        )}
+                      >
+                        {state === "done" ? (
+                          <Check className="w-3.5 h-3.5" strokeWidth={3} />
+                        ) : state === "late" ? (
+                          <Clock className="w-3.5 h-3.5" strokeWidth={2.5} />
+                        ) : state === "overdue" ? (
+                          <CircleAlert className="w-4 h-4" />
+                        ) : (
+                          <span className="text-[10px] font-semibold">D{s.day}</span>
+                        )}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-72" align="center">
+                      <div className="space-y-2.5">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-sm font-medium">{s.label}</span>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                            target {target ?? "—"} · D{s.day}
+                          </span>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Completed</Label>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <InlineDate value={actualRaw} onSave={(v) => save({ [s.dateKey]: v })} disabled={update.isPending} />
+                            {!actualRaw ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs px-2"
+                                disabled={update.isPending}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => save({ [s.dateKey]: todayIso() })}
+                              >
+                                Today
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Clear completed date"
+                                className="h-7 px-2 text-muted-foreground hover:text-red-600"
+                                disabled={update.isPending}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  if (
+                                    s.dateKey === "poReadyDate" &&
+                                    r.entry.status === "onboarded" &&
+                                    !window.confirm(
+                                      "This vendor is onboarded: clearing PO-ready re-anchors the 45-day SLA to the onboarded date. Clear anyway?",
+                                    )
+                                  ) {
+                                    return;
+                                  }
+                                  save({ [s.dateKey]: null });
+                                }}
+                              >
+                                Clear
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Evidence link</Label>
+                          <div className="mt-1">
+                            <InlineLink value={linkRaw} onSave={(v) => save({ [s.linkKey]: v })} disabled={update.isPending} />
+                          </div>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <div className={cn("h-0.5 flex-1", i === steps.length - 1 ? "bg-transparent" : actualRaw ? "bg-emerald-500/70" : "bg-border")} />
+                </div>
+                <div
+                  className="text-[10px] font-medium text-center leading-tight mt-1.5 px-0.5 line-clamp-2 h-[2.5em]"
+                  title={s.label}
+                >
+                  {s.label}
+                </div>
+                <div
+                  className={cn(
+                    "text-[10px] tabular-nums mt-0.5",
+                    state === "done" && "text-emerald-600 dark:text-emerald-400",
+                    state === "late" && "text-amber-600 dark:text-amber-400",
+                    state === "overdue" && "text-red-600 dark:text-red-400 font-medium",
+                    state === "pending" && "text-muted-foreground",
+                  )}
+                >
+                  {state === "late" ? `${actualRaw} · late` : (actualRaw ?? target ?? "—")}
+                </div>
+                {href && (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={href}
+                    aria-label={`Open evidence for ${s.label}`}
+                    className="mt-0.5 p-1.5 text-primary hover:text-primary/80"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Tracker detail grid: empty fields hidden by default, click a value to edit. */
+function VendorDetailGrid({
+  r,
+  cols,
+  onChanged,
+}: {
+  r: AslRow;
+  cols: Col[];
+  onChanged: () => Promise<void>;
+}) {
+  const { save } = useVendorFieldSave(r, onChanged);
+  const [showAll, setShowAll] = React.useState(false);
+  const populated = cols.filter((c) => {
+    const v = (r.vendor as unknown as Record<string, unknown>)[c.key];
+    return v != null && v !== "";
+  });
+  const shown = showAll ? cols : populated;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+          Tracker details · {populated.length} of {cols.length} filled
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px] text-muted-foreground"
+          onClick={() => setShowAll((v) => !v)}
+        >
+          {showAll ? "Show filled only" : "Show all fields"}
+        </Button>
+      </div>
+      {shown.length === 0 ? (
+        <p className="text-xs text-muted-foreground py-1">
+          No tracker details filled in yet — use the row&apos;s Edit action to add them.
         </p>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
+          {shown.map((c) => (
+            <div key={c.key} className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{c.header}</div>
+              <div className="text-xs">
+                <EditableValue col={c} r={r} save={save} />
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -459,6 +937,12 @@ type Col = {
   header: string;
   /** width hint applied to the cell wrapper, e.g. "min-w-[12rem]" */
   width?: string;
+  /**
+   * Click-to-edit behavior for this vendor field. "text"/"multiline" swap in
+   * an input on click; "capabilities"/"categories" open the multi-selects.
+   * Absent = read-only (entry-level or computed cells).
+   */
+  editor?: "text" | "multiline" | "capabilities" | "categories";
   render: (r: AslRow) => React.ReactNode;
 };
 
@@ -481,17 +965,18 @@ const ASL_COLUMNS: Col[] = [
     </Badge>
   ) },
   { key: "segment", header: "Segment", width: "min-w-[8rem]", render: (r) => txt(SEGMENT_LABEL[r.entry.segment] ?? r.entry.segment) },
-  { key: "tier", header: "Tier", width: "min-w-[5rem]", render: (r) => txt(r.vendor.tier) },
-  { key: "category", header: "Category", width: "min-w-[11rem]", render: (r) => txt(r.vendor.category) },
-  { key: "subCategory", header: "Sub Category", width: "min-w-[10rem]", render: (r) => txt(r.vendor.subCategory) },
-  { key: "stage", header: "Stage", width: "min-w-[6rem]", render: (r) => txt(r.vendor.stage) },
-  { key: "capabilities", header: "Capabilities", width: "min-w-[16rem]", render: (r) => txt(r.vendor.capabilities) },
-  { key: "locations", header: "Locations", width: "min-w-[10rem]", render: (r) => txt(r.vendor.locations) },
-  { key: "documents", header: "Documents", width: "min-w-[8rem]", render: (r) => txt(r.vendor.documents) },
-  { key: "calyxPoc", header: "Calyx POC", width: "min-w-[9rem]", render: (r) => txt(r.vendor.calyxPoc) },
-  { key: "vendorPoc", header: "Vendor POC", width: "min-w-[9rem]", render: (r) => txt(r.vendor.vendorPoc) },
-  { key: "vendorPocPhone", header: "POC Phone", width: "min-w-[9rem]", render: (r) => txt(r.vendor.vendorPocPhone) },
-  { key: "vendorPocEmail", header: "POC Email", width: "min-w-[13rem]", render: (r) => txt(r.vendor.vendorPocEmail) },
+  { key: "tier", header: "Tier", width: "min-w-[5rem]", editor: "text", render: (r) => txt(r.vendor.tier) },
+  { key: "category", header: "Category", width: "min-w-[11rem]", editor: "text", render: (r) => txt(r.vendor.category) },
+  { key: "subCategory", header: "Sub Category", width: "min-w-[10rem]", editor: "text", render: (r) => txt(r.vendor.subCategory) },
+  { key: "stage", header: "Stage", width: "min-w-[6rem]", editor: "text", render: (r) => txt(r.vendor.stage) },
+  { key: "productCategories", header: "Product Categories", width: "min-w-[12rem]", editor: "categories", render: (r) => txt(r.vendor.productCategories) },
+  { key: "capabilities", header: "Capabilities", width: "min-w-[16rem]", editor: "capabilities", render: (r) => txt(r.vendor.capabilities) },
+  { key: "locations", header: "Locations", width: "min-w-[10rem]", editor: "multiline", render: (r) => txt(r.vendor.locations) },
+  { key: "documents", header: "Documents", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.documents) },
+  { key: "calyxPoc", header: "Calyx POC", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.calyxPoc) },
+  { key: "vendorPoc", header: "Vendor POC", width: "min-w-[9rem]", editor: "multiline", render: (r) => txt(r.vendor.vendorPoc) },
+  { key: "vendorPocPhone", header: "POC Phone", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.vendorPocPhone) },
+  { key: "vendorPocEmail", header: "POC Email", width: "min-w-[13rem]", editor: "text", render: (r) => txt(r.vendor.vendorPocEmail) },
 ];
 
 // Columns for the Flex Sourcing pipeline tracker (not-yet-onboarded candidates).
@@ -501,19 +986,18 @@ const PIPELINE_COLUMNS: Col[] = [
       {statusLabel(r.entry.status)}
     </Badge>
   ) },
-  { key: "externalId", header: "Vendor ID", width: "min-w-[7rem]", render: (r) => txt(r.vendor.externalId) },
-  { key: "printMethod", header: "Print Method", width: "min-w-[9rem]", render: (r) => txt(r.vendor.printMethod) },
-  { key: "pipelineStatus", header: "Pipeline Status", width: "min-w-[10rem]", render: (r) => txt(r.vendor.pipelineStatus) },
-  { key: "track", header: "Track", width: "min-w-[7rem]", render: (r) => txt(r.vendor.track) },
-  { key: "country", header: "Country", width: "min-w-[7rem]", render: (r) => txt(r.vendor.country) },
-  { key: "cluster", header: "Cluster", width: "min-w-[9rem]", render: (r) => txt(r.vendor.cluster) },
-  { key: "category", header: "Category", width: "min-w-[11rem]", render: (r) => txt(r.vendor.category) },
-  { key: "subCapability", header: "Sub Capability", width: "min-w-[14rem]", render: (r) => txt(r.vendor.subCapability) },
-  { key: "tier", header: "Tier", width: "min-w-[5rem]", render: (r) => txt(r.vendor.tier) },
-  { key: "primarySecondary", header: "Primary/Secondary", width: "min-w-[9rem]", render: (r) => txt(r.vendor.primarySecondary) },
-  { key: "stage", header: "Stage", width: "min-w-[6rem]", render: (r) => txt(r.vendor.stage) },
-  { key: "owner", header: "Owner", width: "min-w-[8rem]", render: (r) => txt(r.vendor.owner) },
-  { key: "waveSprint", header: "Wave/Sprint", width: "min-w-[7rem]", render: (r) => txt(r.vendor.waveSprint) },
+  { key: "externalId", header: "Vendor ID", width: "min-w-[7rem]", editor: "text", render: (r) => txt(r.vendor.externalId) },
+  { key: "printMethod", header: "Print Method", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.printMethod) },
+  { key: "pipelineStatus", header: "Pipeline Status", width: "min-w-[10rem]", editor: "text", render: (r) => txt(r.vendor.pipelineStatus) },
+  { key: "track", header: "Track", width: "min-w-[7rem]", editor: "text", render: (r) => txt(r.vendor.track) },
+  { key: "country", header: "Country", width: "min-w-[7rem]", editor: "text", render: (r) => txt(r.vendor.country) },
+  { key: "cluster", header: "Cluster", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.cluster) },
+  { key: "category", header: "Category", width: "min-w-[11rem]", editor: "text", render: (r) => txt(r.vendor.category) },
+  { key: "subCapability", header: "Sub Capability", width: "min-w-[14rem]", editor: "multiline", render: (r) => txt(r.vendor.subCapability) },
+  { key: "tier", header: "Tier", width: "min-w-[5rem]", editor: "text", render: (r) => txt(r.vendor.tier) },
+  { key: "primarySecondary", header: "Primary/Secondary", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.primarySecondary) },
+  { key: "stage", header: "Stage", width: "min-w-[6rem]", editor: "text", render: (r) => txt(r.vendor.stage) },
+  { key: "owner", header: "Owner", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.owner) },
   { key: "website", header: "Website", width: "min-w-[12rem]", render: (r) =>
     r.vendor.website ? (
       <a href={r.vendor.website} target="_blank" rel="noreferrer" className="block truncate text-primary hover:underline" title={r.vendor.website}>
@@ -523,26 +1007,21 @@ const PIPELINE_COLUMNS: Col[] = [
       <span className="text-muted-foreground/50">—</span>
     ),
   },
-  { key: "capabilityVerified", header: "Capability Verified", width: "min-w-[9rem]", render: (r) => txt(r.vendor.capabilityVerified) },
-  { key: "rfqSent", header: "RFQ Sent", width: "min-w-[8rem]", render: (r) => txt(r.vendor.rfqSent) },
-  { key: "quoteReceived", header: "Quote Received", width: "min-w-[8rem]", render: (r) => txt(r.vendor.quoteReceived) },
-  { key: "quotedPrice", header: "Quoted Price", width: "min-w-[8rem]", render: (r) => txt(r.vendor.quotedPrice) },
-  { key: "targetPrice", header: "Target Price", width: "min-w-[8rem]", render: (r) => txt(r.vendor.targetPrice) },
-  { key: "priceVsTargetPct", header: "Price vs Target %", width: "min-w-[8rem]", render: (r) => txt(r.vendor.priceVsTargetPct) },
-  { key: "moq", header: "MOQ", width: "min-w-[6rem]", render: (r) => txt(r.vendor.moq) },
-  { key: "depositPct", header: "Deposit %", width: "min-w-[7rem]", render: (r) => txt(r.vendor.depositPct) },
-  { key: "leadTimeDays", header: "Lead Time (days)", width: "min-w-[8rem]", render: (r) => txt(r.vendor.leadTimeDays) },
-  { key: "aqlStandard", header: "AQL Standard", width: "min-w-[8rem]", render: (r) => txt(r.vendor.aqlStandard) },
-  { key: "psiStatus", header: "PSI Status", width: "min-w-[8rem]", render: (r) => txt(r.vendor.psiStatus) },
-  { key: "trialOrderNo", header: "Trial Order #", width: "min-w-[8rem]", render: (r) => txt(r.vendor.trialOrderNo) },
-  { key: "trialResult", header: "Trial Result", width: "min-w-[9rem]", render: (r) => txt(r.vendor.trialResult) },
-  { key: "commandIntegrated", header: "Command Integrated", width: "min-w-[9rem]", render: (r) => txt(r.vendor.commandIntegrated) },
-  { key: "packosHandoff", header: "PackOS Handoff", width: "min-w-[9rem]", render: (r) => txt(r.vendor.packosHandoff) },
-  { key: "ipClause", header: "IP Clause", width: "min-w-[8rem]", render: (r) => txt(r.vendor.ipClause) },
-  { key: "nonCompete24mo", header: "Non-Compete 24mo", width: "min-w-[9rem]", render: (r) => txt(r.vendor.nonCompete24mo) },
-  { key: "statusRag", header: "Status RAG", width: "min-w-[7rem]", render: (r) => txt(r.vendor.statusRag) },
-  { key: "nextAction", header: "Next Action", width: "min-w-[14rem]", render: (r) => txt(r.vendor.nextAction) },
-  { key: "nextActionDue", header: "Next Action Due", width: "min-w-[8rem]", render: (r) => txt(r.vendor.nextActionDue) },
+  { key: "productCategories", header: "Product Categories", width: "min-w-[12rem]", editor: "categories", render: (r) => txt(r.vendor.productCategories) },
+  { key: "capabilities", header: "Capabilities", width: "min-w-[14rem]", editor: "capabilities", render: (r) => txt(r.vendor.capabilities) },
+  { key: "capabilityVerified", header: "Capability Verified", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.capabilityVerified) },
+  { key: "quotedPrice", header: "Quoted Price", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.quotedPrice) },
+  { key: "targetPrice", header: "Target Price", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.targetPrice) },
+  { key: "priceVsTargetPct", header: "Price vs Target %", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.priceVsTargetPct) },
+  { key: "depositPct", header: "Deposit %", width: "min-w-[7rem]", editor: "text", render: (r) => txt(r.vendor.depositPct) },
+  { key: "leadTimeDays", header: "Lead Time (days)", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.leadTimeDays) },
+  { key: "trialOrderNo", header: "Trial Order #", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.trialOrderNo) },
+  { key: "trialResult", header: "Trial Result", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.trialResult) },
+  { key: "commandIntegrated", header: "Command Integrated", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.commandIntegrated) },
+  { key: "packosHandoff", header: "PackOS Handoff", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.packosHandoff) },
+  { key: "nonCompete24mo", header: "Non-Compete 24mo", width: "min-w-[9rem]", editor: "text", render: (r) => txt(r.vendor.nonCompete24mo) },
+  { key: "nextAction", header: "Next Action", width: "min-w-[14rem]", editor: "multiline", render: (r) => txt(r.vendor.nextAction) },
+  { key: "nextActionDue", header: "Next Action Due", width: "min-w-[8rem]", editor: "text", render: (r) => txt(r.vendor.nextActionDue) },
 ];
 
 type VendorKey = keyof Omit<Vendor, "id" | "name">;
@@ -553,6 +1032,8 @@ type EditField = {
   date?: boolean;
   /** Render as the capability multi-select instead of a text input. */
   capabilities?: boolean;
+  /** Render as the product-category multi-select instead of a text input. */
+  categories?: boolean;
 };
 
 // Editable vendor fields for the current Approved Supplier List table.
@@ -561,6 +1042,7 @@ const ASL_EDIT_FIELDS: EditField[] = [
   { key: "category", label: "Category" },
   { key: "subCategory", label: "Sub Category" },
   { key: "stage", label: "Stage" },
+  { key: "productCategories", label: "Product Categories", categories: true },
   { key: "capabilities", label: "Capabilities", capabilities: true },
   { key: "locations", label: "Locations", multiline: true },
   { key: "documents", label: "Documents" },
@@ -585,27 +1067,20 @@ const PIPELINE_EDIT_FIELDS: EditField[] = [
   { key: "primarySecondary", label: "Primary/Secondary" },
   { key: "stage", label: "Stage" },
   { key: "owner", label: "Owner" },
-  { key: "waveSprint", label: "Wave/Sprint" },
   { key: "website", label: "Website" },
+  { key: "productCategories", label: "Product Categories", categories: true },
   { key: "capabilities", label: "Capabilities", capabilities: true },
   { key: "capabilityVerified", label: "Capability Verified" },
-  { key: "rfqSent", label: "RFQ Sent" },
-  { key: "quoteReceived", label: "Quote Received" },
   { key: "quotedPrice", label: "Quoted Price" },
   { key: "targetPrice", label: "Target Price" },
   { key: "priceVsTargetPct", label: "Price vs Target %" },
-  { key: "moq", label: "MOQ" },
   { key: "depositPct", label: "Deposit %" },
   { key: "leadTimeDays", label: "Lead Time (days)" },
-  { key: "aqlStandard", label: "AQL Standard" },
-  { key: "psiStatus", label: "PSI Status" },
   { key: "trialOrderNo", label: "Trial Order #" },
   { key: "trialResult", label: "Trial Result" },
   { key: "commandIntegrated", label: "Command Integrated" },
   { key: "packosHandoff", label: "PackOS Handoff" },
-  { key: "ipClause", label: "IP Clause" },
   { key: "nonCompete24mo", label: "Non-Compete 24mo" },
-  { key: "statusRag", label: "Status RAG" },
   { key: "nextAction", label: "Next Action", multiline: true },
   { key: "nextActionDue", label: "Next Action Due" },
   { key: "notes", label: "Notes", multiline: true },
@@ -633,7 +1108,7 @@ export default function Asl() {
           vendorId: r.entry.vendorId,
           segment: r.entry.segment as AslSegment,
           status: "onboarded",
-          onboardedOn: new Date().toISOString().slice(0, 10),
+          onboardedOn: todayIso(),
         },
       });
       await invalidate();
@@ -777,6 +1252,12 @@ export default function Asl() {
   );
 }
 
+/** Table-cell wrapper that owns the save hook for one row (hooks per cell row). */
+function EditableCell({ col, r, onChanged }: { col: Col; r: AslRow; onChanged: () => Promise<void> }) {
+  const { save } = useVendorFieldSave(r, onChanged);
+  return <EditableValue col={col} r={r} save={save} />;
+}
+
 function FullTable({
   title,
   description,
@@ -861,7 +1342,9 @@ function FullTable({
                     </TableCell>
                     {columns.map((c) => (
                       <TableCell key={c.key} className={cn("text-xs text-muted-foreground align-top", c.width)}>
-                        <div className={cn("max-w-[18rem]", c.width)}>{c.render(r)}</div>
+                        <div className={cn("max-w-[18rem]", c.width)}>
+                          <EditableCell col={c} r={r} onChanged={onChanged} />
+                        </div>
                       </TableCell>
                     ))}
                     <TableCell className="sticky right-0 z-10 bg-background w-20">
@@ -930,7 +1413,7 @@ const PIPELINE_SORT_ACCESSORS: Record<string, (r: AslRow) => string | number> = 
   vendor: (r) => r.vendor.name.toLowerCase(),
   status: (r) => r.entry.status,
   sla: (r) => slaDaysElapsed(r) ?? -1,
-  pipelineStatus: (r) => (r.vendor.pipelineStatus ?? "").toLowerCase(),
+  pipelineStatus: (r) => nextOutstanding(r).index,
   externalId: (r) => (r.vendor.externalId ?? "").toLowerCase(),
   track: (r) => (r.vendor.track ?? "").toLowerCase(),
   country: (r) => (r.vendor.country ?? "").toLowerCase(),
@@ -1001,7 +1484,7 @@ function PipelineTable({
       .sort()
       .map((v) => ({ value: v, label: v }));
 
-  const pipelineOptions = React.useMemo(() => distinct((r) => r.vendor.pipelineStatus), [rows]);
+  const pipelineOptions = React.useMemo(() => distinct((r) => nextOutstanding(r).label), [rows]);
   const trackOptions = React.useMemo(() => distinct((r) => r.vendor.track), [rows]);
   const countryOptions = React.useMemo(() => distinct((r) => r.vendor.country), [rows]);
   const categoryOptions = React.useMemo(() => distinct((r) => r.vendor.category), [rows]);
@@ -1034,7 +1517,7 @@ function PipelineTable({
           r.vendor.name.toLowerCase().includes(qn) ||
           (r.vendor.externalId ?? "").toLowerCase().includes(qn)) &&
         (fStatus === "all" || r.entry.status === fStatus) &&
-        (fPipeline === "all" || r.vendor.pipelineStatus === fPipeline) &&
+        (fPipeline === "all" || nextOutstanding(r).label === fPipeline) &&
         (fTrack === "all" || r.vendor.track === fTrack) &&
         (fCountry === "all" || r.vendor.country === fCountry) &&
         (fCategory === "all" || r.vendor.category === fCategory) &&
@@ -1130,7 +1613,7 @@ function PipelineTable({
             label="Status"
             options={STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
           />
-          <FilterSelect value={fPipeline} onChange={setFPipeline} label="Pipeline" options={pipelineOptions} />
+          <FilterSelect value={fPipeline} onChange={setFPipeline} label="Next Task" options={pipelineOptions} />
           <FilterSelect value={fTrack} onChange={setFTrack} label="Track" options={trackOptions} />
           <FilterSelect value={fCountry} onChange={setFCountry} label="Country" options={countryOptions} />
           <FilterSelect value={fCategory} onChange={setFCategory} label="Category" options={categoryOptions} />
@@ -1156,7 +1639,7 @@ function PipelineTable({
                   <Th k="vendor" className="min-w-[11rem]">Vendor</Th>
                   <Th k="status">Status</Th>
                   <Th k="sla">SLA (45d)</Th>
-                  <Th k="pipelineStatus">Pipeline Status</Th>
+                  <Th k="pipelineStatus">Next Task</Th>
                   <Th k="externalId">Vendor ID</Th>
                   <Th k="track">Track</Th>
                   <Th k="country">Country</Th>
@@ -1203,8 +1686,16 @@ function PipelineTable({
                           <TableCell>
                             <SlaCell r={r} />
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground max-w-[10rem]">
-                            {txt(r.vendor.pipelineStatus)}
+                          <TableCell className="text-xs max-w-[11rem]">
+                            <span
+                              className={cn(
+                                "block truncate",
+                                nextOutstanding(r).index >= 97 ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+                              )}
+                              title="Next outstanding onboarding task"
+                            >
+                              {nextOutstanding(r).label}
+                            </span>
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                             {txt(r.vendor.externalId)}
@@ -1255,18 +1746,9 @@ function PipelineTable({
                         {isOpen && (
                           <TableRow className="bg-muted/20 hover:bg-muted/20">
                             <TableCell colSpan={colSpan} className="pt-0 pb-4 px-6">
-                              <div className="space-y-3">
-                                <SlaMilestoneEditor r={r} onChanged={onChanged} />
-                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
-                                  {detailCols.map((c) => (
-                                    <div key={c.key} className="min-w-0">
-                                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-                                        {c.header}
-                                      </div>
-                                      <div className="text-xs">{c.render(r)}</div>
-                                    </div>
-                                  ))}
-                                </div>
+                              <div className="space-y-3 sticky left-0 max-w-[calc(100vw-10rem)]">
+                                <SlaStepper r={r} onChanged={onChanged} />
+                                <VendorDetailGrid r={r} cols={detailCols} onChanged={onChanged} />
                               </div>
                             </TableCell>
                           </TableRow>
@@ -1466,7 +1948,7 @@ function EditEntryDialog({
           vendorId: entry.entry.vendorId,
           segment,
           status,
-          onboardedOn: status === "onboarded" ? onboardedOn || new Date().toISOString().slice(0, 10) : null,
+          onboardedOn: status === "onboarded" ? onboardedOn || todayIso() : null,
         },
       });
       await onChanged();
@@ -1531,6 +2013,11 @@ function EditEntryDialog({
                 <Label>{f.label}</Label>
                 {f.capabilities ? (
                   <CapabilityMultiSelect
+                    value={vendorFields[f.key] ?? ""}
+                    onChange={(v) => setField(f.key, v)}
+                  />
+                ) : f.categories ? (
+                  <CategoryMultiSelect
                     value={vendorFields[f.key] ?? ""}
                     onChange={(v) => setField(f.key, v)}
                   />

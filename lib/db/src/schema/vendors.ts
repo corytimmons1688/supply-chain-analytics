@@ -30,6 +30,9 @@ export const vendorTable = pgTable("vendor", {
   // Detailed ASL attributes (from the current Approved Supplier List).
   subCategory: text("sub_category"),
   capabilities: text("capabilities"),
+  // Comma-separated product categories from the supply-web taxonomy; drives
+  // category-level membership in the Vendor Network view.
+  productCategories: text("product_categories"),
   locations: text("locations"),
   documents: text("documents"),
   // Internal Calyx point of contact for this supplier.
@@ -54,8 +57,10 @@ export const vendorTable = pgTable("vendor", {
   // factory_tour_date and the MSA step reuses msa_date for their dates.
   specInDate: text("spec_in_date"), // SLA Day 0
   specInLink: text("spec_in_link"),
-  shortlistDate: text("shortlist_date"), // identify & shortlist + credit report, target day 8
+  shortlistDate: text("shortlist_date"), // identify & shortlist, target day 8
   shortlistLink: text("shortlist_link"),
+  creditCheckDate: text("credit_check_date"), // international vendors only, target day 8
+  creditCheckLink: text("credit_check_link"),
   ndaLink: text("nda_link"), // NDA execution, target day 11
   assessmentDate: text("assessment_date"), // assessment + initial samples, target day 25
   assessmentLink: text("assessment_link"),

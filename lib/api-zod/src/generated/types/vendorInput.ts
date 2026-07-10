@@ -16,6 +16,7 @@ export interface VendorInput {
   owner?: string | null;
   subCategory?: string | null;
   capabilities?: string | null;
+  productCategories?: string | null;
   locations?: string | null;
   documents?: string | null;
   calyxPoc?: string | null;
@@ -34,6 +35,8 @@ export interface VendorInput {
   specInLink?: string | null;
   shortlistDate?: string | null;
   shortlistLink?: string | null;
+  creditCheckDate?: string | null;
+  creditCheckLink?: string | null;
   ndaLink?: string | null;
   assessmentDate?: string | null;
   assessmentLink?: string | null;

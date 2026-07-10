@@ -29,18 +29,21 @@ export default function VendorNetwork() {
   // One vendor entry per unique vendor across both tables.
   const vendors = React.useMemo(() => {
     const rows: AslRow[] = [...(data?.aslSuppliers ?? []), ...(data?.pipeline ?? [])];
-    const byId = new Map<string, { v: VendorLite; tags: Set<string> }>();
+    const byId = new Map<string, { v: VendorLite; tags: Set<string>; cats: Set<string> }>();
     for (const r of rows) {
       const existing = byId.get(r.vendor.id);
       const onboarded = r.entry.status === "onboarded";
       const tags = new Set(parseCapabilities(r.vendor.capabilities));
+      const cats = new Set(parseCapabilities(r.vendor.productCategories));
       if (existing) {
         existing.v.onboarded = existing.v.onboarded || onboarded;
         for (const t of tags) existing.tags.add(t);
+        for (const c of cats) existing.cats.add(c);
       } else {
         byId.set(r.vendor.id, {
           v: { id: r.vendor.id, name: r.vendor.name, onboarded, country: r.vendor.country ?? null },
           tags,
+          cats,
         });
       }
     }
@@ -72,7 +75,7 @@ export default function VendorNetwork() {
       return next;
     });
 
-  const taggedVendorCount = vendors.filter(({ tags }) => tags.size > 0).length;
+  const taggedVendorCount = vendors.filter(({ tags, cats }) => tags.size > 0 || cats.size > 0).length;
 
   return (
     <Layout>
@@ -114,7 +117,14 @@ export default function VendorNetwork() {
               vendors: coverage.get(capabilityTag(cat.category, cap)) ?? [],
             }));
             const covered = caps.filter((c) => c.vendors.length > 0).length;
-            const vendorIds = new Set(caps.flatMap((c) => c.vendors.map((v) => v.id)));
+            const catVendors = vendors
+              .filter(({ cats }) => cats.has(cat.category))
+              .map(({ v }) => v)
+              .sort((a, b) => Number(b.onboarded) - Number(a.onboarded) || a.name.localeCompare(b.name));
+            const vendorIds = new Set([
+              ...caps.flatMap((c) => c.vendors.map((v) => v.id)),
+              ...catVendors.map((v) => v.id),
+            ]);
             const gaps = cat.capabilities.length - covered;
             return (
               <Card
@@ -152,6 +162,28 @@ export default function VendorNetwork() {
                 </CardHeader>
                 {isOpen && (
                   <CardContent className="pt-0 space-y-2" onClick={(e) => e.stopPropagation()}>
+                    {catVendors.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 pb-1">
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70 mr-1">
+                          Category suppliers
+                        </span>
+                        {catVendors.map((v) => (
+                          <Badge
+                            key={v.id}
+                            variant="outline"
+                            title={`${v.name}${v.country ? ` · ${v.country}` : ""} · ${v.onboarded ? "onboarded" : "pipeline"}`}
+                            className={cn(
+                              "text-[10px] font-normal",
+                              v.onboarded
+                                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40"
+                                : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-400/40",
+                            )}
+                          >
+                            {v.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                     {caps.map(({ cap, vendors: covering }) => (
                       <div key={cap} className="rounded-md border px-2.5 py-2">
                         <div className="flex items-center gap-1.5">

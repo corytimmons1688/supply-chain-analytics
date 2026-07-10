@@ -1057,6 +1057,7 @@ components:
         owner: { type: string, nullable: true }
         subCategory: { type: string, nullable: true }
         capabilities: { type: string, nullable: true }
+        productCategories: { type: string, nullable: true }
         locations: { type: string, nullable: true }
         documents: { type: string, nullable: true }
         calyxPoc: { type: string, nullable: true }
@@ -1075,6 +1076,8 @@ components:
         specInLink: { type: string, nullable: true }
         shortlistDate: { type: string, nullable: true }
         shortlistLink: { type: string, nullable: true }
+        creditCheckDate: { type: string, nullable: true }
+        creditCheckLink: { type: string, nullable: true }
         ndaLink: { type: string, nullable: true }
         assessmentDate: { type: string, nullable: true }
         assessmentLink: { type: string, nullable: true }
@@ -1125,6 +1128,7 @@ components:
         owner: { type: string, nullable: true }
         subCategory: { type: string, nullable: true }
         capabilities: { type: string, nullable: true }
+        productCategories: { type: string, nullable: true }
         locations: { type: string, nullable: true }
         documents: { type: string, nullable: true }
         calyxPoc: { type: string, nullable: true }
@@ -1143,6 +1147,8 @@ components:
         specInLink: { type: string, nullable: true }
         shortlistDate: { type: string, nullable: true }
         shortlistLink: { type: string, nullable: true }
+        creditCheckDate: { type: string, nullable: true }
+        creditCheckLink: { type: string, nullable: true }
         ndaLink: { type: string, nullable: true }
         assessmentDate: { type: string, nullable: true }
         assessmentLink: { type: string, nullable: true }
