@@ -1,0 +1,2039 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Inventory adjustments dashboard API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+  - name: adjustments
+  - name: goals
+  - name: snapshots
+  - name: vendors
+  - name: asl
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /gateway/health:
+    get:
+      operationId: gatewayHealth
+      tags: [health]
+      summary: Label Traxx ODBC gateway connectivity
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayHealth"
+  /adjustments/timeseries:
+    get:
+      operationId: getAdjustmentsTimeseries
+      tags: [adjustments]
+      summary: Bucketed inventory adjustment dollars over time
+      parameters:
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/StockId"
+      responses:
+        "200":
+          description: Time series
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bucket, from, to, points]
+                properties:
+                  bucket: { $ref: "#/components/schemas/BucketSize" }
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
+                  points:
+                    type: array
+                    items: { $ref: "#/components/schemas/TimeseriesPoint" }
+  /adjustments/totals:
+    get:
+      operationId: getAdjustmentsTotals
+      tags: [adjustments]
+      summary: Total added, removed, and net for a window
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/StockId"
+      responses:
+        "200":
+          description: Totals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdjustmentTotals" }
+  /adjustments/by-stock:
+    get:
+      operationId: getAdjustmentsByStock
+      tags: [adjustments]
+      summary: Adjustments aggregated per Stock ID for a window
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Per-stock breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/StockBreakdownItem" }
+  /adjustments/details:
+    get:
+      operationId: getAdjustmentsDetails
+      tags: [adjustments]
+      summary: Line-item adjustment rows
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/StockId"
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        "200":
+          description: Detail rows
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdjustmentRow" }
+  /adjustments/root-cause:
+    get:
+      operationId: getAdjustmentsRootCause
+      tags: [adjustments]
+      summary: Per-stock variance with root-cause investigation tracking
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Per-stock variance + investigation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RootCauseItem" }
+  /adjustments/root-cause/{stockId}:
+    put:
+      operationId: setVarianceInvestigation
+      tags: [adjustments]
+      summary: Upsert root-cause investigation for a stock
+      parameters:
+        - name: stockId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VarianceInvestigationInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VarianceInvestigation" }
+  /inventory/on-hand:
+    get:
+      operationId: getOnHandInventory
+      tags: [adjustments]
+      summary: Total dollar value and roll count of rolls currently in stock (DateRollUsed is blank)
+      responses:
+        "200":
+          description: On-hand totals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnHandInventory" }
+  /goals:
+    get:
+      operationId: getGoals
+      tags: [goals]
+      summary: Get global and per-stock goal bands
+      responses:
+        "200":
+          description: Goals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoalsResponse" }
+  /goals/global:
+    put:
+      operationId: setGlobalGoal
+      tags: [goals]
+      summary: Set global min/max goal band
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GoalBandInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoalBand" }
+  /goals/stock/{stockId}:
+    put:
+      operationId: setStockGoal
+      tags: [goals]
+      parameters:
+        - name: stockId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GoalBandInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockGoal" }
+    delete:
+      operationId: deleteStockGoal
+      tags: [goals]
+      parameters:
+        - name: stockId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Removed
+  /snapshots:
+    get:
+      operationId: listWeeklySnapshots
+      tags: [snapshots]
+      summary: List weekly snapshots (most recent first)
+      responses:
+        "200":
+          description: Snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/SnapshotSummary" }
+    post:
+      operationId: captureWeeklySnapshot
+      tags: [snapshots]
+      summary: Manually capture a weekly snapshot for the current Mountain Time week
+      responses:
+        "200":
+          description: Captured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WeeklySnapshot" }
+  /snapshots/{weekEnding}:
+    get:
+      operationId: getWeeklySnapshot
+      tags: [snapshots]
+      summary: Get a single snapshot with roll details
+      parameters:
+        - name: weekEnding
+          in: path
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Snapshot detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WeeklySnapshot" }
+  /monthly-snapshots:
+    get:
+      operationId: listMonthlySnapshots
+      tags: [snapshots]
+      summary: List monthly snapshots (most recent first)
+      responses:
+        "200":
+          description: Monthly snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/MonthlySnapshotSummary" }
+    post:
+      operationId: captureMonthlySnapshot
+      tags: [snapshots]
+      summary: Manually capture a monthly snapshot for the current Mountain Time month
+      responses:
+        "200":
+          description: Captured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonthlySnapshot" }
+  /monthly-snapshots/{monthKey}:
+    get:
+      operationId: getMonthlySnapshot
+      tags: [snapshots]
+      summary: Get a single monthly snapshot with roll details
+      parameters:
+        - name: monthKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Monthly snapshot detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonthlySnapshot" }
+  /demand/summary:
+    get:
+      operationId: getDemandSummary
+      tags: [demand]
+      summary: Per-stock demand history, on-hand, lead time, and recommended min/max
+      parameters:
+        - name: monthsBack
+          in: query
+          schema: { type: integer, default: 6 }
+        - name: serviceLevel
+          in: query
+          schema: { type: number, default: 0.95 }
+        - name: demandCv
+          in: query
+          schema: { type: number }
+        - name: leadTimeCv
+          in: query
+          schema: { type: number }
+        - name: forecastWeeks
+          in: query
+          schema: { type: integer, default: 12 }
+      responses:
+        "200":
+          description: Demand summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DemandSummary" }
+  /demand/stock-detail:
+    get:
+      operationId: getDemandStockDetail
+      tags: [demand]
+      summary: Demand history + 12-week forecast for a single stock
+      parameters:
+        - name: stockId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: monthsBack
+          in: query
+          schema: { type: integer, default: 6 }
+        - name: bucket
+          in: query
+          schema: { $ref: "#/components/schemas/BucketSize" }
+        - name: serviceLevel
+          in: query
+          schema: { type: number, default: 0.95 }
+        - name: demandCv
+          in: query
+          schema: { type: number }
+        - name: leadTimeCv
+          in: query
+          schema: { type: number }
+        - name: forecastWeeks
+          in: query
+          schema: { type: integer, default: 12 }
+      responses:
+        "200":
+          description: Stock demand detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DemandStockDetail" }
+  /cycle-counts/schedule:
+    get:
+      operationId: getCycleCountSchedule
+      tags: [cycle-counts]
+      summary: Active financial-quarter cycle-count schedule with per-week tasks and KPI
+      responses:
+        "200":
+          description: Schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CycleCountScheduleResponse" }
+  /cycle-counts/kpi:
+    get:
+      operationId: getCycleCountKpi
+      tags: [cycle-counts]
+      summary: On-track / behind status for the active cycle-count quarter
+      responses:
+        "200":
+          description: KPI
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CycleCountKpi" }
+  /cycle-counts/regenerate:
+    post:
+      operationId: regenerateCycleCountSchedule
+      tags: [cycle-counts]
+      summary: Force-regenerate the schedule snapshot from current ABC classifications
+      responses:
+        "200":
+          description: Regenerated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [quarter, generatedAt]
+                properties:
+                  quarter: { type: string }
+                  generatedAt: { type: string, format: date-time }
+  /cycle-counts/complete:
+    post:
+      operationId: markCycleCountComplete
+      tags: [cycle-counts]
+      summary: Mark a stock as counted in a given week
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CycleCountCompleteInput" }
+      responses:
+        "200":
+          description: Marked complete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CycleCountCompletion" }
+    delete:
+      operationId: unmarkCycleCountComplete
+      tags: [cycle-counts]
+      summary: Remove the completion record for a stock + week
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CycleCountCompleteInput" }
+      responses:
+        "204":
+          description: Removed
+  /vendors:
+    get:
+      operationId: listVendors
+      tags: [vendors]
+      summary: List all vendors
+      responses:
+        "200":
+          description: Vendors
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Vendor" }
+    post:
+      operationId: createVendor
+      tags: [vendors]
+      summary: Create a vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vendor" }
+  /vendors/{vendorId}:
+    put:
+      operationId: updateVendor
+      tags: [vendors]
+      parameters:
+        - name: vendorId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vendor" }
+    delete:
+      operationId: deleteVendor
+      tags: [vendors]
+      parameters:
+        - name: vendorId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Removed
+  /vendors/seed:
+    post:
+      operationId: seedVendors
+      tags: [vendors]
+      summary: Pre-load vendors and ASL entries from the Flex Sourcing tracker (idempotent)
+      responses:
+        "200":
+          description: Seeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [created, updated, skipped]
+                properties:
+                  created: { type: integer }
+                  updated: { type: integer }
+                  skipped: { type: integer }
+  /vendors/seed-asl:
+    post:
+      operationId: seedCurrentAsl
+      tags: [vendors]
+      summary: Load the detailed current Approved Supplier List (active suppliers, idempotent)
+      responses:
+        "200":
+          description: Seeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [created, updated]
+                properties:
+                  created: { type: integer }
+                  updated: { type: integer }
+  /vendors/aliases:
+    post:
+      operationId: createVendorAlias
+      tags: [vendors]
+      summary: Map an unmatched source name to an existing vendor (persists for future syncs)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorAliasInput" }
+      responses:
+        "200":
+          description: Alias saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorAlias" }
+        "400":
+          description: Invalid input
+        "404":
+          description: Vendor not found
+    get:
+      operationId: listVendorAliases
+      tags: [vendors]
+      summary: List all saved vendor-name aliases (raw name -> mapped vendor)
+      responses:
+        "200":
+          description: Saved aliases
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/VendorAliasEntry" }
+  /vendors/aliases/{id}:
+    put:
+      operationId: updateVendorAlias
+      tags: [vendors]
+      summary: Re-point an existing alias to a different vendor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorAliasUpdate" }
+      responses:
+        "200":
+          description: Alias updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorAlias" }
+        "400":
+          description: Invalid input
+        "404":
+          description: Alias or vendor not found
+    delete:
+      operationId: deleteVendorAlias
+      tags: [vendors]
+      summary: Delete a saved alias
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Deleted
+  /vendors/scorecards:
+    get:
+      operationId: getVendorScorecards
+      tags: [vendors]
+      summary: Per-vendor scorecard KPIs aggregated over a time view
+      parameters:
+        - name: view
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ScorecardView" }
+        - name: anchor
+          in: query
+          required: false
+          description: Anchor date (YYYY-MM-DD) the view is computed relative to; defaults to today
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Scorecards
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScorecardResponse" }
+  /vendors/netsuite/sync:
+    post:
+      operationId: syncNetsuiteShipments
+      tags: [vendors]
+      summary: Read-only sync of NetSuite purchase shipments into vendor on-time data
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetsuiteSyncResult" }
+        "400":
+          description: NetSuite not configured
+  /vendors/netsuite/quality-sync:
+    post:
+      operationId: syncNetsuiteQualityCases
+      tags: [vendors]
+      summary: Read-only sync of NetSuite support cases attributed to vendors as quality cases
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityCaseSyncResult" }
+        "400":
+          description: NetSuite not configured
+  /vendors/quality-cases:
+    get:
+      operationId: listQualityCases
+      tags: [vendors]
+      summary: NetSuite-sourced quality cases attributed to vendors (read-only)
+      parameters:
+        - { name: vendorId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Quality cases
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/QualityCase" }
+  /vendors/shipments:
+    get:
+      operationId: listVendorShipments
+      tags: [vendors]
+      summary: All purchase orders / shipments for a vendor with on-time and lead-time details
+      parameters:
+        - { name: vendorId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Vendor shipments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/VendorShipment" }
+  /vendors/labeltraxx/sync:
+    post:
+      operationId: syncLabeltraxxLeadTimes
+      tags: [vendors]
+      summary: Read-only sync of Label Traxx PO lead times (PODate to Received) attributed per vendor
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: Earliest Received date to include (YYYY-MM-DD); defaults to ~2 years back
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeadTimeSyncResult" }
+  /vendors/lead-times:
+    get:
+      operationId: getVendorLeadTimes
+      tags: [vendors]
+      summary: Label Traxx purchase orders (lead time + roll fill) for a single vendor
+      parameters:
+        - name: vendorId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Lead time PO list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeadTimeResponse" }
+  /vendors/trend:
+    get:
+      operationId: getVendorTrend
+      tags: [vendors]
+      summary: Monthly KPI time series for a single vendor
+      parameters:
+        - name: vendorId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: months
+          in: query
+          required: false
+          description: Number of trailing months (1-36, default 12)
+          schema: { type: integer }
+        - name: anchor
+          in: query
+          required: false
+          description: Anchor date (YYYY-MM-DD); series ends at this month, defaults to today
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Trend series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorTrendResponse" }
+  /vendors/metrics:
+    put:
+      operationId: upsertVendorMetric
+      tags: [vendors]
+      summary: Create or update a vendor's manual metrics for a period (YYYY-MM)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorMetricInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorMetric" }
+  /vendors/quality-issues:
+    get:
+      operationId: listQualityIssues
+      tags: [vendors]
+      parameters:
+        - { name: vendorId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Quality issues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/QualityIssue" }
+    post:
+      operationId: createQualityIssue
+      tags: [vendors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QualityIssueInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityIssue" }
+  /vendors/quality-issues/{id}:
+    put:
+      operationId: updateQualityIssue
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QualityIssueInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QualityIssue" }
+    delete:
+      operationId: deleteQualityIssue
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Removed
+  /vendors/pricing-reviews:
+    get:
+      operationId: listPricingReviews
+      tags: [vendors]
+      parameters:
+        - { name: vendorId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Pricing reviews
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PricingReview" }
+    post:
+      operationId: createPricingReview
+      tags: [vendors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PricingReviewInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingReview" }
+  /vendors/pricing-reviews/{id}:
+    put:
+      operationId: updatePricingReview
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PricingReviewInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingReview" }
+    delete:
+      operationId: deletePricingReview
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Removed
+  /vendors/improvement-projects:
+    get:
+      operationId: listImprovementProjects
+      tags: [vendors]
+      parameters:
+        - { name: vendorId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Improvement projects
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ImprovementProject" }
+    post:
+      operationId: createImprovementProject
+      tags: [vendors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementProjectInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementProject" }
+  /vendors/improvement-projects/{id}:
+    put:
+      operationId: updateImprovementProject
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementProjectInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementProject" }
+    delete:
+      operationId: deleteImprovementProject
+      tags: [vendors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Removed
+  /asl:
+    get:
+      operationId: getAsl
+      tags: [asl]
+      summary: Approved Supplier List with raw-materials / finished-goods sections and goal progress
+      responses:
+        "200":
+          description: ASL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AslResponse" }
+  /asl/entries:
+    post:
+      operationId: createAslEntry
+      tags: [asl]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AslEntryInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AslEntry" }
+  /asl/entries/{id}:
+    put:
+      operationId: updateAslEntry
+      tags: [asl]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AslEntryInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AslEntry" }
+    delete:
+      operationId: deleteAslEntry
+      tags: [asl]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Removed
+  /asl/goal:
+    put:
+      operationId: setAslGoal
+      tags: [asl]
+      summary: Set the ASL onboarding target (vendors by EOY)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AslGoal" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AslGoal" }
+components:
+  parameters:
+    Bucket:
+      name: bucket
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/BucketSize"
+    From:
+      name: from
+      in: query
+      required: true
+      description: Inclusive start date (YYYY-MM-DD) parsed from the CC date string
+      schema: { type: string, format: date }
+    To:
+      name: to
+      in: query
+      required: true
+      description: Inclusive end date (YYYY-MM-DD) parsed from the CC date string
+      schema: { type: string, format: date }
+    StockId:
+      name: stockId
+      in: query
+      required: false
+      schema: { type: string }
+  schemas:
+    ScorecardView:
+      type: string
+      enum: [monthly, quarterly, qtd, ytd]
+    Vendor:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        country: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        track: { type: string, nullable: true }
+        tier: { type: string, nullable: true }
+        stage: { type: string, nullable: true }
+        owner: { type: string, nullable: true }
+        subCategory: { type: string, nullable: true }
+        capabilities: { type: string, nullable: true }
+        locations: { type: string, nullable: true }
+        documents: { type: string, nullable: true }
+        calyxPoc: { type: string, nullable: true }
+        vendorPoc: { type: string, nullable: true }
+        vendorPocPhone: { type: string, nullable: true }
+        vendorPocEmail: { type: string, nullable: true }
+        externalId: { type: string, nullable: true }
+        printMethod: { type: string, nullable: true }
+        pipelineStatus: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        cluster: { type: string, nullable: true }
+        subCapability: { type: string, nullable: true }
+        primarySecondary: { type: string, nullable: true }
+        waveSprint: { type: string, nullable: true }
+        ndaDate: { type: string, nullable: true }
+        msaDate: { type: string, nullable: true }
+        capabilityVerified: { type: string, nullable: true }
+        factoryTourDate: { type: string, nullable: true }
+        rfqSent: { type: string, nullable: true }
+        quoteReceived: { type: string, nullable: true }
+        quotedPrice: { type: string, nullable: true }
+        targetPrice: { type: string, nullable: true }
+        priceVsTargetPct: { type: string, nullable: true }
+        moq: { type: string, nullable: true }
+        depositPct: { type: string, nullable: true }
+        leadTimeDays: { type: string, nullable: true }
+        aqlStandard: { type: string, nullable: true }
+        psiStatus: { type: string, nullable: true }
+        trialOrderNo: { type: string, nullable: true }
+        trialResult: { type: string, nullable: true }
+        commandIntegrated: { type: string, nullable: true }
+        packosHandoff: { type: string, nullable: true }
+        ipClause: { type: string, nullable: true }
+        nonCompete24mo: { type: string, nullable: true }
+        statusRag: { type: string, nullable: true }
+        nextAction: { type: string, nullable: true }
+        nextActionDue: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+    VendorInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        country: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        track: { type: string, nullable: true }
+        tier: { type: string, nullable: true }
+        stage: { type: string, nullable: true }
+        owner: { type: string, nullable: true }
+        subCategory: { type: string, nullable: true }
+        capabilities: { type: string, nullable: true }
+        locations: { type: string, nullable: true }
+        documents: { type: string, nullable: true }
+        calyxPoc: { type: string, nullable: true }
+        vendorPoc: { type: string, nullable: true }
+        vendorPocPhone: { type: string, nullable: true }
+        vendorPocEmail: { type: string, nullable: true }
+        externalId: { type: string, nullable: true }
+        printMethod: { type: string, nullable: true }
+        pipelineStatus: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        cluster: { type: string, nullable: true }
+        subCapability: { type: string, nullable: true }
+        primarySecondary: { type: string, nullable: true }
+        waveSprint: { type: string, nullable: true }
+        ndaDate: { type: string, nullable: true }
+        msaDate: { type: string, nullable: true }
+        capabilityVerified: { type: string, nullable: true }
+        factoryTourDate: { type: string, nullable: true }
+        rfqSent: { type: string, nullable: true }
+        quoteReceived: { type: string, nullable: true }
+        quotedPrice: { type: string, nullable: true }
+        targetPrice: { type: string, nullable: true }
+        priceVsTargetPct: { type: string, nullable: true }
+        moq: { type: string, nullable: true }
+        depositPct: { type: string, nullable: true }
+        leadTimeDays: { type: string, nullable: true }
+        aqlStandard: { type: string, nullable: true }
+        psiStatus: { type: string, nullable: true }
+        trialOrderNo: { type: string, nullable: true }
+        trialResult: { type: string, nullable: true }
+        commandIntegrated: { type: string, nullable: true }
+        packosHandoff: { type: string, nullable: true }
+        ipClause: { type: string, nullable: true }
+        nonCompete24mo: { type: string, nullable: true }
+        statusRag: { type: string, nullable: true }
+        nextAction: { type: string, nullable: true }
+        nextActionDue: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+    VendorAliasInput:
+      type: object
+      required: [name, vendorId]
+      properties:
+        name: { type: string, description: "Raw unmatched source name to map" }
+        vendorId: { type: string, description: "Vendor the name should resolve to" }
+    VendorAlias:
+      type: object
+      required: [id, vendorId, alias]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        alias: { type: string }
+    VendorAliasUpdate:
+      type: object
+      required: [vendorId]
+      properties:
+        vendorId: { type: string, description: "Vendor the alias should now resolve to" }
+    VendorAliasEntry:
+      type: object
+      required: [id, vendorId, alias, vendorName, createdAt, lastHitCount]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        alias: { type: string, description: "Raw source name that was mapped" }
+        vendorName: { type: string, description: "Name of the mapped vendor" }
+        createdAt: { type: string }
+        lastUsedAt:
+          type: string
+          nullable: true
+          description: "ISO timestamp of the most recent sync where this alias resolved a name; null if never used"
+        lastHitCount:
+          type: integer
+          description: "Number of source rows this alias matched on the most recent sync where it was used"
+    VendorMetric:
+      type: object
+      required: [id, vendorId, period]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        period: { type: string }
+        onTimePct: { type: number, nullable: true }
+        ppvSavings: { type: number, nullable: true }
+        fillRatePct: { type: number, nullable: true }
+        leadTimeAdherencePct: { type: number, nullable: true }
+    VendorMetricInput:
+      type: object
+      required: [vendorId, period]
+      properties:
+        vendorId: { type: string }
+        period: { type: string, description: "YYYY-MM" }
+        onTimePct: { type: number, nullable: true }
+        ppvSavings: { type: number, nullable: true }
+        fillRatePct: { type: number, nullable: true }
+        leadTimeAdherencePct: { type: number, nullable: true }
+    QualityIssue:
+      type: object
+      required: [id, vendorId, occurredOn, title, severity, status]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        occurredOn: { type: string, format: date }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { type: string }
+        status: { type: string }
+    QualityIssueInput:
+      type: object
+      required: [vendorId, occurredOn, title]
+      properties:
+        vendorId: { type: string }
+        occurredOn: { type: string, format: date }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+    PricingReview:
+      type: object
+      required: [id, vendorId, reviewedOn, title]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        reviewedOn: { type: string, format: date }
+        title: { type: string }
+        outcome: { type: string, nullable: true }
+        impactUsd: { type: number, nullable: true }
+        notes: { type: string, nullable: true }
+    PricingReviewInput:
+      type: object
+      required: [vendorId, reviewedOn, title]
+      properties:
+        vendorId: { type: string }
+        reviewedOn: { type: string, format: date }
+        title: { type: string }
+        outcome: { type: string, nullable: true }
+        impactUsd: { type: number, nullable: true }
+        notes: { type: string, nullable: true }
+    ImprovementProject:
+      type: object
+      required: [id, vendorId, title, status]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        status: { type: string }
+        startedOn: { type: string, format: date, nullable: true }
+        targetOn: { type: string, format: date, nullable: true }
+        owner: { type: string, nullable: true }
+    ImprovementProjectInput:
+      type: object
+      required: [vendorId, title]
+      properties:
+        vendorId: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        startedOn: { type: string, format: date, nullable: true }
+        targetOn: { type: string, format: date, nullable: true }
+        owner: { type: string, nullable: true }
+    Scorecard:
+      type: object
+      required: [vendor, grade, score, hasData]
+      properties:
+        vendor: { $ref: "#/components/schemas/Vendor" }
+        hasData: { type: boolean }
+        score: { type: number, nullable: true, description: "Overall weighted 0-100 roll-up" }
+        grade: { type: string, nullable: true, description: "A-F letter from score" }
+        onTimePct: { type: number, nullable: true }
+        onTimeShipments: { type: integer }
+        totalShipments: { type: integer }
+        totalSpend: { type: number, nullable: true, description: "Total purchase spend (USD) across all vendor POs in the period — matches NetSuite's Purchase by Vendor Summary" }
+        purchaseCount: { type: integer, description: "Number of POs counted toward total spend in the period" }
+        ppvSavings: { type: number, nullable: true }
+        fillRatePct: { type: number, nullable: true, description: "Finished-goods fill rate (NetSuite qty shipped / ordered)" }
+        materialsFillRatePct: { type: number, nullable: true, description: "Materials fill rate (Label Traxx rolls received / ordered)" }
+        materialsRollsOrdered: { type: integer, description: "Total master rolls ordered across Label Traxx POs in the period" }
+        materialsRollsReceived: { type: integer, description: "Total distinct master rolls received across Label Traxx POs in the period" }
+        dataCategory: { type: string, nullable: true, enum: [materials, finished_goods, both], description: "Data-derived category gating: Label Traxx=>materials, NetSuite=>finished_goods" }
+        leadTimeAdherencePct: { type: number, nullable: true }
+        avgLeadDays: { type: number, nullable: true, description: "Avg Label Traxx PO lead time (PODate->Received) in days for the period" }
+        leadPoCount: { type: integer, description: "Number of received Label Traxx POs in the period" }
+        avgNsLeadDays: { type: number, nullable: true, description: "Avg NetSuite PO lead time (PO sent date -> actual ship date) in days for the period" }
+        nsLeadPoCount: { type: integer, description: "Number of NetSuite POs with a lead time in the period" }
+        qualityIssueCount: { type: integer }
+        openQualityIssueCount: { type: integer }
+        pricingReviewCount: { type: integer }
+        improvementProjectCount: { type: integer }
+        activeImprovementProjectCount: { type: integer }
+    ScorecardResponse:
+      type: object
+      required: [view, periodStart, periodEnd, periodLabel, items]
+      properties:
+        view: { $ref: "#/components/schemas/ScorecardView" }
+        periodStart: { type: string, format: date }
+        periodEnd: { type: string, format: date }
+        periodLabel: { type: string }
+        netsuiteConnected: { type: boolean }
+        labeltraxxConnected: { type: boolean }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Scorecard" }
+    NetsuiteSyncResult:
+      type: object
+      required: [fetched, upserted, unmatched]
+      properties:
+        fetched: { type: integer }
+        upserted: { type: integer }
+        unmatched: { type: integer }
+        truncated: { type: boolean }
+        unmatchedVendors:
+          type: array
+          items: { type: string }
+    QualityCaseSyncResult:
+      type: object
+      required: [fetched, upserted, unmatched]
+      properties:
+        fetched: { type: integer }
+        upserted: { type: integer }
+        unmatched: { type: integer }
+        unmatchedVendors:
+          type: array
+          items: { type: string }
+    QualityCase:
+      type: object
+      required: [id, vendorId, caseNumber, openCase]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        caseNumber: { type: string }
+        subject: { type: string, nullable: true }
+        statusName: { type: string, nullable: true }
+        openCase: { type: boolean }
+        soTranid: { type: string, nullable: true }
+        poNumber: { type: string, nullable: true }
+        caseUrl: { type: string, nullable: true }
+        startDate: { type: string, format: date, nullable: true }
+    VendorShipment:
+      type: object
+      required: [id, vendorId, orderNo]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        orderNo: { type: string }
+        poDate: { type: string, format: date, nullable: true }
+        customerDate: { type: string, format: date, nullable: true }
+        actualShipDate: { type: string, format: date, nullable: true }
+        onTime: { type: boolean, nullable: true }
+        qtyOrdered: { type: integer, nullable: true }
+        qtyShipped: { type: integer, nullable: true }
+        nsLeadDays: { type: integer, nullable: true, description: "PO sent date -> actual ship date, in days" }
+        fillPct: { type: number, nullable: true, description: "qtyShipped / qtyOrdered as a percentage" }
+    LeadTimeSyncResult:
+      type: object
+      required: [fetched, upserted, unmatched]
+      properties:
+        fetched: { type: integer }
+        upserted: { type: integer }
+        unmatched: { type: integer }
+        unmatchedSuppliers:
+          type: array
+          items:
+            type: object
+            required: [name, count]
+            properties:
+              name: { type: string }
+              count: { type: integer }
+    LeadTime:
+      type: object
+      required: [id, poNumber, leadDays]
+      properties:
+        id: { type: string }
+        poNumber: { type: string }
+        supplierName: { type: string, nullable: true }
+        placedDate: { type: string, format: date, nullable: true }
+        receivedDate: { type: string, format: date, nullable: true }
+        leadDays: { type: integer }
+        orderedRolls: { type: integer, nullable: true, description: "Master rolls ordered (Label Traxx PO Quantity)" }
+        receivedRolls: { type: integer, nullable: true, description: "Distinct master rolls received against the PO" }
+        fillRatePct: { type: number, nullable: true, description: "receivedRolls / orderedRolls as a percentage" }
+    LeadTimeResponse:
+      type: object
+      required: [vendorId, items]
+      properties:
+        vendorId: { type: string }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LeadTime" }
+    VendorTrendPoint:
+      type: object
+      required: [period, label, onTimeShipments, totalShipments, leadPoCount, qualityIssueCount]
+      properties:
+        period: { type: string }
+        label: { type: string }
+        onTimePct: { type: number, nullable: true }
+        onTimeShipments: { type: integer }
+        totalShipments: { type: integer }
+        avgLeadDays: { type: number, nullable: true, description: "Avg Label Traxx PO lead time (PODate->Received) in days" }
+        leadPoCount: { type: integer }
+        avgNsLeadDays: { type: number, nullable: true, description: "Avg NetSuite PO lead time (PO sent date -> actual ship date) in days" }
+        nsLeadPoCount: { type: integer }
+        fillRatePct: { type: number, nullable: true }
+        materialsFillRatePct: { type: number, nullable: true }
+        ppvSavings: { type: number, nullable: true }
+        qualityIssueCount: { type: integer }
+        score: { type: number, nullable: true }
+        grade: { type: string, nullable: true }
+    VendorTrendResponse:
+      type: object
+      required: [vendorId, months, points]
+      properties:
+        vendorId: { type: string }
+        months: { type: integer }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/VendorTrendPoint" }
+    AslEntry:
+      type: object
+      required: [id, vendorId, segment, status]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        segment: { type: string }
+        status: { type: string }
+        onboardedOn: { type: string, format: date, nullable: true }
+        notes: { type: string, nullable: true }
+    AslEntryInput:
+      type: object
+      required: [vendorId, segment]
+      properties:
+        vendorId: { type: string }
+        segment: { type: string }
+        status: { type: string, nullable: true }
+        onboardedOn: { type: string, format: date, nullable: true }
+        notes: { type: string, nullable: true }
+    AslRow:
+      type: object
+      required: [entry, vendor]
+      properties:
+        entry: { $ref: "#/components/schemas/AslEntry" }
+        vendor: { $ref: "#/components/schemas/Vendor" }
+    AslGoal:
+      type: object
+      required: [goal]
+      properties:
+        goal: { type: integer }
+    AslResponse:
+      type: object
+      required: [goal, onboardedCount, totalCount, rawMaterials, finishedGoods, aslSuppliers, pipeline]
+      properties:
+        goal: { type: integer }
+        onboardedCount: { type: integer, description: "Distinct vendors onboarded in at least one segment" }
+        totalCount: { type: integer, description: "Distinct vendors on the ASL" }
+        rawMaterials:
+          type: array
+          items: { $ref: "#/components/schemas/AslRow" }
+        finishedGoods:
+          type: array
+          items: { $ref: "#/components/schemas/AslRow" }
+        aslSuppliers:
+          type: array
+          description: "Current approved suppliers (vendors with an onboarded entry), full ASL columns"
+          items: { $ref: "#/components/schemas/AslRow" }
+        pipeline:
+          type: array
+          description: "Flex Sourcing pipeline candidates (not yet onboarded), full tracker columns"
+          items: { $ref: "#/components/schemas/AslRow" }
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+    GatewayHealth:
+      type: object
+      required: [reachable]
+      properties:
+        reachable: { type: boolean }
+        odbcConnected: { type: boolean }
+        latencyMs: { type: number }
+        error: { type: string, nullable: true }
+    BucketSize:
+      type: string
+      enum: [day, week, month, quarter, year]
+      default: week
+    TimeseriesPoint:
+      type: object
+      required: [periodStart, periodEnd, label, added, removed, net, addedCount, removedCount]
+      properties:
+        periodStart: { type: string, format: date }
+        periodEnd: { type: string, format: date }
+        label: { type: string }
+        added: { type: number }
+        removed: { type: number }
+        net: { type: number }
+        addedCount: { type: integer }
+        removedCount: { type: integer }
+    AdjustmentTotals:
+      type: object
+      required: [added, removed, net, addedCount, removedCount]
+      properties:
+        added: { type: number }
+        removed: { type: number }
+        net: { type: number }
+        addedCount: { type: integer }
+        removedCount: { type: integer }
+    StockBreakdownItem:
+      type: object
+      required: [stockId, added, removed, net, addedCount, removedCount, onHandValue, onHandFootage]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        added: { type: number }
+        removed: { type: number }
+        net: { type: number }
+        addedCount: { type: integer }
+        removedCount: { type: integer }
+        onHandValue:
+          type: number
+          description: Current on-hand inventory dollar value for this stock.
+        onHandFootage:
+          type: number
+          description: Current on-hand inventory footage for this stock.
+        pctOfOnHand:
+          type: number
+          nullable: true
+          description: Net adjustment as a percentage of current on-hand value. Null when on-hand value is zero.
+    AdjustmentRow:
+      type: object
+      required: [id, rollTag, stockId, direction, amount, ccDate, ccString]
+      properties:
+        id: { type: string }
+        rollTag: { type: string }
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        direction:
+          type: string
+          enum: [added, removed]
+        amount: { type: number }
+        ccDate: { type: string, format: date }
+        ccString: { type: string }
+        poNumber: { type: string, nullable: true }
+        usedTikNum: { type: string, nullable: true }
+        rowDate: { type: string, format: date, nullable: true }
+    OnHandInventory:
+      type: object
+      required: [totalValue, rollCount]
+      properties:
+        totalValue: { type: number }
+        rollCount: { type: integer }
+    GoalBand:
+      type: object
+      required: [min, max]
+      properties:
+        min: { type: number, nullable: true }
+        max: { type: number, nullable: true }
+        serviceLevel:
+          type: number
+          nullable: true
+          description: Shared Demand Planning service-level default (0–1). Null = app default 0.95.
+        monthsBack:
+          type: integer
+          nullable: true
+          description: Shared Demand Planning history-window default in months. Null = app default 6.
+        demandCv:
+          type: number
+          nullable: true
+          description: Shared Demand Planning demand-CV override default. Null = no override.
+        leadTimeCv:
+          type: number
+          nullable: true
+          description: Shared Demand Planning lead-time-CV override default. Null = no override.
+    GoalBandInput:
+      type: object
+      properties:
+        min: { type: number, nullable: true }
+        max: { type: number, nullable: true }
+        demandCv: { type: number, nullable: true }
+        leadTimeCv: { type: number, nullable: true }
+        serviceLevel: { type: number, nullable: true }
+        monthsBack: { type: integer, nullable: true }
+        seasonalityWeights:
+          type: array
+          nullable: true
+          minItems: 3
+          maxItems: 3
+          items: { type: number }
+          description: Quarterly seasonality weights for months 1, 2, 3 of each quarter. Should sum to ~1.0.
+        leadTimeDays:
+          type: number
+          nullable: true
+          description: Manual override for the average supplier lead time in days. Null = use observed PO history.
+        typicalRollFootage:
+          type: number
+          nullable: true
+          description: Manual override for the typical incoming roll size (footage). Null = use observed roll history.
+    StockGoal:
+      type: object
+      required: [stockId, min, max]
+      properties:
+        stockId: { type: string }
+        min: { type: number, nullable: true }
+        max: { type: number, nullable: true }
+        demandCv: { type: number, nullable: true }
+        leadTimeCv: { type: number, nullable: true }
+        seasonalityWeights:
+          type: array
+          nullable: true
+          minItems: 3
+          maxItems: 3
+          items: { type: number }
+        leadTimeDays: { type: number, nullable: true }
+        typicalRollFootage: { type: number, nullable: true }
+    RootCauseItem:
+      type: object
+      required:
+        [
+          stockId,
+          addedFootage,
+          removedFootage,
+          netFootage,
+          addedDollars,
+          removedDollars,
+          netDollars,
+          addedCount,
+          removedCount,
+          onHandValue,
+          status,
+          rootCauseCategory,
+          rootCause,
+          investigationOwner,
+          correctiveActionStatus,
+          correctiveAction,
+          correctiveActionOwner,
+        ]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        addedFootage: { type: number }
+        removedFootage: { type: number }
+        netFootage: { type: number }
+        addedDollars: { type: number }
+        removedDollars: { type: number }
+        netDollars: { type: number }
+        addedCount: { type: integer }
+        removedCount: { type: integer }
+        onHandValue: { type: number }
+        pctOfOnHand: { type: number, nullable: true }
+        status:
+          type: string
+          nullable: true
+          enum: [open, root_cause_id, closed]
+        rootCauseCategory:
+          type: string
+          nullable: true
+          enum:
+            [
+              missing_from_system,
+              missing_from_floor,
+              data_error,
+              consumed_without_po,
+              in_use,
+              damage,
+              other,
+            ]
+        rootCause: { type: string, nullable: true }
+        investigationOwner: { type: string, nullable: true }
+        correctiveActionStatus:
+          type: string
+          nullable: true
+          enum: [not_started, in_progress, complete]
+        correctiveAction: { type: string, nullable: true }
+        correctiveActionOwner: { type: string, nullable: true }
+    VarianceInvestigationInput:
+      type: object
+      properties:
+        status:
+          type: string
+          nullable: true
+          enum: [open, root_cause_id, closed]
+        rootCauseCategory:
+          type: string
+          nullable: true
+          enum:
+            [
+              missing_from_system,
+              missing_from_floor,
+              data_error,
+              consumed_without_po,
+              in_use,
+              damage,
+              other,
+            ]
+        rootCause: { type: string, nullable: true }
+        investigationOwner: { type: string, nullable: true }
+        correctiveActionStatus:
+          type: string
+          nullable: true
+          enum: [not_started, in_progress, complete]
+        correctiveAction: { type: string, nullable: true }
+        correctiveActionOwner: { type: string, nullable: true }
+    VarianceInvestigation:
+      type: object
+      required:
+        [
+          stockId,
+          status,
+          rootCauseCategory,
+          rootCause,
+          investigationOwner,
+          correctiveActionStatus,
+          correctiveAction,
+          correctiveActionOwner,
+        ]
+      properties:
+        stockId: { type: string }
+        status:
+          type: string
+          nullable: true
+          enum: [open, root_cause_id, closed]
+        rootCauseCategory:
+          type: string
+          nullable: true
+          enum:
+            [
+              missing_from_system,
+              missing_from_floor,
+              data_error,
+              consumed_without_po,
+              in_use,
+              damage,
+              other,
+            ]
+        rootCause: { type: string, nullable: true }
+        investigationOwner: { type: string, nullable: true }
+        correctiveActionStatus:
+          type: string
+          nullable: true
+          enum: [not_started, in_progress, complete]
+        correctiveAction: { type: string, nullable: true }
+        correctiveActionOwner: { type: string, nullable: true }
+    GoalsResponse:
+      type: object
+      required: [global, perStock]
+      properties:
+        global: { $ref: "#/components/schemas/GoalBand" }
+        perStock:
+          type: array
+          items: { $ref: "#/components/schemas/StockGoal" }
+    SnapshotSummary:
+      type: object
+      required: [id, weekStart, weekEnding, capturedAt, onHandValue, rollCount, added, removed, netAdjustment, adjustmentPct]
+      properties:
+        id: { type: string }
+        weekStart: { type: string, format: date }
+        weekEnding: { type: string, format: date }
+        capturedAt: { type: string, format: date-time }
+        onHandValue: { type: number }
+        rollCount: { type: integer }
+        added: { type: number }
+        removed: { type: number }
+        netAdjustment: { type: number }
+        adjustmentPct: { type: number }
+    SnapshotRoll:
+      type: object
+      required: [direction, rollTag, stockId, amount, ccDate, ccString]
+      properties:
+        direction:
+          type: string
+          enum: [added, removed]
+        rollTag: { type: string }
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        amount: { type: number }
+        ccDate: { type: string, format: date }
+        ccString: { type: string }
+    WeeklySnapshot:
+      allOf:
+        - $ref: "#/components/schemas/SnapshotSummary"
+        - type: object
+          required: [rolls]
+          properties:
+            rolls:
+              type: array
+              items: { $ref: "#/components/schemas/SnapshotRoll" }
+    MonthlySnapshotSummary:
+      type: object
+      required: [id, monthKey, monthStart, monthEnd, capturedAt, onHandValue, rollCount, added, removed, netAdjustment, adjustmentPct]
+      properties:
+        id: { type: string }
+        monthKey: { type: string }
+        monthStart: { type: string, format: date }
+        monthEnd: { type: string, format: date }
+        capturedAt: { type: string, format: date-time }
+        onHandValue: { type: number }
+        rollCount: { type: integer }
+        added: { type: number }
+        removed: { type: number }
+        netAdjustment: { type: number }
+        adjustmentPct: { type: number }
+    MonthlySnapshot:
+      allOf:
+        - $ref: "#/components/schemas/MonthlySnapshotSummary"
+        - type: object
+          required: [rolls]
+          properties:
+            rolls:
+              type: array
+              items: { $ref: "#/components/schemas/SnapshotRoll" }
+    DemandStockMetrics:
+      type: object
+      required:
+        - stockId
+        - onHandFootage
+        - onHandRollCount
+        - totalDemandFootage
+        - weeksOfHistory
+        - avgWeeklyDemand
+        - weeklyDemandStdDev
+        - demandCv
+        - autoDemandCv
+        - demandCvOverridden
+        - avgLeadTimeDays
+        - autoLeadTimeDays
+        - leadTimeDaysOverridden
+        - leadTimeStdDev
+        - leadTimeCv
+        - autoLeadTimeCv
+        - leadTimeCvOverridden
+        - seasonalityWeights
+        - defaultSeasonalityWeights
+        - seasonalityWeightsOverridden
+        - poObservations
+        - typicalRollFootage
+        - autoTypicalRollFootage
+        - typicalRollFootageOverridden
+        - safetyStockFootage
+        - reorderPointFootage
+        - maxFootage
+        - suggestedOrderFootage
+        - suggestedOrderRolls
+        - belowMin
+        - daysOfCover
+        - forecast12wkFootage
+        - openPoCount
+        - openPoRolls
+        - openPoFootage
+        - activityStatus
+        - customized
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        onHandFootage: { type: number }
+        onHandRollCount: { type: integer }
+        totalDemandFootage: { type: number }
+        weeksOfHistory: { type: integer }
+        avgWeeklyDemand: { type: number }
+        weeklyDemandStdDev: { type: number }
+        demandCv: { type: number, description: "Effective demand CV used in safety-stock math (override if set, else auto-derived)." }
+        autoDemandCv: { type: number, description: "Auto-derived demand CV from history (stdev / mean of weekly demand)." }
+        demandCvOverridden: { type: boolean, description: "True when demandCv comes from a per-stock override rather than the auto-derived value." }
+        avgLeadTimeDays: { type: number, description: "Effective average lead time in days (override if set, else auto-derived from PO history)." }
+        autoLeadTimeDays: { type: number, description: "Auto-derived average lead time in days from observed PO history." }
+        leadTimeDaysOverridden: { type: boolean, description: "True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value." }
+        leadTimeStdDev: { type: number }
+        leadTimeCv: { type: number, description: "Effective lead-time CV used in safety-stock math (override if set, else auto-derived)." }
+        autoLeadTimeCv: { type: number, description: "Auto-derived lead-time CV from observed PO lead times." }
+        leadTimeCvOverridden: { type: boolean, description: "True when leadTimeCv comes from a per-stock override rather than the auto-derived value." }
+        seasonalityWeights:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: number }
+          description: "Effective seasonality weights for months 1, 2, 3 of each quarter (sum to 1)."
+        defaultSeasonalityWeights:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: number }
+          description: "Default seasonality weights used when no override is set."
+        seasonalityWeightsOverridden: { type: boolean, description: "True when seasonalityWeights come from a per-stock override rather than the default." }
+        poObservations: { type: integer }
+        typicalRollFootage: { type: number, description: "Effective typical incoming roll size (override if set, else auto-derived)." }
+        autoTypicalRollFootage: { type: number, description: "Auto-derived typical incoming roll size from observed PO history." }
+        typicalRollFootageOverridden: { type: boolean, description: "True when typicalRollFootage comes from a per-stock override rather than the auto-derived value." }
+        safetyStockFootage: { type: number }
+        reorderPointFootage: { type: number }
+        maxFootage: { type: number }
+        suggestedOrderFootage: { type: number }
+        suggestedOrderRolls: { type: integer }
+        belowMin: { type: boolean }
+        daysOfCover: { type: integer }
+        forecast12wkFootage: { type: number }
+        openPoCount: { type: integer, description: "Number of open (unreceived, non-cancelled) Stock-type purchase orders for this stock." }
+        openPoRolls: { type: integer, description: "Sum of master-roll quantities across open POs." }
+        openPoFootage: { type: number, description: "Estimated footage on order = openPoRolls * typicalRollFootage." }
+        lastUsedDate: { type: string, format: date, nullable: true }
+        daysSinceLastUse: { type: integer, nullable: true }
+        activityStatus:
+          type: string
+          enum: [active, slowing, dormant, never]
+          description: |
+            Roll-up of recent demand activity:
+            - active: used within the last 60 days
+            - slowing: last used 60-180 days ago (review)
+            - dormant: last used >180 days ago (consider inactivating)
+            - never: no demand observed in window
+        customized: { type: boolean, description: True if any per-stock forecast assumption override is set. }
+    DemandSummary:
+      type: object
+      required: [windowFrom, windowTo, monthsBack, serviceLevel, forecastWeeks, generatedAt, items]
+      properties:
+        windowFrom: { type: string, format: date }
+        windowTo: { type: string, format: date }
+        monthsBack: { type: integer }
+        serviceLevel: { type: number }
+        forecastWeeks: { type: integer }
+        generatedAt: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DemandStockMetrics" }
+    DemandPoint:
+      type: object
+      required: [periodStart, periodEnd, label, footage]
+      properties:
+        periodStart: { type: string, format: date }
+        periodEnd: { type: string, format: date }
+        label: { type: string }
+        footage: { type: number }
+    OpenPo:
+      type: object
+      required: [poNumber, stockId, quantityRolls]
+      properties:
+        poNumber: { type: string }
+        stockId: { type: string }
+        poDateIso: { type: string, format: date, nullable: true }
+        quantityRolls: { type: integer, description: "Master-roll quantity ordered." }
+        description: { type: string, nullable: true }
+        daysOpen: { type: integer, nullable: true, description: "Days since the PO was placed." }
+    DemandStockDetail:
+      type: object
+      required: [stockId, windowFrom, windowTo, bucket, serviceLevel, metrics, history, forecast, openPos]
+      properties:
+        stockId: { type: string }
+        windowFrom: { type: string, format: date }
+        windowTo: { type: string, format: date }
+        bucket: { $ref: "#/components/schemas/BucketSize" }
+        serviceLevel: { type: number }
+        metrics: { $ref: "#/components/schemas/DemandStockMetrics" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/DemandPoint" }
+        forecast:
+          type: array
+          items: { $ref: "#/components/schemas/DemandPoint" }
+        openPos:
+          type: array
+          items: { $ref: "#/components/schemas/OpenPo" }
+    CycleCountTask:
+      type: object
+      required: [stockId, abcClass, onHandFootage, completedAt]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        abcClass: { type: string, enum: [A, B, C] }
+        onHandFootage: { type: number }
+        completedAt: { type: string, format: date-time, nullable: true }
+    CycleCountWeek:
+      type: object
+      required: [week, weekStart, weekEnd, expected, completed, tasks]
+      properties:
+        week: { type: integer }
+        weekStart: { type: string, format: date }
+        weekEnd: { type: string, format: date }
+        expected: { type: integer }
+        completed: { type: integer }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/CycleCountTask" }
+    CycleCountKpi:
+      type: object
+      required:
+        [
+          quarter,
+          status,
+          expectedThroughLastCompletedWeek,
+          completedThroughLastCompletedWeek,
+          deficit,
+          totalExpectedThisQuarter,
+          totalCompletedThisQuarter,
+          currentWeek,
+          totalWeeks,
+        ]
+      properties:
+        quarter: { type: string }
+        status: { type: string, enum: [on_track, behind, not_started] }
+        expectedThroughLastCompletedWeek: { type: integer }
+        completedThroughLastCompletedWeek: { type: integer }
+        deficit: { type: integer }
+        totalExpectedThisQuarter: { type: integer }
+        totalCompletedThisQuarter: { type: integer }
+        currentWeek: { type: integer }
+        totalWeeks: { type: integer }
+    CycleCountScheduleResponse:
+      type: object
+      required: [quarter, startDate, endDate, consolidated, generatedAt, kpi, weeks]
+      properties:
+        quarter: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        consolidated: { type: boolean }
+        generatedAt: { type: string, format: date-time }
+        kpi: { $ref: "#/components/schemas/CycleCountKpi" }
+        weeks:
+          type: array
+          items: { $ref: "#/components/schemas/CycleCountWeek" }
+    CycleCountCompleteInput:
+      type: object
+      required: [stockId, quarter, week]
+      properties:
+        stockId: { type: string }
+        quarter: { type: string }
+        week: { type: integer }
+        completedAt: { type: string, format: date-time, nullable: true }
+    CycleCountCompletion:
+      type: object
+      required: [stockId, quarter, week, completedAt]
+      properties:
+        stockId: { type: string }
+        quarter: { type: string }
+        week: { type: integer }
+        completedAt: { type: string, format: date-time }

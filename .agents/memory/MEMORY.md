@@ -1,0 +1,9 @@
+- [Label Traxx PO vendor attribution](labeltraxx-po-vendors.md) — `purchaseorder.Supplier` is the vendor; lead time only; 1000-row cap → chunk by month.
+- [NetSuite vendor total spend](netsuite-vendor-spend.md) — total spend = Vendor Bills (VendBill, sum item-line netamount, abs), all vendors; sync full-mirrors vendor_purchase to avoid drift.
+- [Vendor list tier source](vendor-tier-source.md) — ASL tier/track data lives in an attached Excel tracker, not in Label Traxx/NetSuite.
+- [NetSuite vendor on-time link types](netsuite-vendor-ontime.md) — on-time query must include SpecOrd + DropShip; match vendor names treating "&"=="and" or special-order vendors show 0.
+- [NetSuite SuiteQL NULL itemtype trap](netsuite-suiteql-null-itemtype.md) — `itemtype <> 'ShipItem'` silently drops NULL-itemtype lines (whole bills vanish); add `IS NULL OR`.
+- [Scorecard period windowing](scorecard-period-windowing.md) — PO table & quality-case table date filters must mirror the rollup's inWindow rules; period is on response root.
+- [API server dev rebuild](api-server-dev-rebuild.md) — api-server dev builds once (no watch); restart workflow after backend edits or new routes 404. Routes under `/api`, port 8080.
+- [Vendor alias usage tracking](vendor-alias-usage.md) — lastUsedAt/lastHitCount overwritten per most-recent sync; new sync routes must pass onAliasHit + call recordAliasHits.
+- [Production DB starts empty](prod-db-population.md) — prod is a separate empty Postgres; reseed via app endpoints (seed+create vendors+aliases+syncs); netsuite/sync overruns autoscale HTTP timeout but finishes server-side — poll, don't re-fire.
