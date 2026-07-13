@@ -1434,9 +1434,12 @@ const PIPELINE_CORE_KEYS = new Set([
 
 type SortState = { key: string; dir: 1 | -1 } | null;
 
+const STATUS_SORT_RANK: Record<string, number> = { in_progress: 0, identified: 1, none: 2, onboarded: 3 };
+
 const PIPELINE_SORT_ACCESSORS: Record<string, (r: AslRow) => string | number> = {
   vendor: (r) => r.vendor.name.toLowerCase(),
-  status: (r) => r.entry.status,
+  // Group by status priority; within a group, most days elapsed first.
+  status: (r) => (STATUS_SORT_RANK[r.entry.status] ?? 9) * 10_000 - (slaDaysElapsed(r) ?? -1),
   sla: (r) => slaDaysElapsed(r) ?? -1,
   pipelineStatus: (r) => nextOutstanding(r).index,
   externalId: (r) => (r.vendor.externalId ?? "").toLowerCase(),
@@ -1501,7 +1504,7 @@ function PipelineTable({
   const [fCountry, setFCountry] = React.useState("all");
   const [fCategory, setFCategory] = React.useState("all");
   const [fOwner, setFOwner] = React.useState("all");
-  const [sort, setSort] = React.useState<SortState>({ key: "sla", dir: -1 });
+  const [sort, setSort] = React.useState<SortState>({ key: "status", dir: 1 });
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
 
   const distinct = (get: (r: AslRow) => string | null | undefined) =>
