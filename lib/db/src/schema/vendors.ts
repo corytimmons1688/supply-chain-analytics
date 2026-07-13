@@ -259,8 +259,8 @@ export const aslEntryTable = pgTable(
     vendorId: text("vendor_id").notNull(),
     // 'raw_materials' | 'finished_goods'
     segment: text("segment").notNull(),
-    // 'identified' | 'in_progress' | 'onboarded'
-    status: text("status").notNull().default("identified"),
+    // 'none' | 'identified' | 'in_progress' | 'onboarded'
+    status: text("status").notNull().default("none"),
     onboardedOn: text("onboarded_on"), // ISO date when fully onboarded
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

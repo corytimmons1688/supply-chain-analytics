@@ -77,15 +77,17 @@ import {
 } from "@/lib/capability-taxonomy";
 
 type AslSegment = "raw_materials" | "finished_goods";
-type AslStatus = "identified" | "in_progress" | "onboarded";
+type AslStatus = "none" | "identified" | "in_progress" | "onboarded";
 
 const STATUS_OPTIONS: { value: AslStatus; label: string }[] = [
+  { value: "none", label: "—" },
   { value: "identified", label: "Identified" },
   { value: "in_progress", label: "In progress" },
   { value: "onboarded", label: "Onboarded" },
 ];
 
 const STATUS_STYLES: Record<string, string> = {
+  none: "text-muted-foreground/60 border-border",
   identified: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-400/40",
   in_progress: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40",
   onboarded: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
@@ -1807,7 +1809,7 @@ function AddEntryDialog({
   const [segment, setSegment] = React.useState<AslSegment>("finished_goods");
   const [vendorId, setVendorId] = React.useState<string>("");
   const [newName, setNewName] = React.useState("");
-  const [status, setStatus] = React.useState<AslStatus>("identified");
+  const [status, setStatus] = React.useState<AslStatus>("none");
 
   const available = (vendorsData?.items ?? []).filter((v) => !bySegment[segment].has(v.id));
 
