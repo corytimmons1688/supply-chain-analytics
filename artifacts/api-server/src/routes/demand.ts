@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { eq } from "drizzle-orm";
-import { db, stockGoalTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, materialPoTable, materialPoLineTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -8,6 +8,8 @@ import {
   fetchPoRolls,
   fetchOpenPos,
   fetchActiveStockIds,
+  fetchStockInfo,
+  fetchOpenTickets,
   computeStockMetrics,
   bucketHistory,
   defaultDemandWindow,
@@ -276,6 +278,310 @@ router.get(
       forecast,
       openPos: stockOpenPos,
     });
+  }),
+);
+
+
+// =====================================================================
+// PURCHASING — vendor/cost config, open-ticket requirements, and
+// suggested-PO workflow for Demand Planning.
+// =====================================================================
+
+const LT_WRITE_ENABLED = process.env["LT_WRITE_ENABLED"] === "true";
+
+function parseEmails(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,;\s]+/)
+    .map((e) => e.trim())
+    .filter((e) => e.includes("@"));
+}
+
+/**
+ * Per-stock purchasing layer: Label Traxx stock master (vendor, MSI cost,
+ * width, LT min/max), our config overrides, and open-ticket requirements.
+ * The frontend joins this with /demand/summary metrics.
+ */
+router.get(
+  "/demand/purchasing",
+  asyncHandler(async (_req, res) => {
+    const [stockInfo, tickets, goalRows, activeStockIds] = await Promise.all([
+      fetchStockInfo(),
+      fetchOpenTickets(),
+      db.select().from(stockGoalTable),
+      fetchActiveStockIds(),
+    ]);
+    const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
+
+    const ticketAgg = new Map<
+      string,
+      { requiredFootage: number; ticketCount: number; tickets: typeof tickets }
+    >();
+    const statusCounts: Record<string, number> = {};
+    for (const t of tickets) {
+      statusCounts[t.stockIn] = (statusCounts[t.stockIn] ?? 0) + 1;
+      let agg = ticketAgg.get(t.stockId);
+      if (!agg) {
+        agg = { requiredFootage: 0, ticketCount: 0, tickets: [] };
+        ticketAgg.set(t.stockId, agg);
+      }
+      agg.requiredFootage += t.estFootage;
+      agg.ticketCount += 1;
+      agg.tickets.push(t);
+    }
+
+    const stockIds = new Set<string>([...stockInfo.keys(), ...ticketAgg.keys()]);
+    const items = [...stockIds]
+      .filter((id) => activeStockIds.size === 0 || activeStockIds.has(id) || ticketAgg.has(id))
+      .map((stockId) => {
+        const info = stockInfo.get(stockId);
+        const goal = goalsByStock.get(stockId);
+        const agg = ticketAgg.get(stockId);
+        return {
+          stockId,
+          classification: info?.classification ?? null,
+          // Config values: override from stock_goal, else Label Traxx.
+          vendorName: goal?.vendorName ?? info?.supplierName ?? null,
+          vendorNameSource: goal?.vendorName ? "override" : info?.supplierName ? "labeltraxx" : "none",
+          vendorEmails: goal?.vendorEmails ?? null,
+          msiCost: goal?.msiCost ?? (info && info.costMsi > 0 ? info.costMsi : null),
+          msiCostSource: goal?.msiCost != null ? "override" : info && info.costMsi > 0 ? "labeltraxx" : "none",
+          freightMsi: info?.freightMsi ?? 0,
+          masterWidth: info?.masterWidth ?? 0,
+          ltEstimatedDeliveryTime: info?.estimatedDeliveryTime ?? null,
+          ltInvMsiMinimum: info?.invMsiMinimum ?? 0,
+          ltInvMsiMaximum: info?.invMsiMaximum ?? 0,
+          leadTimeDaysOverride: goal?.leadTimeDays ?? null,
+          typicalRollFootageOverride: goal?.typicalRollFootage ?? null,
+          openTicketFootage: agg ? Math.round(agg.requiredFootage) : 0,
+          openTicketCount: agg?.ticketCount ?? 0,
+        };
+      })
+      .sort((a, b) => a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
+
+    res.json({ statusCounts, items, ltWriteEnabled: LT_WRITE_ENABLED });
+  }),
+);
+
+/** Update purchasing config for a stock (stored as stock_goal overrides). */
+router.put(
+  "/demand/config/:stockId",
+  asyncHandler(async (req, res) => {
+    const stockId = String(req.params["stockId"]);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Partial<StockGoalRow> = {};
+    if ("vendorName" in b) patch.vendorName = b["vendorName"] == null ? null : String(b["vendorName"]);
+    if ("vendorEmails" in b) patch.vendorEmails = b["vendorEmails"] == null ? null : String(b["vendorEmails"]);
+    if ("msiCost" in b) patch.msiCost = b["msiCost"] == null ? null : Number(b["msiCost"]);
+    if ("leadTimeDays" in b) patch.leadTimeDays = b["leadTimeDays"] == null ? null : Number(b["leadTimeDays"]);
+    if ("typicalRollFootage" in b)
+      patch.typicalRollFootage = b["typicalRollFootage"] == null ? null : Number(b["typicalRollFootage"]);
+    if (Object.keys(patch).length === 0) {
+      return void res.status(400).json({ error: "No config fields in body" });
+    }
+    await db
+      .insert(stockGoalTable)
+      .values({ stockId, ...patch })
+      .onConflictDoUpdate({ target: stockGoalTable.stockId, set: patch });
+
+    // Label Traxx write-back (SupplierName / CostMSI / EstimatedDeliveryTime)
+    // is implemented but ships disabled until the gateway owner confirms the
+    // ODBC bridge accepts UPDATEs. Overrides above always take effect.
+    let ltUpdated = false;
+    if (LT_WRITE_ENABLED) {
+      const sets: string[] = [];
+      if (patch.vendorName != null) sets.push(`SupplierName = '${sqlEscapeLocal(patch.vendorName)}'`);
+      if (patch.msiCost != null && Number.isFinite(patch.msiCost)) sets.push(`CostMSI = ${patch.msiCost}`);
+      if (patch.leadTimeDays != null && Number.isFinite(patch.leadTimeDays))
+        sets.push(`EstimatedDeliveryTime = '${Math.round(patch.leadTimeDays)} days'`);
+      if (sets.length > 0) {
+        const { runGatewaySql } = await import("../lib/gateway");
+        await runGatewaySql(
+          `UPDATE stock SET ${sets.join(", ")} WHERE StockNum = '${sqlEscapeLocal(stockId)}'`,
+        );
+        ltUpdated = true;
+      }
+    }
+    res.json({ stockId, saved: true, ltUpdated });
+  }),
+);
+
+function sqlEscapeLocal(v: string): string {
+  return v.replace(/'/g, "''");
+}
+
+interface PoLineInput {
+  stockId: string;
+  description?: string | null;
+  rolls: number;
+  footage?: number | null;
+  msiCost?: number | null;
+  estCost?: number | null;
+}
+
+function poEmail(po: {
+  vendorName: string;
+  vendorEmails: string | null;
+  requestedDeliveryDate: string | null;
+  lines: { stockId: string; description: string | null; rolls: number; footage: number | null; estCost: number | null }[];
+}): { to: string; subject: string; body: string } {
+  const lines = po.lines
+    .map(
+      (l) =>
+        `  • Stock #${l.stockId}${l.description ? ` — ${l.description}` : ""}: ${l.rolls} roll${l.rolls === 1 ? "" : "s"}` +
+        (l.footage ? ` (~${Math.round(l.footage).toLocaleString()} ft)` : ""),
+    )
+    .join("\n");
+  const total = po.lines.reduce((sum, l) => sum + (l.estCost ?? 0), 0);
+  const body =
+    `Hi ${po.vendorName} team,\n\n` +
+    `Please find our purchase order below:\n\n${lines}\n\n` +
+    (po.requestedDeliveryDate ? `Requested delivery: ${po.requestedDeliveryDate}\n` : "") +
+    (total > 0 ? `Estimated total: $${total.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n` : "") +
+    `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
+    `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
+  return {
+    to: parseEmails(po.vendorEmails).join(","),
+    subject: `Calyx Containers PO — ${po.vendorName} — ${po.lines.length} item${po.lines.length === 1 ? "" : "s"}`,
+    body,
+  };
+}
+
+router.get(
+  "/demand/pos",
+  asyncHandler(async (_req, res) => {
+    const [pos, lines] = await Promise.all([
+      db.select().from(materialPoTable),
+      db.select().from(materialPoLineTable),
+    ]);
+    const linesByPo = new Map<string, typeof lines>();
+    for (const l of lines) {
+      const arr = linesByPo.get(l.poId) ?? [];
+      arr.push(l);
+      linesByPo.set(l.poId, arr);
+    }
+    const items = pos
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((po) => ({
+        id: po.id,
+        vendorName: po.vendorName,
+        vendorEmails: po.vendorEmails,
+        status: po.status,
+        ltPoNumbers: po.ltPoNumbers,
+        requestedDeliveryDate: po.requestedDeliveryDate,
+        createdAt: po.createdAt.toISOString(),
+        lines: (linesByPo.get(po.id) ?? []).map((l) => ({
+          stockId: l.stockId,
+          description: l.description,
+          rolls: l.rolls,
+          footage: l.footage,
+          msiCost: l.msiCost,
+          estCost: l.estCost,
+        })),
+      }));
+    res.json({ items, ltWriteEnabled: LT_WRITE_ENABLED });
+  }),
+);
+
+router.post(
+  "/demand/pos",
+  asyncHandler(async (req, res) => {
+    const b = (req.body ?? {}) as {
+      vendorName?: string;
+      vendorEmails?: string | null;
+      requestedDeliveryDate?: string | null;
+      notes?: string | null;
+      lines?: PoLineInput[];
+    };
+    const vendorName = (b.vendorName ?? "").trim();
+    const lines = (b.lines ?? []).filter((l) => l && l.stockId && Number(l.rolls) > 0);
+    if (!vendorName || lines.length === 0) {
+      return void res.status(400).json({ error: "vendorName and at least one line with rolls > 0 required" });
+    }
+    const [po] = await db
+      .insert(materialPoTable)
+      .values({
+        vendorName,
+        vendorEmails: b.vendorEmails ?? null,
+        requestedDeliveryDate: b.requestedDeliveryDate ?? null,
+        notes: b.notes ?? null,
+        status: "draft",
+      })
+      .returning();
+    const lineValues = lines.map((l) => ({
+      poId: po!.id,
+      stockId: String(l.stockId),
+      description: l.description ?? null,
+      rolls: Math.round(Number(l.rolls)),
+      footage: l.footage == null ? null : Number(l.footage),
+      msiCost: l.msiCost == null ? null : Number(l.msiCost),
+      estCost: l.estCost == null ? null : Number(l.estCost),
+    }));
+    await db.insert(materialPoLineTable).values(lineValues);
+    const email = poEmail({
+      vendorName,
+      vendorEmails: b.vendorEmails ?? null,
+      requestedDeliveryDate: b.requestedDeliveryDate ?? null,
+      lines: lineValues,
+    });
+    res.json({ id: po!.id, status: "draft", email });
+  }),
+);
+
+/**
+ * Submit a PO: marks it submitted here and (when LT writes are enabled)
+ * creates one Label Traxx purchaseorder row per line through the gateway.
+ */
+router.post(
+  "/demand/pos/:id/submit",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
+    const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
+
+    let ltPoNumbers: string[] = [];
+    let status = "submitted";
+    if (LT_WRITE_ENABLED) {
+      const { runGatewaySql } = await import("../lib/gateway");
+      const maxRows = await runGatewaySql(
+        "SELECT MAX(CAST(PONumber AS INTEGER)) AS maxpo FROM purchaseorder WHERE ISNUMERIC(PONumber) = 1",
+      );
+      let next = Number(maxRows[0]?.["maxpo"] ?? maxRows[0]?.["MAXPO"] ?? 0) + 1;
+      const today = new Date().toISOString().slice(0, 10);
+      const dateReq = po.requestedDeliveryDate ?? today;
+      for (const l of lines) {
+        await runGatewaySql(
+          `INSERT INTO purchaseorder (PONumber, PODate, DateReq, SupplierNum, Supplier, OrderStockNum, ` +
+            `Description, Quantity, CostMSI, POType, EntryDate, EntryBy, ShipName, ShipAddr1, ShipCity, ShipState, ShipZip, ShipCountry) VALUES (` +
+            `'${next}', {d '${today}'}, {d '${dateReq}'}, '', '${sqlEscapeLocal(po.vendorName)}', '${sqlEscapeLocal(l.stockId)}', ` +
+            `'${sqlEscapeLocal((l.description ?? "").slice(0, 100))}', ${l.rolls}, ${l.msiCost ?? 0}, 'Stock', {d '${today}'}, ` +
+            `'Supply Chain Dashboard', 'Calyx Containers', '1991 Parkway Blvd', 'West Valley City', 'UT', '84119', 'USA')`,
+        );
+        ltPoNumbers.push(String(next));
+        next += 1;
+      }
+      status = "submitted_lt";
+    }
+
+    await db
+      .update(materialPoTable)
+      .set({ status, ltPoNumbers: ltPoNumbers.length ? ltPoNumbers.join(",") : null, updatedAt: new Date() })
+      .where(eq(materialPoTable.id, id));
+
+    const email = poEmail({
+      vendorName: po.vendorName,
+      vendorEmails: po.vendorEmails,
+      requestedDeliveryDate: po.requestedDeliveryDate,
+      lines: lines.map((l) => ({
+        stockId: l.stockId,
+        description: l.description,
+        rolls: l.rolls,
+        footage: l.footage,
+        estCost: l.estCost,
+      })),
+    });
+    res.json({ id, status, ltPoNumbers, ltWriteEnabled: LT_WRITE_ENABLED, email });
   }),
 );
 

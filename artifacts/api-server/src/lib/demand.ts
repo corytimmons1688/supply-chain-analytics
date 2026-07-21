@@ -285,6 +285,96 @@ export async function fetchActiveStockIds(): Promise<Set<string>> {
   return out;
 }
 
+// ---------------------------------------------------------------------
+// Label Traxx stock master (vendor / cost / width) and open-ticket
+// material requirements — read-only SELECTs through the gateway.
+// ---------------------------------------------------------------------
+
+export interface StockInfoRow {
+  stockId: string;
+  supplierName: string | null;
+  costMsi: number;
+  freightMsi: number;
+  masterWidth: number;
+  estimatedDeliveryTime: string | null;
+  invMsiMinimum: number;
+  invMsiMaximum: number;
+  classification: string | null;
+}
+
+export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
+  const sql =
+    "SELECT StockNum, SupplierName, CostMSI, FreightMSI, MasterWidth, EstimatedDeliveryTime, " +
+    "InvMSI_Minimum, InvMSI_Maximum, Classification FROM stock";
+  const rows = await runGatewaySql(sql);
+  const out = new Map<string, StockInfoRow>();
+  for (const row of rows) {
+    const stockId = pickString(row, "StockNum")?.trim();
+    if (!stockId) continue;
+    out.set(stockId, {
+      stockId,
+      supplierName: pickString(row, "SupplierName")?.trim() || null,
+      costMsi: pickNumber(row, "CostMSI"),
+      freightMsi: pickNumber(row, "FreightMSI"),
+      masterWidth: pickNumber(row, "MasterWidth"),
+      estimatedDeliveryTime: pickString(row, "EstimatedDeliveryTime")?.trim() || null,
+      invMsiMinimum: pickNumber(row, "InvMSI_Minimum"),
+      invMsiMaximum: pickNumber(row, "InvMSI_Maximum"),
+      classification: pickString(row, "Classification")?.trim() || null,
+    });
+  }
+  return out;
+}
+
+export interface OpenTicketRow {
+  ticketNumber: string;
+  stockId: string;
+  estFootage: number;
+  stockIn: string; // Label Traxx availability status: In / Ordered / Out / ...
+  shipByDate: string | null;
+  description: string | null;
+}
+
+/**
+ * Open tickets (jobs not yet done) with their primary-stock material
+ * requirement. EstFootage is attributed to StockNum1 — laminate/secondary
+ * stocks (StockNum2/3) share the run length but LT does not split footage.
+ */
+export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
+  // "Open" = not done, with a ship-by date from 30 days ago onward. Label
+  // Traxx keeps years of never-closed tickets; the recency window keeps this
+  // to genuinely current work (and under the gateway's 1000-row cap).
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+  const sinceIso = since.toISOString().slice(0, 10);
+  // Label Traxx stores "no date" as a pre-1900 sentinel, not SQL NULL —
+  // the same trick the on-hand query uses for DateRollUsed.
+  const sql =
+    "SELECT Number, StockNum1, EstFootage, StockIn, Ship_by_Date, GeneralDescr FROM ticket " +
+    `WHERE DateDone < {d '1900-01-01'} AND StockNum1 <> '' ` +
+    `AND Ship_by_Date >= {d '${sinceIso}'}`;
+  const rows = await runGatewaySql(sql);
+  const out: OpenTicketRow[] = [];
+  for (const row of rows) {
+    const stockId = pickString(row, "StockNum1")?.trim();
+    const ticketNumber = pickString(row, "Number")?.trim();
+    if (!stockId || !ticketNumber) continue;
+    const rawShip = pickString(row, "Ship_by_Date");
+    out.push({
+      ticketNumber,
+      stockId,
+      estFootage: pickNumber(row, "EstFootage"),
+      stockIn: (() => {
+        const v = pickString(row, "StockIn")?.trim();
+        return !v || v === "***" ? "Not Evaluated" : v;
+      })(),
+      shipByDate: rawShip ? rawShip.split(" ")[0] ?? null : null,
+      description: pickString(row, "GeneralDescr")?.trim() || null,
+    });
+  }
+  return out;
+}
+
 export interface PoLeadTime {
   poNumber: string;
   leadTimeDays: number;

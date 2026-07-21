@@ -26,6 +26,8 @@ import type {
   CycleCountCompletion,
   CycleCountKpi,
   CycleCountScheduleResponse,
+  DemandConfigInput,
+  DemandConfigResult,
   DemandStockDetail,
   DemandSummary,
   GatewayHealth,
@@ -65,11 +67,16 @@ import type {
   ListVendorShipmentsParams,
   ListVendors200,
   ListWeeklySnapshots200,
+  MaterialPoCreateResult,
+  MaterialPoInput,
+  MaterialPoList,
+  MaterialPoSubmitResult,
   MonthlySnapshot,
   NetsuiteSyncResult,
   OnHandInventory,
   PricingReview,
   PricingReviewInput,
+  PurchasingResponse,
   QualityCaseSyncResult,
   QualityIssue,
   QualityIssueInput,
@@ -1730,6 +1737,413 @@ export function useGetMonthlySnapshot<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Per-stock purchasing layer (LT vendor/cost, config overrides, open-ticket requirements)
+ */
+export const getGetDemandPurchasingUrl = () => {
+  return `/api/demand/purchasing`;
+};
+
+export const getDemandPurchasing = async (
+  options?: RequestInit,
+): Promise<PurchasingResponse> => {
+  return customFetch<PurchasingResponse>(getGetDemandPurchasingUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDemandPurchasingQueryKey = () => {
+  return [`/api/demand/purchasing`] as const;
+};
+
+export const getGetDemandPurchasingQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDemandPurchasing>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDemandPurchasing>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetDemandPurchasingQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDemandPurchasing>>
+  > = ({ signal }) => getDemandPurchasing({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDemandPurchasing>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDemandPurchasingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDemandPurchasing>>
+>;
+export type GetDemandPurchasingQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Per-stock purchasing layer (LT vendor/cost, config overrides, open-ticket requirements)
+ */
+
+export function useGetDemandPurchasing<
+  TData = Awaited<ReturnType<typeof getDemandPurchasing>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDemandPurchasing>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDemandPurchasingQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update purchasing config overrides for a stock
+ */
+export const getUpdateDemandConfigUrl = (stockId: string) => {
+  return `/api/demand/config/${stockId}`;
+};
+
+export const updateDemandConfig = async (
+  stockId: string,
+  demandConfigInput: DemandConfigInput,
+  options?: RequestInit,
+): Promise<DemandConfigResult> => {
+  return customFetch<DemandConfigResult>(getUpdateDemandConfigUrl(stockId), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(demandConfigInput),
+  });
+};
+
+export const getUpdateDemandConfigMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateDemandConfig>>,
+    TError,
+    { stockId: string; data: BodyType<DemandConfigInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateDemandConfig>>,
+  TError,
+  { stockId: string; data: BodyType<DemandConfigInput> },
+  TContext
+> => {
+  const mutationKey = ["updateDemandConfig"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateDemandConfig>>,
+    { stockId: string; data: BodyType<DemandConfigInput> }
+  > = (props) => {
+    const { stockId, data } = props ?? {};
+
+    return updateDemandConfig(stockId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateDemandConfigMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateDemandConfig>>
+>;
+export type UpdateDemandConfigMutationBody = BodyType<DemandConfigInput>;
+export type UpdateDemandConfigMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update purchasing config overrides for a stock
+ */
+export const useUpdateDemandConfig = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateDemandConfig>>,
+    TError,
+    { stockId: string; data: BodyType<DemandConfigInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateDemandConfig>>,
+  TError,
+  { stockId: string; data: BodyType<DemandConfigInput> },
+  TContext
+> => {
+  return useMutation(getUpdateDemandConfigMutationOptions(options));
+};
+
+/**
+ * @summary List material purchase orders raised from demand planning
+ */
+export const getListMaterialPosUrl = () => {
+  return `/api/demand/pos`;
+};
+
+export const listMaterialPos = async (
+  options?: RequestInit,
+): Promise<MaterialPoList> => {
+  return customFetch<MaterialPoList>(getListMaterialPosUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMaterialPosQueryKey = () => {
+  return [`/api/demand/pos`] as const;
+};
+
+export const getListMaterialPosQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMaterialPos>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMaterialPos>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMaterialPosQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listMaterialPos>>> = ({
+    signal,
+  }) => listMaterialPos({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMaterialPos>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListMaterialPosQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMaterialPos>>
+>;
+export type ListMaterialPosQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List material purchase orders raised from demand planning
+ */
+
+export function useListMaterialPos<
+  TData = Awaited<ReturnType<typeof listMaterialPos>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMaterialPos>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListMaterialPosQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a material PO draft from suggested lines
+ */
+export const getCreateMaterialPoUrl = () => {
+  return `/api/demand/pos`;
+};
+
+export const createMaterialPo = async (
+  materialPoInput: MaterialPoInput,
+  options?: RequestInit,
+): Promise<MaterialPoCreateResult> => {
+  return customFetch<MaterialPoCreateResult>(getCreateMaterialPoUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(materialPoInput),
+  });
+};
+
+export const getCreateMaterialPoMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createMaterialPo>>,
+    TError,
+    { data: BodyType<MaterialPoInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createMaterialPo>>,
+  TError,
+  { data: BodyType<MaterialPoInput> },
+  TContext
+> => {
+  const mutationKey = ["createMaterialPo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createMaterialPo>>,
+    { data: BodyType<MaterialPoInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createMaterialPo(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateMaterialPoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createMaterialPo>>
+>;
+export type CreateMaterialPoMutationBody = BodyType<MaterialPoInput>;
+export type CreateMaterialPoMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a material PO draft from suggested lines
+ */
+export const useCreateMaterialPo = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createMaterialPo>>,
+    TError,
+    { data: BodyType<MaterialPoInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createMaterialPo>>,
+  TError,
+  { data: BodyType<MaterialPoInput> },
+  TContext
+> => {
+  return useMutation(getCreateMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Submit a material PO (records it, emails vendor, creates LT PO when enabled)
+ */
+export const getSubmitMaterialPoUrl = (id: string) => {
+  return `/api/demand/pos/${id}/submit`;
+};
+
+export const submitMaterialPo = async (
+  id: string,
+  options?: RequestInit,
+): Promise<MaterialPoSubmitResult> => {
+  return customFetch<MaterialPoSubmitResult>(getSubmitMaterialPoUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getSubmitMaterialPoMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof submitMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["submitMaterialPo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof submitMaterialPo>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return submitMaterialPo(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SubmitMaterialPoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof submitMaterialPo>>
+>;
+
+export type SubmitMaterialPoMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Submit a material PO (records it, emails vendor, creates LT PO when enabled)
+ */
+export const useSubmitMaterialPo = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof submitMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getSubmitMaterialPoMutationOptions(options));
+};
 
 /**
  * @summary Per-stock demand history, on-hand, lead time, and recommended min/max

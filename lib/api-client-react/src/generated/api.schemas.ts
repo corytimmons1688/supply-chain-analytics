@@ -479,6 +479,100 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface PurchasingItem {
+  stockId: string;
+  classification?: string | null;
+  vendorName?: string | null;
+  vendorNameSource?: string;
+  vendorEmails?: string | null;
+  msiCost?: number | null;
+  msiCostSource?: string;
+  freightMsi?: number;
+  masterWidth?: number;
+  ltEstimatedDeliveryTime?: string | null;
+  ltInvMsiMinimum?: number;
+  ltInvMsiMaximum?: number;
+  leadTimeDaysOverride?: number | null;
+  typicalRollFootageOverride?: number | null;
+  openTicketFootage?: number;
+  openTicketCount?: number;
+}
+
+export type PurchasingResponseStatusCounts = { [key: string]: number };
+
+export interface PurchasingResponse {
+  statusCounts: PurchasingResponseStatusCounts;
+  items: PurchasingItem[];
+  ltWriteEnabled: boolean;
+}
+
+export interface DemandConfigInput {
+  vendorName?: string | null;
+  vendorEmails?: string | null;
+  msiCost?: number | null;
+  leadTimeDays?: number | null;
+  typicalRollFootage?: number | null;
+}
+
+export interface DemandConfigResult {
+  stockId: string;
+  saved: boolean;
+  ltUpdated?: boolean;
+}
+
+export interface MaterialPoLine {
+  stockId: string;
+  description?: string | null;
+  rolls: number;
+  footage?: number | null;
+  msiCost?: number | null;
+  estCost?: number | null;
+}
+
+export interface MaterialPo {
+  id: string;
+  vendorName: string;
+  vendorEmails?: string | null;
+  status: string;
+  ltPoNumbers?: string | null;
+  requestedDeliveryDate?: string | null;
+  createdAt: string;
+  lines: MaterialPoLine[];
+}
+
+export interface MaterialPoList {
+  items: MaterialPo[];
+  ltWriteEnabled: boolean;
+}
+
+export interface MaterialPoInput {
+  vendorName: string;
+  vendorEmails?: string | null;
+  requestedDeliveryDate?: string | null;
+  notes?: string | null;
+  lines: MaterialPoLine[];
+}
+
+export interface PoEmail {
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface MaterialPoCreateResult {
+  id: string;
+  status: string;
+  email: PoEmail;
+}
+
+export interface MaterialPoSubmitResult {
+  id: string;
+  status: string;
+  ltPoNumbers?: string[];
+  ltWriteEnabled: boolean;
+  email: PoEmail;
+}
+
 export interface GatewayHealth {
   reachable: boolean;
   odbcConnected?: boolean;

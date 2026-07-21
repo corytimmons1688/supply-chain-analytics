@@ -52,6 +52,12 @@ export const stockGoalTable = pgTable("stock_goal", {
   // Manual override for the "typical roll size" (footage). NULL = use the auto
   // value derived from received-roll history grouped by Orig_RollID.
   typicalRollFootage: doublePrecision("typical_roll_footage"),
+  // Purchasing config (Demand Planning → Configuration). NULL = fall back to
+  // the Label Traxx stock record (SupplierName / CostMSI).
+  vendorName: text("vendor_name"),
+  // Comma-separated vendor PO email addresses.
+  vendorEmails: text("vendor_emails"),
+  msiCost: doublePrecision("msi_cost"),
   // Root-cause investigation tracking for stocks with CC variance.
   // Investigation flow: 'open' | 'root_cause_id' | 'closed'. NULL = not yet triaged.
   // Legacy values 'completed' / 'no_investigation' are normalized to 'closed' on read.

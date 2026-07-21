@@ -320,6 +320,80 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MonthlySnapshot" }
+  /demand/purchasing:
+    get:
+      operationId: getDemandPurchasing
+      tags: [demand]
+      summary: Per-stock purchasing layer (LT vendor/cost, config overrides, open-ticket requirements)
+      responses:
+        "200":
+          description: Purchasing data
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasingResponse" }
+  /demand/config/{stockId}:
+    put:
+      operationId: updateDemandConfig
+      tags: [demand]
+      summary: Update purchasing config overrides for a stock
+      parameters:
+        - name: stockId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DemandConfigInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DemandConfigResult" }
+  /demand/pos:
+    get:
+      operationId: listMaterialPos
+      tags: [demand]
+      summary: List material purchase orders raised from demand planning
+      responses:
+        "200":
+          description: PO list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialPoList" }
+    post:
+      operationId: createMaterialPo
+      tags: [demand]
+      summary: Create a material PO draft from suggested lines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaterialPoInput" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialPoCreateResult" }
+  /demand/pos/{id}/submit:
+    post:
+      operationId: submitMaterialPo
+      tags: [demand]
+      summary: Submit a material PO (records it, emails vendor, creates LT PO when enabled)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Submitted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialPoSubmitResult" }
   /demand/summary:
     get:
       operationId: getDemandSummary
@@ -1521,6 +1595,120 @@ components:
       required: [status]
       properties:
         status: { type: string }
+    PurchasingItem:
+      type: object
+      required: [stockId]
+      properties:
+        stockId: { type: string }
+        classification: { type: string, nullable: true }
+        vendorName: { type: string, nullable: true }
+        vendorNameSource: { type: string }
+        vendorEmails: { type: string, nullable: true }
+        msiCost: { type: number, nullable: true }
+        msiCostSource: { type: string }
+        freightMsi: { type: number }
+        masterWidth: { type: number }
+        ltEstimatedDeliveryTime: { type: string, nullable: true }
+        ltInvMsiMinimum: { type: number }
+        ltInvMsiMaximum: { type: number }
+        leadTimeDaysOverride: { type: number, nullable: true }
+        typicalRollFootageOverride: { type: number, nullable: true }
+        openTicketFootage: { type: number }
+        openTicketCount: { type: integer }
+    PurchasingResponse:
+      type: object
+      required: [statusCounts, items, ltWriteEnabled]
+      properties:
+        statusCounts:
+          type: object
+          additionalProperties: { type: integer }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PurchasingItem" }
+        ltWriteEnabled: { type: boolean }
+    DemandConfigInput:
+      type: object
+      properties:
+        vendorName: { type: string, nullable: true }
+        vendorEmails: { type: string, nullable: true }
+        msiCost: { type: number, nullable: true }
+        leadTimeDays: { type: number, nullable: true }
+        typicalRollFootage: { type: number, nullable: true }
+    DemandConfigResult:
+      type: object
+      required: [stockId, saved]
+      properties:
+        stockId: { type: string }
+        saved: { type: boolean }
+        ltUpdated: { type: boolean }
+    MaterialPoLine:
+      type: object
+      required: [stockId, rolls]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        rolls: { type: integer }
+        footage: { type: number, nullable: true }
+        msiCost: { type: number, nullable: true }
+        estCost: { type: number, nullable: true }
+    MaterialPo:
+      type: object
+      required: [id, vendorName, status, lines, createdAt]
+      properties:
+        id: { type: string }
+        vendorName: { type: string }
+        vendorEmails: { type: string, nullable: true }
+        status: { type: string }
+        ltPoNumbers: { type: string, nullable: true }
+        requestedDeliveryDate: { type: string, nullable: true }
+        createdAt: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/MaterialPoLine" }
+    MaterialPoList:
+      type: object
+      required: [items, ltWriteEnabled]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MaterialPo" }
+        ltWriteEnabled: { type: boolean }
+    MaterialPoInput:
+      type: object
+      required: [vendorName, lines]
+      properties:
+        vendorName: { type: string }
+        vendorEmails: { type: string, nullable: true }
+        requestedDeliveryDate: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/MaterialPoLine" }
+    PoEmail:
+      type: object
+      required: [to, subject, body]
+      properties:
+        to: { type: string }
+        subject: { type: string }
+        body: { type: string }
+    MaterialPoCreateResult:
+      type: object
+      required: [id, status, email]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        email: { $ref: "#/components/schemas/PoEmail" }
+    MaterialPoSubmitResult:
+      type: object
+      required: [id, status, ltWriteEnabled, email]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        ltPoNumbers:
+          type: array
+          items: { type: string }
+        ltWriteEnabled: { type: boolean }
+        email: { $ref: "#/components/schemas/PoEmail" }
     GatewayHealth:
       type: object
       required: [reachable]

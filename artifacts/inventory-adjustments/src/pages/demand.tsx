@@ -38,6 +38,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TicketCompareSection, SuggestedPosTab, DemandConfigTab } from "@/pages/demand-purchasing";
 
 function fmtFt(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -382,6 +383,7 @@ export default function DemandPlanning() {
   const [showOnly, setShowOnly] = React.useState<
     "all" | "belowMin" | "review" | "dormant" | "activeOnHand" | "anyOnHand"
   >("all");
+  const [tab, setTab] = React.useState<"demand" | "pos" | "config">("demand");
 
   const params: GetDemandSummaryParams = {
     monthsBack,
@@ -490,6 +492,37 @@ export default function DemandPlanning() {
           </div>
         )}
       </div>
+
+      <div className="flex items-center gap-1 border-b -mb-2">
+        {(
+          [
+            ["demand", "Demand"],
+            ["pos", "Suggested POs"],
+            ["config", "Configuration"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={cn(
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              tab === key
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "pos" && <SuggestedPosTab rows={rows} />}
+      {tab === "config" && <DemandConfigTab rows={rows} />}
+
+      {tab === "demand" && (
+        <>
+          <TicketCompareSection rows={rows} />
 
       {/* KPI strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
@@ -971,6 +1004,8 @@ export default function DemandPlanning() {
         computed from PO placed → received dates; stocks without PO history use the median
         observed lead time.
       </p>
+        </>
+      )}
     </Layout>
   );
 }

@@ -637,6 +637,132 @@ export const GetMonthlySnapshotResponse = zod
   );
 
 /**
+ * @summary Per-stock purchasing layer (LT vendor/cost, config overrides, open-ticket requirements)
+ */
+export const GetDemandPurchasingResponse = zod.object({
+  statusCounts: zod.record(zod.string(), zod.number()),
+  items: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      classification: zod.string().nullish(),
+      vendorName: zod.string().nullish(),
+      vendorNameSource: zod.string().optional(),
+      vendorEmails: zod.string().nullish(),
+      msiCost: zod.number().nullish(),
+      msiCostSource: zod.string().optional(),
+      freightMsi: zod.number().optional(),
+      masterWidth: zod.number().optional(),
+      ltEstimatedDeliveryTime: zod.string().nullish(),
+      ltInvMsiMinimum: zod.number().optional(),
+      ltInvMsiMaximum: zod.number().optional(),
+      leadTimeDaysOverride: zod.number().nullish(),
+      typicalRollFootageOverride: zod.number().nullish(),
+      openTicketFootage: zod.number().optional(),
+      openTicketCount: zod.number().optional(),
+    }),
+  ),
+  ltWriteEnabled: zod.boolean(),
+});
+
+/**
+ * @summary Update purchasing config overrides for a stock
+ */
+export const UpdateDemandConfigParams = zod.object({
+  stockId: zod.coerce.string(),
+});
+
+export const UpdateDemandConfigBody = zod.object({
+  vendorName: zod.string().nullish(),
+  vendorEmails: zod.string().nullish(),
+  msiCost: zod.number().nullish(),
+  leadTimeDays: zod.number().nullish(),
+  typicalRollFootage: zod.number().nullish(),
+});
+
+export const UpdateDemandConfigResponse = zod.object({
+  stockId: zod.string(),
+  saved: zod.boolean(),
+  ltUpdated: zod.boolean().optional(),
+});
+
+/**
+ * @summary List material purchase orders raised from demand planning
+ */
+export const ListMaterialPosResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      vendorName: zod.string(),
+      vendorEmails: zod.string().nullish(),
+      status: zod.string(),
+      ltPoNumbers: zod.string().nullish(),
+      requestedDeliveryDate: zod.string().nullish(),
+      createdAt: zod.string(),
+      lines: zod.array(
+        zod.object({
+          stockId: zod.string(),
+          description: zod.string().nullish(),
+          rolls: zod.number(),
+          footage: zod.number().nullish(),
+          msiCost: zod.number().nullish(),
+          estCost: zod.number().nullish(),
+        }),
+      ),
+    }),
+  ),
+  ltWriteEnabled: zod.boolean(),
+});
+
+/**
+ * @summary Create a material PO draft from suggested lines
+ */
+export const CreateMaterialPoBody = zod.object({
+  vendorName: zod.string(),
+  vendorEmails: zod.string().nullish(),
+  requestedDeliveryDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  lines: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      description: zod.string().nullish(),
+      rolls: zod.number(),
+      footage: zod.number().nullish(),
+      msiCost: zod.number().nullish(),
+      estCost: zod.number().nullish(),
+    }),
+  ),
+});
+
+export const CreateMaterialPoResponse = zod.object({
+  id: zod.string(),
+  status: zod.string(),
+  email: zod.object({
+    to: zod.string(),
+    subject: zod.string(),
+    body: zod.string(),
+  }),
+});
+
+/**
+ * @summary Submit a material PO (records it, emails vendor, creates LT PO when enabled)
+ */
+export const SubmitMaterialPoParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const SubmitMaterialPoResponse = zod.object({
+  id: zod.string(),
+  status: zod.string(),
+  ltPoNumbers: zod.array(zod.string()).optional(),
+  ltWriteEnabled: zod.boolean(),
+  email: zod.object({
+    to: zod.string(),
+    subject: zod.string(),
+    body: zod.string(),
+  }),
+});
+
+/**
  * @summary Per-stock demand history, on-hand, lead time, and recommended min/max
  */
 export const getDemandSummaryQueryMonthsBackDefault = 6;
