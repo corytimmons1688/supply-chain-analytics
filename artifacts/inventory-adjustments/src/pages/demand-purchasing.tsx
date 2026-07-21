@@ -169,22 +169,84 @@ function openPoDocument(opts: {
 // Overview section: ticket-status donut + clickable on-hand vs open-ticket
 // requirements comparison chart.
 // ---------------------------------------------------------------------
+type CompareDatum = {
+  stockId: string;
+  name: string;
+  description: string;
+  width: number;
+  vendorName: string | null;
+  onHand: number;
+  required: number;
+  onOrder: number;
+  available: number;
+  min: number;
+  max: number;
+  short: number;
+  shortUsd: number;
+};
+
+/** Rich hover card for the comparison chart — mirrors the LT dashboard tooltip. */
+function CompareTooltip({
+  active,
+  payload,
+  unit,
+}: {
+  active?: boolean;
+  payload?: { payload: CompareDatum }[];
+  unit: "ft" | "usd";
+}) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0]!.payload;
+  const u = (n: number) => (unit === "usd" ? `$${fmt(n)}` : `${fmt(n)} ft`);
+  const cell = (label: string, value: React.ReactNode) => (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+  return (
+    <div className="rounded-md border bg-background shadow-lg p-3 text-xs max-w-[20rem]">
+      <div className="font-semibold">
+        #{d.stockId} · {d.width ? `${d.width}"` : "width —"}
+      </div>
+      <div className="text-muted-foreground truncate mb-2">{d.description}</div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+        {cell("Quantity in Inventory", u(d.onHand))}
+        {cell("Quantity Ordered", u(d.onOrder))}
+        {cell("Quantity Required", u(d.required))}
+        {cell(
+          "Quantity Available",
+          <span className={cn(d.available < 0 && "text-red-600 dark:text-red-400")}>{u(d.available)}</span>,
+        )}
+        {cell("Min (reorder point)", d.min > 0 ? u(d.min) : "—")}
+        {cell("Max", d.max > 0 ? u(d.max) : "—")}
+      </div>
+      {d.vendorName && <div className="mt-2 text-muted-foreground">Vendor: {d.vendorName}</div>}
+      <div className="mt-1 text-[10px] text-muted-foreground">Click to see the tickets driving this demand</div>
+    </div>
+  );
+}
+
 export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
   const [unit, setUnit] = React.useState<"ft" | "usd">("ft");
+  const [widthFilter, setWidthFilter] = React.useState<string>("all");
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
 
-  const byStock = React.useMemo(() => {
-    const m = new Map<string, PurchasingItem>();
-    for (const it of data?.items ?? []) m.set(it.stockId, it);
-    return m;
+  const widthOptions = React.useMemo(() => {
+    const widths = new Set<number>();
+    for (const it of data?.items ?? []) {
+      if ((it.openTicketFootage ?? 0) > 0 && (it.masterWidth ?? 0) > 0) widths.add(it.masterWidth!);
+    }
+    return [...widths].sort((a, b) => a - b);
   }, [data]);
 
-  const chartData = React.useMemo(() => {
+  const chartData = React.useMemo<CompareDatum[]>(() => {
     const metricsByStock = new Map(rows.map((r) => [r.stockId, r]));
     const entries = (data?.items ?? [])
       .filter((it) => (it.openTicketFootage ?? 0) > 0)
+      .filter((it) => widthFilter === "all" || String(it.masterWidth ?? 0) === widthFilter)
       .map((it) => {
         const m = metricsByStock.get(it.stockId);
         // footage → $ via MSI × (cost + freight); 0 when cost/width unknown
@@ -193,14 +255,21 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             ? ((it.msiCost + (it.freightMsi ?? 0)) * 12 * (it.masterWidth ?? 0)) / 1000
             : 0;
         const cv = (ft: number) => (unit === "usd" ? Math.round(ft * rate) : Math.round(ft));
+        const width = it.masterWidth ?? 0;
         const shortFt = Math.max(0, (it.openTicketFootage ?? 0) - (m?.onHandFootage ?? 0) - (m?.openPoFootage ?? 0));
+        const availableFt = (m?.onHandFootage ?? 0) + (m?.openPoFootage ?? 0) - (it.openTicketFootage ?? 0);
         return {
           stockId: it.stockId,
-          name: `#${it.stockId}`,
+          name: width ? `#${it.stockId} · ${width}"` : `#${it.stockId}`,
           description: m?.description ?? it.classification ?? "",
+          width,
+          vendorName: it.vendorName ?? null,
           onHand: cv(m?.onHandFootage ?? 0),
           required: cv(it.openTicketFootage ?? 0),
           onOrder: cv(m?.openPoFootage ?? 0),
+          available: cv(availableFt),
+          min: cv(m?.reorderPointFootage ?? 0),
+          max: cv(m?.maxFootage ?? 0),
           short: Math.round(shortFt),
           shortUsd: Math.round(shortFt * rate),
         };
@@ -208,7 +277,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
       .sort((a, b) => b.required - a.required)
       .slice(0, 16);
     return entries;
-  }, [data, rows, unit]);
+  }, [data, rows, unit, widthFilter]);
 
   const uncoveredUsd = React.useMemo(() => chartData.reduce((s2, d) => s2 + d.shortUsd, 0), [chartData]);
   const selectedItem = selectedStock ? (data?.items ?? []).find((it) => it.stockId === selectedStock) : null;
@@ -276,20 +345,35 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                 )}
               </p>
             </div>
-            <div className="flex items-center rounded-md border overflow-hidden">
-              {(["ft", "usd"] as const).map((u) => (
-                <button
-                  key={u}
-                  type="button"
-                  onClick={() => setUnit(u)}
-                  className={cn(
-                    "px-2.5 py-1 text-xs font-medium",
-                    unit === u ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  {u === "ft" ? "Feet" : "$"}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <select
+                value={widthFilter}
+                onChange={(e) => setWidthFilter(e.target.value)}
+                className="h-7 rounded-md border bg-background px-2 text-xs text-foreground"
+                title="Filter by master width"
+              >
+                <option value="all">All widths</option>
+                {widthOptions.map((w) => (
+                  <option key={w} value={String(w)}>
+                    {w}&quot;
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center rounded-md border overflow-hidden">
+                {(["ft", "usd"] as const).map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setUnit(u)}
+                    className={cn(
+                      "px-2.5 py-1 text-xs font-medium",
+                      unit === u ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                    )}
+                  >
+                    {u === "ft" ? "Feet" : "$"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -313,14 +397,8 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                 >
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="currentColor" opacity={0.1} />
                   <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${fmt(v / 1000)}k`} />
-                  <YAxis type="category" dataKey="name" width={52} tick={{ fontSize: 11 }} />
-                  <ReTooltip
-                    formatter={(v: number, name: string) => [unit === "usd" ? `$${fmt(v)}` : `${fmt(v)} ft`, name]}
-                    labelFormatter={(label: string) => {
-                      const row = chartData.find((d) => d.name === label);
-                      return row ? `${label} ${row.description}`.slice(0, 60) : label;
-                    }}
-                  />
+                  <YAxis type="category" dataKey="name" width={92} tick={{ fontSize: 10 }} />
+                  <ReTooltip content={<CompareTooltip unit={unit} />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} iconSize={9} />
                   <Bar isAnimationActive={false} dataKey="onHand" name="On hand" fill="#22c55e" radius={[0, 3, 3, 0]} barSize={10} />
                   <Bar isAnimationActive={false} dataKey="onOrder" name="On order (open PO)" fill="#38bdf8" radius={[0, 3, 3, 0]} barSize={10} />
@@ -333,8 +411,10 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             <div className="mt-3 rounded-md border">
               <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/40">
                 <span className="text-xs font-semibold">
-                  Open tickets needing #{selectedItem.stockId} · {fmt(selectedItem.openTicketFootage)} ft across{" "}
-                  {selectedItem.openTicketCount} ticket{selectedItem.openTicketCount === 1 ? "" : "s"}
+                  #{selectedItem.stockId}
+                  {(selectedItem.masterWidth ?? 0) > 0 && ` · ${selectedItem.masterWidth}" master width`}
+                  {selectedItem.vendorName && ` · ${selectedItem.vendorName}`} · {selectedItem.openTicketCount} open
+                  ticket{selectedItem.openTicketCount === 1 ? "" : "s"}
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -354,6 +434,30 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   </button>
                 </div>
               </div>
+              {(() => {
+                const d = chartData.find((c) => c.stockId === selectedItem.stockId);
+                if (!d) return null;
+                const u = (n: number) => (unit === "usd" ? `$${fmt(n)}` : `${fmt(n)} ft`);
+                const stat = (label: string, value: React.ReactNode) => (
+                  <div className="min-w-[7rem]">
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+                    <div className="text-sm font-semibold tabular-nums">{value}</div>
+                  </div>
+                );
+                return (
+                  <div className="flex flex-wrap gap-x-8 gap-y-2 px-3 py-2 border-b bg-muted/20">
+                    {stat("In Inventory", u(d.onHand))}
+                    {stat("Ordered", u(d.onOrder))}
+                    {stat("Required", u(d.required))}
+                    {stat(
+                      "Available",
+                      <span className={cn(d.available < 0 && "text-red-600 dark:text-red-400")}>{u(d.available)}</span>,
+                    )}
+                    {stat("Min (ROP)", d.min > 0 ? u(d.min) : "—")}
+                    {stat("Max", d.max > 0 ? u(d.max) : "—")}
+                  </div>
+                );
+              })()}
               <div className="max-h-56 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead>
