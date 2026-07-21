@@ -479,6 +479,14 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface OpenTicket {
+  ticketNumber: string;
+  estFootage: number;
+  stockIn: string;
+  shipByDate?: string | null;
+  description?: string | null;
+}
+
 export interface PurchasingItem {
   stockId: string;
   classification?: string | null;
@@ -496,6 +504,13 @@ export interface PurchasingItem {
   typicalRollFootageOverride?: number | null;
   openTicketFootage?: number;
   openTicketCount?: number;
+  mfgSpecNum?: string | null;
+  faceStock?: string | null;
+  adhesive?: string | null;
+  faceColor?: string | null;
+  topCoat?: string | null;
+  areaToWeightFactor?: number;
+  tickets?: OpenTicket[];
 }
 
 export type PurchasingResponseStatusCounts = { [key: string]: number };
@@ -537,6 +552,8 @@ export interface MaterialPo {
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;
   createdAt: string;
+  receivedOn?: string | null;
+  actualLeadDays?: number | null;
   lines: MaterialPoLine[];
 }
 
@@ -557,6 +574,15 @@ export interface PoEmail {
   to: string;
   subject: string;
   body: string;
+}
+
+export interface MaterialPoUpdateInput {
+  ltPoNumbers?: string | null;
+}
+
+export interface MaterialPoUpdateResult {
+  id: string;
+  saved: boolean;
 }
 
 export interface MaterialPoCreateResult {

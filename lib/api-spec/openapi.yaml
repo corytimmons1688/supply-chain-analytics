@@ -378,6 +378,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MaterialPoCreateResult" }
+  /demand/pos/{id}:
+    put:
+      operationId: updateMaterialPo
+      tags: [demand]
+      summary: Attach Label Traxx PO number(s) to a material PO
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaterialPoUpdateInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialPoUpdateResult" }
   /demand/pos/{id}/submit:
     post:
       operationId: submitMaterialPo
@@ -1615,6 +1636,24 @@ components:
         typicalRollFootageOverride: { type: number, nullable: true }
         openTicketFootage: { type: number }
         openTicketCount: { type: integer }
+        mfgSpecNum: { type: string, nullable: true }
+        faceStock: { type: string, nullable: true }
+        adhesive: { type: string, nullable: true }
+        faceColor: { type: string, nullable: true }
+        topCoat: { type: string, nullable: true }
+        areaToWeightFactor: { type: number }
+        tickets:
+          type: array
+          items: { $ref: "#/components/schemas/OpenTicket" }
+    OpenTicket:
+      type: object
+      required: [ticketNumber, estFootage, stockIn]
+      properties:
+        ticketNumber: { type: string }
+        estFootage: { type: number }
+        stockIn: { type: string }
+        shipByDate: { type: string, nullable: true }
+        description: { type: string, nullable: true }
     PurchasingResponse:
       type: object
       required: [statusCounts, items, ltWriteEnabled]
@@ -1662,6 +1701,8 @@ components:
         ltPoNumbers: { type: string, nullable: true }
         requestedDeliveryDate: { type: string, nullable: true }
         createdAt: { type: string }
+        receivedOn: { type: string, nullable: true }
+        actualLeadDays: { type: number, nullable: true }
         lines:
           type: array
           items: { $ref: "#/components/schemas/MaterialPoLine" }
@@ -1691,6 +1732,16 @@ components:
         to: { type: string }
         subject: { type: string }
         body: { type: string }
+    MaterialPoUpdateInput:
+      type: object
+      properties:
+        ltPoNumbers: { type: string, nullable: true }
+    MaterialPoUpdateResult:
+      type: object
+      required: [id, saved]
+      properties:
+        id: { type: string }
+        saved: { type: boolean }
     MaterialPoCreateResult:
       type: object
       required: [id, status, email]

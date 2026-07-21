@@ -659,6 +659,23 @@ export const GetDemandPurchasingResponse = zod.object({
       typicalRollFootageOverride: zod.number().nullish(),
       openTicketFootage: zod.number().optional(),
       openTicketCount: zod.number().optional(),
+      mfgSpecNum: zod.string().nullish(),
+      faceStock: zod.string().nullish(),
+      adhesive: zod.string().nullish(),
+      faceColor: zod.string().nullish(),
+      topCoat: zod.string().nullish(),
+      areaToWeightFactor: zod.number().optional(),
+      tickets: zod
+        .array(
+          zod.object({
+            ticketNumber: zod.string(),
+            estFootage: zod.number(),
+            stockIn: zod.string(),
+            shipByDate: zod.string().nullish(),
+            description: zod.string().nullish(),
+          }),
+        )
+        .optional(),
     }),
   ),
   ltWriteEnabled: zod.boolean(),
@@ -698,6 +715,8 @@ export const ListMaterialPosResponse = zod.object({
       ltPoNumbers: zod.string().nullish(),
       requestedDeliveryDate: zod.string().nullish(),
       createdAt: zod.string(),
+      receivedOn: zod.string().nullish(),
+      actualLeadDays: zod.number().nullish(),
       lines: zod.array(
         zod.object({
           stockId: zod.string(),
@@ -741,6 +760,22 @@ export const CreateMaterialPoResponse = zod.object({
     subject: zod.string(),
     body: zod.string(),
   }),
+});
+
+/**
+ * @summary Attach Label Traxx PO number(s) to a material PO
+ */
+export const UpdateMaterialPoParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateMaterialPoBody = zod.object({
+  ltPoNumbers: zod.string().nullish(),
+});
+
+export const UpdateMaterialPoResponse = zod.object({
+  id: zod.string(),
+  saved: zod.boolean(),
 });
 
 /**

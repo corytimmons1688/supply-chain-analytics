@@ -15,5 +15,7 @@ export interface MaterialPo {
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;
   createdAt: string;
+  receivedOn?: string | null;
+  actualLeadDays?: number | null;
   lines: MaterialPoLine[];
 }

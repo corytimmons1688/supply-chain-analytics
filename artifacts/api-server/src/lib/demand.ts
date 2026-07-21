@@ -300,12 +300,20 @@ export interface StockInfoRow {
   invMsiMinimum: number;
   invMsiMaximum: number;
   classification: string | null;
+  // PO-document spec fields (mirrors the Label Traxx PO form)
+  mfgSpecNum: string | null;
+  faceStock: string | null;
+  adhesive: string | null;
+  faceColor: string | null;
+  topCoat: string | null;
+  areaToWeightFactor: number;
 }
 
 export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
   const sql =
     "SELECT StockNum, SupplierName, CostMSI, FreightMSI, MasterWidth, EstimatedDeliveryTime, " +
-    "InvMSI_Minimum, InvMSI_Maximum, Classification FROM stock";
+    "InvMSI_Minimum, InvMSI_Maximum, Classification, MFGSpecNum, FaceStock, Adhesive, FaceColor, " +
+    "TopCoat, AreaToWeightFactor FROM stock";
   const rows = await runGatewaySql(sql);
   const out = new Map<string, StockInfoRow>();
   for (const row of rows) {
@@ -321,6 +329,12 @@ export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
       invMsiMinimum: pickNumber(row, "InvMSI_Minimum"),
       invMsiMaximum: pickNumber(row, "InvMSI_Maximum"),
       classification: pickString(row, "Classification")?.trim() || null,
+      mfgSpecNum: pickString(row, "MFGSpecNum")?.trim() || null,
+      faceStock: pickString(row, "FaceStock")?.trim() || null,
+      adhesive: pickString(row, "Adhesive")?.trim() || null,
+      faceColor: pickString(row, "FaceColor")?.trim() || null,
+      topCoat: pickString(row, "TopCoat")?.trim() || null,
+      areaToWeightFactor: pickNumber(row, "AreaToWeightFactor"),
     });
   }
   return out;
@@ -370,6 +384,31 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
       })(),
       shipByDate: rawShip ? rawShip.split(" ")[0] ?? null : null,
       description: pickString(row, "GeneralDescr")?.trim() || null,
+    });
+  }
+  return out;
+}
+
+/** Receipt status for specific Label Traxx PO numbers. */
+export async function fetchPoReceipts(
+  poNumbers: string[],
+): Promise<Map<string, { received: string | null; poDate: string | null }>> {
+  const out = new Map<string, { received: string | null; poDate: string | null }>();
+  const clean = [...new Set(poNumbers.map((n) => n.trim()).filter((n) => /^[0-9]+$/.test(n)))];
+  if (clean.length === 0) return out;
+  const sql =
+    "SELECT PONumber, PODate, Received FROM purchaseorder WHERE PONumber IN (" +
+    clean.map((n) => `'${n}'`).join(",") +
+    ")";
+  const rows = await runGatewaySql(sql);
+  for (const row of rows) {
+    const po = pickString(row, "PONumber")?.trim();
+    if (!po) continue;
+    const rec = normalizeLabelTraxxDate(pickString(row, "Received"));
+    const poDate = normalizeLabelTraxxDate(pickString(row, "PODate"));
+    out.set(po, {
+      received: rec && !isBlankDate(rec) ? rec : null,
+      poDate: poDate && !isBlankDate(poDate) ? poDate : null,
     });
   }
   return out;

@@ -5,6 +5,7 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { OpenTicket } from "./openTicket";
 
 export interface PurchasingItem {
   stockId: string;
@@ -23,4 +24,11 @@ export interface PurchasingItem {
   typicalRollFootageOverride?: number | null;
   openTicketFootage?: number;
   openTicketCount?: number;
+  mfgSpecNum?: string | null;
+  faceStock?: string | null;
+  adhesive?: string | null;
+  faceColor?: string | null;
+  topCoat?: string | null;
+  areaToWeightFactor?: number;
+  tickets?: OpenTicket[];
 }

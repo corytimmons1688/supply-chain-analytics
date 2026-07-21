@@ -8,6 +8,7 @@ import {
   getListMaterialPosQueryKey,
   useCreateMaterialPo,
   useSubmitMaterialPo,
+  useUpdateMaterialPo,
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
@@ -33,7 +34,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, CheckCircle2, Settings2 } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, CheckCircle2, Settings2, Printer, ExternalLink, X, PackageCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function fmt(n: number | null | undefined, digits = 0): string {
@@ -53,12 +54,125 @@ const TICKET_STATUS_COLORS: Record<string, string> = {
   Out: "#ef4444",
 };
 
+type PoDocLine = {
+  stockId: string;
+  description: string | null;
+  rolls: number;
+  footage: number | null;
+  msiCost: number | null;
+};
+
+/**
+ * Open a print-ready PO document styled after the Label Traxx stock PO form
+ * (header, supplier/ship-to blocks, per-material spec + roll table, MSI /
+ * weight / price totals). Print → Save as PDF.
+ */
+function openPoDocument(opts: {
+  poNumber: string;
+  vendorName: string;
+  vendorEmails: string | null;
+  orderedDate: string;
+  requestedDeliveryDate: string | null;
+  lines: PoDocLine[];
+  purchByStock: Map<string, PurchasingItem>;
+}) {
+  const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const num = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  let grandTotal = 0;
+
+  const sections = opts.lines
+    .map((l) => {
+      const it = opts.purchByStock.get(l.stockId);
+      const width = it?.masterWidth ?? 0;
+      const footagePerRoll = l.footage && l.rolls > 0 ? l.footage / l.rolls : 0;
+      const totalFootage = l.footage ?? 0;
+      const msi = width > 0 ? (totalFootage * 12 * width) / 1000 : 0;
+      const cost = l.msiCost ?? it?.msiCost ?? 0;
+      const price = msi * cost;
+      grandTotal += price;
+      const weight = it?.areaToWeightFactor ? msi / it.areaToWeightFactor : 0;
+      const rollRows = Array.from({ length: Math.min(l.rolls, 60) })
+        .map(
+          (_, i) =>
+            `<tr><td>${i + 1}</td><td>${num(footagePerRoll)}</td><td>${width || "—"}</td><td class="c">X</td></tr>`,
+        )
+        .join("");
+      return `
+      <div class="material">
+        <table class="spec">
+          <tr><th>Our Stock No.</th><td>${l.stockId}</td><th>MFG Spec. No.</th><td>${it?.mfgSpecNum ?? "—"}</td></tr>
+          <tr><th>Face Stock</th><td>${it?.faceStock ?? l.description ?? "—"}</td><th>Color</th><td>${it?.faceColor ?? "—"}</td></tr>
+          <tr><th>Adhesive</th><td>${it?.adhesive ?? "—"}</td><th>Top Coating</th><td>${it?.topCoat || "None"}</td></tr>
+          <tr><th>Master Width</th><td>${width ? `${width}"` : "—"}</td><th>Cost Per MSI</th><td>${cost ? money(cost) : "—"}</td></tr>
+          <tr><th>Ordered</th><td>${l.rolls} roll${l.rolls === 1 ? "" : "s"} · Exact Rolls</td><th>Req. Delivery</th><td>${opts.requestedDeliveryDate ?? "—"}</td></tr>
+        </table>
+        <table class="rolls">
+          <thead><tr><th>No.</th><th>Ordered (ft)</th><th>Width (in)</th><th>Exact</th></tr></thead>
+          <tbody>${rollRows}</tbody>
+        </table>
+        <p class="totals">
+          Total: ${num(totalFootage)} ft · Area (MSI): ${num(msi)}${weight ? ` · Weight: ${num(weight)} lb.` : ""} ·
+          <strong>Purchase Price: ${money(price)}</strong>
+        </p>
+      </div>`;
+    })
+    .join("");
+
+  const html = `<!doctype html><html><head><title>PO ${opts.poNumber} — ${opts.vendorName}</title>
+  <style>
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 11px; color: #111; margin: 32px; }
+    h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
+    .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 8px; }
+    .head table td { padding: 1px 8px 1px 0; }
+    .blocks { display: flex; gap: 32px; margin: 14px 0; }
+    .block { flex: 1; }
+    .block h3 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 2px; }
+    .material { margin-top: 14px; page-break-inside: avoid; }
+    table.spec { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+    table.spec th { text-align: left; font-size: 9px; text-transform: uppercase; color: #555; padding: 2px 6px 2px 0; width: 12%; }
+    table.spec td { padding: 2px 12px 2px 0; width: 38%; }
+    table.rolls { border-collapse: collapse; width: 60%; }
+    table.rolls th, table.rolls td { border: 1px solid #bbb; padding: 2px 8px; text-align: right; font-size: 10px; }
+    table.rolls th { background: #f0f0f0; font-size: 9px; text-transform: uppercase; }
+    table.rolls td.c { text-align: center; }
+    .totals { margin: 6px 0 0; }
+    .grand { margin-top: 16px; border-top: 2px solid #111; padding-top: 8px; text-align: right; font-size: 13px; }
+    .foot { margin-top: 24px; font-size: 10px; color: #444; }
+    @media print { body { margin: 12mm; } }
+  </style></head><body>
+  <div class="head">
+    <div><h1>PURCHASE ORDER</h1><div style="font-size:12px;margin-top:2px;">Calyx Containers</div></div>
+    <table>
+      <tr><td><strong>Purchase Order</strong></td><td>${opts.poNumber}</td></tr>
+      <tr><td><strong>Ordered</strong></td><td>${opts.orderedDate}</td></tr>
+      <tr><td><strong>Req. Delivery</strong></td><td>${opts.requestedDeliveryDate ?? "—"}</td></tr>
+      <tr><td><strong>Type</strong></td><td>New Order · Stock</td></tr>
+    </table>
+  </div>
+  <div class="blocks">
+    <div class="block"><h3>Supplier</h3>${opts.vendorName}${opts.vendorEmails ? `<br/>${opts.vendorEmails}` : ""}</div>
+    <div class="block"><h3>Ship To</h3>Calyx Containers<br/>1991 Parkway Blvd<br/>West Valley City, UT 84119<br/>USA<br/>1 (888) 432-7766</div>
+  </div>
+  ${sections}
+  <div class="grand"><strong>Total Purchase Price: ${money(grandTotal)}</strong></div>
+  <div class="foot">Cuts are in inches · Area (MSI) · Questions: ctimmons@calyxcontainers.com</div>
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));</script>
+  </body></html>`;
+
+  const w = window.open("", "_blank", "width=920,height=1100");
+  if (!w) return;
+  w.document.write(html);
+  w.document.close();
+}
+
 // ---------------------------------------------------------------------
 // Overview section: ticket-status donut + clickable on-hand vs open-ticket
 // requirements comparison chart.
 // ---------------------------------------------------------------------
 export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
+  const [unit, setUnit] = React.useState<"ft" | "usd">("ft");
+  const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
 
   const byStock = React.useMemo(() => {
@@ -73,20 +187,31 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
       .filter((it) => (it.openTicketFootage ?? 0) > 0)
       .map((it) => {
         const m = metricsByStock.get(it.stockId);
+        // footage → $ via MSI × (cost + freight); 0 when cost/width unknown
+        const rate =
+          it.msiCost != null && (it.masterWidth ?? 0) > 0
+            ? ((it.msiCost + (it.freightMsi ?? 0)) * 12 * (it.masterWidth ?? 0)) / 1000
+            : 0;
+        const cv = (ft: number) => (unit === "usd" ? Math.round(ft * rate) : Math.round(ft));
+        const shortFt = Math.max(0, (it.openTicketFootage ?? 0) - (m?.onHandFootage ?? 0) - (m?.openPoFootage ?? 0));
         return {
           stockId: it.stockId,
           name: `#${it.stockId}`,
           description: m?.description ?? it.classification ?? "",
-          onHand: Math.round(m?.onHandFootage ?? 0),
-          required: Math.round(it.openTicketFootage ?? 0),
-          onOrder: Math.round(m?.openPoFootage ?? 0),
-          short: Math.max(0, Math.round((it.openTicketFootage ?? 0) - (m?.onHandFootage ?? 0) - (m?.openPoFootage ?? 0))),
+          onHand: cv(m?.onHandFootage ?? 0),
+          required: cv(it.openTicketFootage ?? 0),
+          onOrder: cv(m?.openPoFootage ?? 0),
+          short: Math.round(shortFt),
+          shortUsd: Math.round(shortFt * rate),
         };
       })
       .sort((a, b) => b.required - a.required)
       .slice(0, 16);
     return entries;
-  }, [data, rows]);
+  }, [data, rows, unit]);
+
+  const uncoveredUsd = React.useMemo(() => chartData.reduce((s2, d) => s2 + d.shortUsd, 0), [chartData]);
+  const selectedItem = selectedStock ? (data?.items ?? []).find((it) => it.stockId === selectedStock) : null;
 
   const donutData = React.useMemo(
     () =>
@@ -143,11 +268,28 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             <div>
               <CardTitle className="text-base">On-Hand vs Open Ticket Requirements</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Footage by stock — click a bar to open the stock detail
+                {unit === "usd" ? "Material value" : "Footage"} by stock — click a bar to see its tickets
                 {shortCount > 0 && (
-                  <span className="text-red-600 dark:text-red-400 font-medium"> · {shortCount} short</span>
+                  <span className="text-red-600 dark:text-red-400 font-medium">
+                    {" "}· {shortCount} short{uncoveredUsd > 0 ? ` (~$${fmt(uncoveredUsd)} uncovered)` : ""}
+                  </span>
                 )}
               </p>
+            </div>
+            <div className="flex items-center rounded-md border overflow-hidden">
+              {(["ft", "usd"] as const).map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => setUnit(u)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs font-medium",
+                    unit === u ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {u === "ft" ? "Feet" : "$"}
+                </button>
+              ))}
             </div>
           </div>
         </CardHeader>
@@ -165,7 +307,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
                   onClick={(e) => {
                     const stockId = (e?.activePayload?.[0]?.payload as { stockId?: string } | undefined)?.stockId;
-                    if (stockId) navigate(`/demand/${stockId}`);
+                    if (stockId) setSelectedStock((prev) => (prev === stockId ? null : stockId));
                   }}
                   className="cursor-pointer"
                 >
@@ -173,7 +315,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${fmt(v / 1000)}k`} />
                   <YAxis type="category" dataKey="name" width={52} tick={{ fontSize: 11 }} />
                   <ReTooltip
-                    formatter={(v: number, name: string) => [`${fmt(v)} ft`, name]}
+                    formatter={(v: number, name: string) => [unit === "usd" ? `$${fmt(v)}` : `${fmt(v)} ft`, name]}
                     labelFormatter={(label: string) => {
                       const row = chartData.find((d) => d.name === label);
                       return row ? `${label} ${row.description}`.slice(0, 60) : label;
@@ -185,6 +327,63 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   <Bar isAnimationActive={false} dataKey="required" name="Open ticket requirement" fill="#6366f1" radius={[0, 3, 3, 0]} barSize={10} />
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+          )}
+          {selectedItem && (
+            <div className="mt-3 rounded-md border">
+              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/40">
+                <span className="text-xs font-semibold">
+                  Open tickets needing #{selectedItem.stockId} · {fmt(selectedItem.openTicketFootage)} ft across{" "}
+                  {selectedItem.openTicketCount} ticket{selectedItem.openTicketCount === 1 ? "" : "s"}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                    onClick={() => navigate(`/demand/${selectedItem.stockId}`)}
+                  >
+                    <ExternalLink className="w-3 h-3" /> Stock detail
+                  </button>
+                  <button
+                    type="button"
+                    title="Close"
+                    className="text-muted-foreground hover:text-foreground p-0.5"
+                    onClick={() => setSelectedStock(null)}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-muted-foreground">
+                      <th className="text-left px-3 py-1 font-medium">Ticket</th>
+                      <th className="text-left px-3 py-1 font-medium">Job</th>
+                      <th className="text-right px-3 py-1 font-medium">Footage</th>
+                      <th className="text-left px-3 py-1 font-medium">Stock status</th>
+                      <th className="text-right px-3 py-1 font-medium">Ship by</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(selectedItem.tickets ?? []).map((t) => (
+                      <tr key={t.ticketNumber} className="border-b last:border-b-0">
+                        <td className="px-3 py-1 font-medium">#{t.ticketNumber}</td>
+                        <td className="px-3 py-1 text-muted-foreground truncate max-w-[16rem]">{t.description ?? "—"}</td>
+                        <td className="px-3 py-1 text-right tabular-nums">{fmt(t.estFootage)} ft</td>
+                        <td className="px-3 py-1">
+                          <span
+                            className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
+                            style={{ background: TICKET_STATUS_COLORS[t.stockIn] ?? "#94a3b8" }}
+                          />
+                          {t.stockIn}
+                        </td>
+                        <td className="px-3 py-1 text-right tabular-nums">{t.shipByDate ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </CardContent>
@@ -227,6 +426,39 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
   const { data: poList } = useListMaterialPos({ query: { queryKey: getListMaterialPosQueryKey(), staleTime: 30_000 } });
   const createPo = useCreateMaterialPo();
   const submitPo = useSubmitMaterialPo();
+  const updatePo = useUpdateMaterialPo();
+
+  const purchByStock = React.useMemo(
+    () => new Map((purch?.items ?? []).map((it) => [it.stockId, it])),
+    [purch],
+  );
+
+  const printPo = (po: MaterialPo) =>
+    openPoDocument({
+      poNumber: po.ltPoNumbers || `DRAFT-${po.id.slice(0, 6).toUpperCase()}`,
+      vendorName: po.vendorName,
+      vendorEmails: po.vendorEmails ?? null,
+      orderedDate: new Date(po.createdAt).toLocaleDateString(),
+      requestedDeliveryDate: po.requestedDeliveryDate ?? null,
+      lines: po.lines.map((l) => ({
+        stockId: l.stockId,
+        description: l.description ?? null,
+        rolls: l.rolls,
+        footage: l.footage ?? null,
+        msiCost: l.msiCost ?? null,
+      })),
+      purchByStock,
+    });
+
+  const attachLtNumber = async (po: MaterialPo, value: string | null) => {
+    try {
+      await updatePo.mutateAsync({ id: po.id, data: { ltPoNumbers: value } });
+      await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
+      toast({ title: "LT PO linked", description: value ? `Tracking receipt of LT PO ${value}` : "Link cleared" });
+    } catch (e) {
+      toast({ title: "Failed", description: String(e), variant: "destructive" });
+    }
+  };
   const [lines, setLines] = React.useState<SuggestionLine[]>([]);
   const [emails, setEmails] = React.useState<Record<string, { to: string; subject: string; body: string; poId: string }>>({});
 
@@ -443,6 +675,17 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     >
                       <Send className="w-3.5 h-3.5" /> Submit PO{purch?.ltWriteEnabled ? " to Label Traxx" : ""}
                     </button>
+                    <span className="text-muted-foreground">·</span>
+                    <button
+                      type="button"
+                      className="text-primary hover:underline inline-flex items-center gap-1"
+                      onClick={() => {
+                        const po = poList?.items.find((p) => p.id === email.poId);
+                        if (po) printPo(po);
+                      }}
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Print PO PDF
+                    </button>
                   </div>
                 )}
               </CardContent>
@@ -458,7 +701,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           </CardHeader>
           <CardContent className="space-y-2">
             {poList!.items.map((po: MaterialPo) => (
-              <div key={po.id} className="flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+              <div key={po.id} className="flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-xs flex-wrap">
                 <div className="min-w-0">
                   <span className="font-medium">{po.vendorName}</span>{" "}
                   <span className="text-muted-foreground">
@@ -466,17 +709,46 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     {new Date(po.createdAt).toLocaleDateString()}
                     {po.requestedDeliveryDate && ` · due ${po.requestedDeliveryDate}`}
                   </span>
-                </div>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "shrink-0",
-                    po.status === "submitted_lt" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
-                    po.status === "submitted" && "bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/40",
+                  {po.status === "received" && (
+                    <div className="mt-0.5 text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1">
+                      <PackageCheck className="w-3.5 h-3.5" /> Received {po.receivedOn}
+                      {po.actualLeadDays != null && ` · ${po.actualLeadDays}d actual lead time`}
+                    </div>
                   )}
-                >
-                  {po.status === "submitted_lt" ? `In Label Traxx (${po.ltPoNumbers})` : po.status}
-                </Badge>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1">
+                    <span className="text-muted-foreground">LT PO #</span>
+                    <Input
+                      defaultValue={po.ltPoNumbers ?? ""}
+                      placeholder="—"
+                      className="h-6 w-20 text-xs"
+                      onBlur={(e) => {
+                        const v = e.target.value.trim() || null;
+                        if (v !== (po.ltPoNumbers ?? null)) void attachLtNumber(po, v);
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    title="Print PO document"
+                    className="text-primary hover:text-primary/80 p-1"
+                    onClick={() => printPo(po)}
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                  </button>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      po.status === "received" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
+                      po.status === "submitted_lt" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
+                      po.status === "submitted" && "bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/40",
+                    )}
+                  >
+                    {po.status === "submitted_lt" ? `In Label Traxx (${po.ltPoNumbers})` : po.status}
+                  </Badge>
+                </div>
               </div>
             ))}
           </CardContent>

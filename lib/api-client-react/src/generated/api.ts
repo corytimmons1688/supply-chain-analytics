@@ -71,6 +71,8 @@ import type {
   MaterialPoInput,
   MaterialPoList,
   MaterialPoSubmitResult,
+  MaterialPoUpdateInput,
+  MaterialPoUpdateResult,
   MonthlySnapshot,
   NetsuiteSyncResult,
   OnHandInventory,
@@ -2059,6 +2061,93 @@ export const useCreateMaterialPo = <
   TContext
 > => {
   return useMutation(getCreateMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Attach Label Traxx PO number(s) to a material PO
+ */
+export const getUpdateMaterialPoUrl = (id: string) => {
+  return `/api/demand/pos/${id}`;
+};
+
+export const updateMaterialPo = async (
+  id: string,
+  materialPoUpdateInput: MaterialPoUpdateInput,
+  options?: RequestInit,
+): Promise<MaterialPoUpdateResult> => {
+  return customFetch<MaterialPoUpdateResult>(getUpdateMaterialPoUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(materialPoUpdateInput),
+  });
+};
+
+export const getUpdateMaterialPoMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateMaterialPo>>,
+    TError,
+    { id: string; data: BodyType<MaterialPoUpdateInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateMaterialPo>>,
+  TError,
+  { id: string; data: BodyType<MaterialPoUpdateInput> },
+  TContext
+> => {
+  const mutationKey = ["updateMaterialPo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateMaterialPo>>,
+    { id: string; data: BodyType<MaterialPoUpdateInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateMaterialPo(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateMaterialPoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateMaterialPo>>
+>;
+export type UpdateMaterialPoMutationBody = BodyType<MaterialPoUpdateInput>;
+export type UpdateMaterialPoMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Attach Label Traxx PO number(s) to a material PO
+ */
+export const useUpdateMaterialPo = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateMaterialPo>>,
+    TError,
+    { id: string; data: BodyType<MaterialPoUpdateInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateMaterialPo>>,
+  TError,
+  { id: string; data: BodyType<MaterialPoUpdateInput> },
+  TContext
+> => {
+  return useMutation(getUpdateMaterialPoMutationOptions(options));
 };
 
 /**

@@ -10,6 +10,7 @@ import {
   fetchActiveStockIds,
   fetchStockInfo,
   fetchOpenTickets,
+  fetchPoReceipts,
   computeStockMetrics,
   bucketHistory,
   defaultDemandWindow,
@@ -355,6 +356,22 @@ router.get(
           typicalRollFootageOverride: goal?.typicalRollFootage ?? null,
           openTicketFootage: agg ? Math.round(agg.requiredFootage) : 0,
           openTicketCount: agg?.ticketCount ?? 0,
+          mfgSpecNum: info?.mfgSpecNum ?? null,
+          faceStock: info?.faceStock ?? null,
+          adhesive: info?.adhesive ?? null,
+          faceColor: info?.faceColor ?? null,
+          topCoat: info?.topCoat ?? null,
+          areaToWeightFactor: info?.areaToWeightFactor ?? 0,
+          tickets: (agg?.tickets ?? [])
+            .sort((a, b) => (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"))
+            .slice(0, 40)
+            .map((t) => ({
+              ticketNumber: t.ticketNumber,
+              estFootage: Math.round(t.estFootage),
+              stockIn: t.stockIn,
+              shipByDate: t.shipByDate,
+              description: t.description,
+            })),
         };
       })
       .sort((a, b) => a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
@@ -460,25 +477,52 @@ router.get(
       arr.push(l);
       linesByPo.set(l.poId, arr);
     }
+    // Receipt tracking: for POs linked to Label Traxx PO numbers, read the
+    // Received date live from LT and derive the actual lead time.
+    const allLtNumbers = pos.flatMap((po) => (po.ltPoNumbers ?? "").split(",").filter(Boolean));
+    let receipts = new Map<string, { received: string | null; poDate: string | null }>();
+    try {
+      receipts = await fetchPoReceipts(allLtNumbers);
+    } catch {
+      // gateway hiccup — show POs without receipt info rather than failing
+    }
     const items = pos
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .map((po) => ({
-        id: po.id,
-        vendorName: po.vendorName,
-        vendorEmails: po.vendorEmails,
-        status: po.status,
-        ltPoNumbers: po.ltPoNumbers,
-        requestedDeliveryDate: po.requestedDeliveryDate,
-        createdAt: po.createdAt.toISOString(),
-        lines: (linesByPo.get(po.id) ?? []).map((l) => ({
-          stockId: l.stockId,
-          description: l.description,
-          rolls: l.rolls,
-          footage: l.footage,
-          msiCost: l.msiCost,
-          estCost: l.estCost,
-        })),
-      }));
+      .map((po) => {
+        const nums = (po.ltPoNumbers ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+        const recs = nums.map((n) => receipts.get(n)).filter(Boolean) as {
+          received: string | null;
+          poDate: string | null;
+        }[];
+        const receivedDates = recs.map((r) => r.received).filter(Boolean) as string[];
+        const receivedOn =
+          nums.length > 0 && receivedDates.length === nums.length
+            ? receivedDates.sort().slice(-1)[0]!
+            : null;
+        const poDate = recs.map((r) => r.poDate).filter(Boolean).sort()[0] ?? po.createdAt.toISOString().slice(0, 10);
+        const actualLeadDays = receivedOn
+          ? Math.round((Date.parse(receivedOn) - Date.parse(poDate)) / 86_400_000)
+          : null;
+        return {
+          id: po.id,
+          vendorName: po.vendorName,
+          vendorEmails: po.vendorEmails,
+          status: receivedOn ? "received" : po.status,
+          ltPoNumbers: po.ltPoNumbers,
+          requestedDeliveryDate: po.requestedDeliveryDate,
+          createdAt: po.createdAt.toISOString(),
+          receivedOn,
+          actualLeadDays,
+          lines: (linesByPo.get(po.id) ?? []).map((l) => ({
+            stockId: l.stockId,
+            description: l.description,
+            rolls: l.rolls,
+            footage: l.footage,
+            msiCost: l.msiCost,
+            estCost: l.estCost,
+          })),
+        };
+      });
     res.json({ items, ltWriteEnabled: LT_WRITE_ENABLED });
   }),
 );
@@ -525,6 +569,23 @@ router.post(
       lines: lineValues,
     });
     res.json({ id: po!.id, status: "draft", email });
+  }),
+);
+
+/** Attach manually-entered Label Traxx PO number(s) to a PO record. */
+router.put(
+  "/demand/pos/:id",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const b = (req.body ?? {}) as { ltPoNumbers?: string | null };
+    if (!("ltPoNumbers" in b)) return void res.status(400).json({ error: "ltPoNumbers required" });
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
+    await db
+      .update(materialPoTable)
+      .set({ ltPoNumbers: b.ltPoNumbers?.trim() || null, updatedAt: new Date() })
+      .where(eq(materialPoTable.id, id));
+    res.json({ id, saved: true });
   }),
 );
 
