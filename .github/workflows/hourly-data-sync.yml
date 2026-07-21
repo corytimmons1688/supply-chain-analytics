@@ -1,0 +1,27 @@
+name: Hourly data sync
+
+# Refreshes NetSuite shipments/purchases, quality cases, and LabelTraxx lead
+# times in the production dashboard. Vercel's daily cron (06:30 UTC) is the
+# backup if Actions is down.
+on:
+  schedule:
+    - cron: "10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger sync endpoint
+        run: |
+          curl --silent --show-error --fail --max-time 290 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://supply-chain-analytics-delta.vercel.app/api/cron/netsuite-sync \
+            | tee sync-result.json
+      - name: Summarize
+        run: |
+          echo "### Sync result" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat sync-result.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

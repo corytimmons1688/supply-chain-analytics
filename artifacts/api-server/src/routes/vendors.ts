@@ -14,6 +14,7 @@ import {
   aslEntryTable,
   vendorQualityCaseTable,
   vendorAliasTable,
+  syncStateTable,
   type VendorRow,
   type VendorMetricRow,
 } from "@workspace/db";
@@ -827,7 +828,21 @@ router.get(
       };
     });
 
-    res.json({ view, periodStart: start, periodEnd: end, periodLabel: label, netsuiteConnected, labeltraxxConnected, items });
+    const [netsuiteSyncedAt, labeltraxxSyncedAt] = await Promise.all([
+      lastSyncedAt("netsuite"),
+      lastSyncedAt("labeltraxx"),
+    ]);
+    res.json({
+      view,
+      periodStart: start,
+      periodEnd: end,
+      periodLabel: label,
+      netsuiteConnected,
+      labeltraxxConnected,
+      netsuiteSyncedAt,
+      labeltraxxSyncedAt,
+      items,
+    });
   }),
 );
 
@@ -1267,7 +1282,12 @@ router.get(
     }
     try {
       const ping = await netsuitePing();
-      res.json({ configured: true, connected: true, vendorCount: ping.vendorCount });
+      res.json({
+        configured: true,
+        connected: true,
+        vendorCount: ping.vendorCount,
+        lastSyncedAt: await lastSyncedAt("netsuite"),
+      });
     } catch (e) {
       res.json({ configured: true, connected: false, error: e instanceof Error ? e.message : String(e) });
     }
@@ -1444,118 +1464,155 @@ router.delete(
   }),
 );
 
+// =====================================================================
+// SYNC ENGINE — shared by the POST sync routes and GET /cron/netsuite-sync.
+// Writes are batched (multi-row inserts) so a full sync completes in well
+// under a serverless invocation.
+// =====================================================================
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function recordSyncState(source: string, detail: unknown): Promise<void> {
+  const detailJson = JSON.stringify(detail);
+  await db
+    .insert(syncStateTable)
+    .values({ source, syncedAt: new Date(), detail: detailJson })
+    .onConflictDoUpdate({
+      target: syncStateTable.source,
+      set: { syncedAt: new Date(), detail: detailJson },
+    });
+}
+
+export async function lastSyncedAt(source: string): Promise<string | null> {
+  const rows = await db
+    .select()
+    .from(syncStateTable)
+    .where(eq(syncStateTable.source, source))
+    .limit(1);
+  return rows[0]?.syncedAt?.toISOString() ?? null;
+}
+
+export async function performNetsuiteSync() {
+  if (!netsuiteConfigured()) throw new Error("NetSuite credentials are not configured");
+  const { rows, truncated } = await fetchPurchaseShipments();
+  const vendors = await db.select().from(vendorTable);
+  const aliases = await loadAliasMap(vendors);
+
+  let unmatched = 0;
+  const unmatchedNames = new Set<string>();
+  const aliasHits = new Map<string, number>();
+  const bumpAlias = (norm: string) => aliasHits.set(norm, (aliasHits.get(norm) ?? 0) + 1);
+
+  // Shipments: dedupe by upsert key within the batch (Postgres rejects a
+  // multi-row upsert that touches the same key twice), then batch-upsert.
+  const shipmentValues = new Map<string, typeof vendorShipmentTable.$inferInsert>();
+  for (const r of rows) {
+    const vendor = matchVendor(r.vendorName, vendors, aliases, bumpAlias);
+    if (!vendor) {
+      unmatched++;
+      if (r.vendorName) unmatchedNames.add(r.vendorName);
+      continue;
+    }
+    const onTime =
+      r.customerDate != null && r.actualShipDate != null ? r.actualShipDate <= r.customerDate : null;
+    shipmentValues.set(`${vendor.id}:${r.orderId}`, {
+      vendorId: vendor.id,
+      orderNo: r.orderId,
+      customerDate: r.customerDate,
+      actualShipDate: r.actualShipDate,
+      onTime,
+      poDate: r.poDate,
+      qtyOrdered: r.qtyOrdered,
+      qtyShipped: r.qtyShipped,
+      source: "netsuite",
+    });
+  }
+  for (const batch of chunkArray([...shipmentValues.values()], 500)) {
+    await db
+      .insert(vendorShipmentTable)
+      .values(batch)
+      .onConflictDoUpdate({
+        target: [vendorShipmentTable.vendorId, vendorShipmentTable.orderNo],
+        set: {
+          customerDate: sql`excluded.customer_date`,
+          actualShipDate: sql`excluded.actual_ship_date`,
+          onTime: sql`excluded.on_time`,
+          poDate: sql`excluded.po_date`,
+          qtyOrdered: sql`excluded.qty_ordered`,
+          qtyShipped: sql`excluded.qty_shipped`,
+          syncedAt: new Date(),
+        },
+      });
+  }
+  const upserted = shipmentValues.size;
+
+  // Also refresh total-spend data: NetSuite Vendor Bills per vendor (all
+  // vendors, not just SO-linked), so bill-only vendors still show spend.
+  // Full mirror: clear prior NetSuite-sourced purchases, batch-insert fresh.
+  let purchasesUpserted = 0;
+  let purchasesTruncated = false;
+  try {
+    const { rows: purchaseRows, truncated: pTrunc } = await fetchVendorPurchases();
+    purchasesTruncated = pTrunc;
+    const purchaseValues = new Map<string, typeof vendorPurchaseTable.$inferInsert>();
+    for (const p of purchaseRows) {
+      const vendor = matchVendor(p.vendorName, vendors, aliases, bumpAlias);
+      if (!vendor) {
+        if (p.vendorName) unmatchedNames.add(p.vendorName);
+        continue;
+      }
+      purchaseValues.set(`${vendor.id}:${p.orderId}`, {
+        vendorId: vendor.id,
+        orderNo: p.orderId,
+        poDate: p.poDate,
+        amount: p.amount,
+        source: "netsuite",
+      });
+    }
+    await db.delete(vendorPurchaseTable).where(eq(vendorPurchaseTable.source, "netsuite"));
+    for (const batch of chunkArray([...purchaseValues.values()], 500)) {
+      await db.insert(vendorPurchaseTable).values(batch).onConflictDoNothing();
+    }
+    purchasesUpserted = purchaseValues.size;
+  } catch (e) {
+    console.warn(
+      "NetSuite vendor purchase fetch failed; total spend will be stale:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  await recordAliasHits(aliasHits);
+
+  const result = {
+    fetched: rows.length,
+    upserted,
+    unmatched,
+    truncated: truncated || purchasesTruncated,
+    purchasesUpserted,
+    unmatchedVendors: Array.from(unmatchedNames).slice(0, 50),
+  };
+  await recordSyncState("netsuite", result);
+  return result;
+}
+
 router.post(
   "/vendors/netsuite/sync",
   asyncHandler(async (_req, res) => {
     if (!netsuiteConfigured()) {
       return void res.status(400).json({ error: "NetSuite credentials are not configured" });
     }
-    const { rows, truncated } = await fetchPurchaseShipments();
-    const vendors = await db.select().from(vendorTable);
-    const aliases = await loadAliasMap(vendors);
-
-    let upserted = 0;
-    let unmatched = 0;
-    const unmatchedNames = new Set<string>();
-    const aliasHits = new Map<string, number>();
-    const bumpAlias = (norm: string) => aliasHits.set(norm, (aliasHits.get(norm) ?? 0) + 1);
-
-    for (const r of rows) {
-      const vendor = matchVendor(r.vendorName, vendors, aliases, bumpAlias);
-      if (!vendor) {
-        unmatched++;
-        if (r.vendorName) unmatchedNames.add(r.vendorName);
-        continue;
-      }
-      const onTime =
-        r.customerDate != null && r.actualShipDate != null ? r.actualShipDate <= r.customerDate : null;
-      await db
-        .insert(vendorShipmentTable)
-        .values({
-          vendorId: vendor.id,
-          orderNo: r.orderId,
-          customerDate: r.customerDate,
-          actualShipDate: r.actualShipDate,
-          onTime,
-          poDate: r.poDate,
-          qtyOrdered: r.qtyOrdered,
-          qtyShipped: r.qtyShipped,
-          source: "netsuite",
-        })
-        .onConflictDoUpdate({
-          target: [vendorShipmentTable.vendorId, vendorShipmentTable.orderNo],
-          set: {
-            customerDate: r.customerDate,
-            actualShipDate: r.actualShipDate,
-            onTime,
-            poDate: r.poDate,
-            qtyOrdered: r.qtyOrdered,
-            qtyShipped: r.qtyShipped,
-            syncedAt: new Date(),
-          },
-        });
-      upserted++;
-    }
-
-    // Also refresh total-spend data: NetSuite Vendor Bills per vendor (all
-    // vendors, not just SO-linked), so bill-only vendors still show spend.
-    let purchasesUpserted = 0;
-    let purchasesTruncated = false;
-    try {
-      const { rows: purchaseRows, truncated: pTrunc } = await fetchVendorPurchases();
-      purchasesTruncated = pTrunc;
-      // Full mirror of NetSuite: clear prior NetSuite-sourced purchases first so
-      // re-attribution (vendor name corrections) or removed POs can't leave
-      // stale rows that double-count spend.
-      await db.delete(vendorPurchaseTable).where(eq(vendorPurchaseTable.source, "netsuite"));
-      for (const p of purchaseRows) {
-        const vendor = matchVendor(p.vendorName, vendors, aliases, bumpAlias);
-        if (!vendor) {
-          if (p.vendorName) unmatchedNames.add(p.vendorName);
-          continue;
-        }
-        await db
-          .insert(vendorPurchaseTable)
-          .values({
-            vendorId: vendor.id,
-            orderNo: p.orderId,
-            poDate: p.poDate,
-            amount: p.amount,
-            source: "netsuite",
-          })
-          .onConflictDoUpdate({
-            target: [vendorPurchaseTable.vendorId, vendorPurchaseTable.orderNo],
-            set: { poDate: p.poDate, amount: p.amount, syncedAt: new Date() },
-          });
-        purchasesUpserted++;
-      }
-    } catch (e) {
-      console.warn(
-        "NetSuite vendor purchase fetch failed; total spend will be stale:",
-        e instanceof Error ? e.message : String(e),
-      );
-    }
-
-    await recordAliasHits(aliasHits);
-
-    res.json({
-      fetched: rows.length,
-      upserted,
-      unmatched,
-      truncated: truncated || purchasesTruncated,
-      purchasesUpserted,
-      unmatchedVendors: Array.from(unmatchedNames).slice(0, 50),
-    });
+    res.json(await performNetsuiteSync());
   }),
 );
 
 // Sync NetSuite support cases as vendor quality cases (READ-ONLY from NetSuite).
-router.post(
-  "/vendors/netsuite/quality-sync",
-  asyncHandler(async (_req, res) => {
-    if (!netsuiteConfigured()) {
-      return void res.status(400).json({ error: "NetSuite credentials are not configured" });
-    }
+export async function performQualitySync() {
+  if (!netsuiteConfigured()) throw new Error("NetSuite credentials are not configured");
+  {
     const rows = await fetchVendorQualityCases();
     const vendors = await db.select().from(vendorTable);
     const aliases = await loadAliasMap(vendors);
@@ -1612,12 +1669,24 @@ router.post(
 
     await recordAliasHits(aliasHits);
 
-    res.json({
+    const result = {
       fetched: rows.length,
       upserted,
       unmatched,
       unmatchedVendors: Array.from(unmatchedNames).slice(0, 50),
-    });
+    };
+    await recordSyncState("quality", result);
+    return result;
+  }
+}
+
+router.post(
+  "/vendors/netsuite/quality-sync",
+  asyncHandler(async (_req, res) => {
+    if (!netsuiteConfigured()) {
+      return void res.status(400).json({ error: "NetSuite credentials are not configured" });
+    }
+    res.json(await performQualitySync());
   }),
 );
 
@@ -1685,14 +1754,9 @@ function matchSupplier(
   return bestScore >= 0.5 ? best : null;
 }
 
-router.post(
-  "/vendors/labeltraxx/sync",
-  asyncHandler(async (req, res) => {
-    const since = s(req.query.since);
-    if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
-      return void res.status(400).json({ error: "since must be a YYYY-MM-DD date" });
-    }
-    const rows = await fetchPoLeadTimeRows(since ?? undefined);
+export async function performLabeltraxxSync(since?: string) {
+  {
+    const rows = await fetchPoLeadTimeRows(since);
     const vendors = await db.select().from(vendorTable);
     const normVendors: NormVendor[] = vendors.map((v) => {
       const norm = normSupplierName(v.name);
@@ -1706,6 +1770,8 @@ router.post(
     const aliasHits = new Map<string, number>();
     const bumpAlias = (norm: string) => aliasHits.set(norm, (aliasHits.get(norm) ?? 0) + 1);
 
+    // Dedupe by the upsert key (source is constant), then batch-upsert.
+    const leadTimeValues = new Map<string, typeof vendorLeadTimeTable.$inferInsert>();
     for (const r of rows) {
       const vendor = matchSupplier(r.supplierName, normVendors, aliases, bumpAlias);
       if (!vendor) {
@@ -1713,34 +1779,37 @@ router.post(
         unmatchedNames.set(r.supplierName, (unmatchedNames.get(r.supplierName) ?? 0) + 1);
         continue;
       }
+      leadTimeValues.set(r.poNumber, {
+        vendorId: vendor.id,
+        poNumber: r.poNumber,
+        supplierName: r.supplierName,
+        placedDate: r.placedDate,
+        receivedDate: r.receivedDate,
+        leadDays: r.leadDays,
+        orderedRolls: r.orderedRolls,
+        receivedRolls: r.receivedRolls,
+        source: "labeltraxx",
+      });
+    }
+    for (const batch of chunkArray([...leadTimeValues.values()], 500)) {
       await db
         .insert(vendorLeadTimeTable)
-        .values({
-          vendorId: vendor.id,
-          poNumber: r.poNumber,
-          supplierName: r.supplierName,
-          placedDate: r.placedDate,
-          receivedDate: r.receivedDate,
-          leadDays: r.leadDays,
-          orderedRolls: r.orderedRolls,
-          receivedRolls: r.receivedRolls,
-          source: "labeltraxx",
-        })
+        .values(batch)
         .onConflictDoUpdate({
           target: [vendorLeadTimeTable.source, vendorLeadTimeTable.poNumber],
           set: {
-            vendorId: vendor.id,
-            supplierName: r.supplierName,
-            placedDate: r.placedDate,
-            receivedDate: r.receivedDate,
-            leadDays: r.leadDays,
-            orderedRolls: r.orderedRolls,
-            receivedRolls: r.receivedRolls,
+            vendorId: sql`excluded.vendor_id`,
+            supplierName: sql`excluded.supplier_name`,
+            placedDate: sql`excluded.placed_date`,
+            receivedDate: sql`excluded.received_date`,
+            leadDays: sql`excluded.lead_days`,
+            orderedRolls: sql`excluded.ordered_rolls`,
+            receivedRolls: sql`excluded.received_rolls`,
             syncedAt: new Date(),
           },
         });
-      upserted++;
     }
+    upserted = leadTimeValues.size;
 
     const unmatchedSuppliers = [...unmatchedNames.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -1749,7 +1818,20 @@ router.post(
 
     await recordAliasHits(aliasHits);
 
-    res.json({ fetched: rows.length, upserted, unmatched, unmatchedSuppliers });
+    const result = { fetched: rows.length, upserted, unmatched, unmatchedSuppliers };
+    await recordSyncState("labeltraxx", result);
+    return result;
+  }
+}
+
+router.post(
+  "/vendors/labeltraxx/sync",
+  asyncHandler(async (req, res) => {
+    const since = s(req.query.since);
+    if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+      return void res.status(400).json({ error: "since must be a YYYY-MM-DD date" });
+    }
+    res.json(await performLabeltraxxSync(since ?? undefined));
   }),
 );
 

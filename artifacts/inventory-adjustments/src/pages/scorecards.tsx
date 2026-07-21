@@ -117,6 +117,19 @@ import type {
   VendorAliasEntry,
 } from "@workspace/api-client-react";
 
+/** "2h ago" style label for a sync timestamp; em dash when never synced. */
+function agoLabel(iso: string | null | undefined): string {
+  if (!iso) return "never synced";
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 const VIEWS: { value: ScorecardView; label: string }[] = [
   { value: "monthly", label: "Monthly" },
   { value: "quarterly", label: "Quarterly" },
@@ -500,6 +513,13 @@ export default function Scorecards() {
           </Button>
         </div>
       </div>
+
+      {data && (data.netsuiteSyncedAt || data.labeltraxxSyncedAt) && (
+        <p className="text-xs text-muted-foreground -mt-2">
+          Auto-synced hourly · NetSuite data {agoLabel(data.netsuiteSyncedAt)} · LabelTraxx lead
+          times {agoLabel(data.labeltraxxSyncedAt)}
+        </p>
+      )}
 
       {data && !data.netsuiteConnected && (
         <ConnectionBanner

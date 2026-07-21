@@ -327,6 +327,8 @@ export interface ScorecardResponse {
   periodEnd: string;
   periodLabel: string;
   netsuiteConnected?: boolean;
+  netsuiteSyncedAt?: string | null;
+  labeltraxxSyncedAt?: string | null;
   labeltraxxConnected?: boolean;
   items: Scorecard[];
 }

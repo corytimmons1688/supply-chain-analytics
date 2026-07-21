@@ -1546,6 +1546,8 @@ export const GetVendorScorecardsResponse = zod.object({
   periodEnd: zod.coerce.date(),
   periodLabel: zod.string(),
   netsuiteConnected: zod.boolean().optional(),
+  netsuiteSyncedAt: zod.string().nullish(),
+  labeltraxxSyncedAt: zod.string().nullish(),
   labeltraxxConnected: zod.boolean().optional(),
   items: zod.array(
     zod.object({

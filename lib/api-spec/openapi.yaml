@@ -1345,6 +1345,8 @@ components:
         periodEnd: { type: string, format: date }
         periodLabel: { type: string }
         netsuiteConnected: { type: boolean }
+        netsuiteSyncedAt: { type: string, nullable: true }
+        labeltraxxSyncedAt: { type: string, nullable: true }
         labeltraxxConnected: { type: boolean }
         items:
           type: array

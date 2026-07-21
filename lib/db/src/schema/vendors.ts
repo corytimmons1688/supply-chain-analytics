@@ -252,6 +252,15 @@ export const vendorLeadTimeTable = pgTable(
 
 // Approved Supplier List membership. A vendor can have up to two rows
 // (raw_materials and finished_goods).
+// Last successful sync per external source ('netsuite' | 'quality' | 'labeltraxx').
+// Lets the UI show data freshness and the cron report what it did.
+export const syncStateTable = pgTable("sync_state", {
+  source: text("source").primaryKey(),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  // JSON summary of the last run (counts, unmatched, etc.)
+  detail: text("detail"),
+});
+
 export const aslEntryTable = pgTable(
   "asl_entry",
   {

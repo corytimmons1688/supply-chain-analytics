@@ -1,9 +1,47 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
+import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
 
 const router: IRouter = Router();
+
+/** Bearer CRON_SECRET guard; responds 401 and returns false when rejected. */
+function cronAuthorized(req: Request, res: Response): boolean {
+  const secret = process.env["CRON_SECRET"];
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Scheduled data refresh (hourly via GitHub Actions, daily via Vercel Cron
+ * as backup): NetSuite shipments/purchases, quality cases, and LabelTraxx
+ * lead times. Each source fails independently.
+ */
+router.get("/cron/netsuite-sync", async (req, res, next) => {
+  try {
+    if (!cronAuthorized(req, res)) return;
+    const out: Record<string, unknown> = {};
+    for (const [name, run] of [
+      ["netsuite", performNetsuiteSync],
+      ["quality", performQualitySync],
+      ["labeltraxx", () => performLabeltraxxSync()],
+    ] as const) {
+      try {
+        out[name] = await run();
+      } catch (err) {
+        out[name] = { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    logger.info({ out }, "Scheduled data sync ran");
+    res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
 
 function mtParts(d: Date): { month: string; weekday: string } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -27,10 +65,7 @@ function mtParts(d: Date): { month: string; weekday: string } {
  */
 router.get("/cron/snapshots", async (req, res, next) => {
   try {
-    const secret = process.env["CRON_SECRET"];
-    if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-      return void res.status(401).json({ error: "Unauthorized" });
-    }
+    if (!cronAuthorized(req, res)) return;
 
     const now = new Date();
     const today = mtParts(now);
