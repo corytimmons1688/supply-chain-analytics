@@ -665,6 +665,15 @@ export const GetDemandPurchasingResponse = zod.object({
       faceColor: zod.string().nullish(),
       topCoat: zod.string().nullish(),
       areaToWeightFactor: zod.number().optional(),
+      widthsOnHand: zod
+        .array(
+          zod.object({
+            width: zod.number(),
+            footage: zod.number(),
+            rolls: zod.number(),
+          }),
+        )
+        .optional(),
       tickets: zod
         .array(
           zod.object({

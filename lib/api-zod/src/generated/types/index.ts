@@ -135,3 +135,4 @@ export * from "./vendorShipment";
 export * from "./vendorTrendPoint";
 export * from "./vendorTrendResponse";
 export * from "./weeklySnapshot";
+export * from "./widthOnHand";

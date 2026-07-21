@@ -389,6 +389,36 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
   return out;
 }
 
+export interface OnHandWidthRow {
+  width: number;
+  footage: number;
+  rolls: number;
+}
+
+/** On-hand inventory broken out by roll width per stock (production planning). */
+export async function fetchOnHandByWidth(): Promise<Map<string, OnHandWidthRow[]>> {
+  // SUM(x * 1.0) forces a float — plain COUNT/SUM come back as BigInt, which
+  // the gateway cannot serialize.
+  const sql =
+    "SELECT StockNum, Width, SUM(FootLength * 1.0) AS footage, SUM(1.0) AS rolls FROM rollstock " +
+    "WHERE DateRollUsed < {d '1900-01-01'} GROUP BY StockNum, Width";
+  const rows = await runGatewaySql(sql);
+  const out = new Map<string, OnHandWidthRow[]>();
+  for (const row of rows) {
+    const stockId = pickString(row, "StockNum")?.trim();
+    if (!stockId) continue;
+    const arr = out.get(stockId) ?? [];
+    arr.push({
+      width: pickNumber(row, "Width"),
+      footage: pickNumber(row, "footage"),
+      rolls: pickNumber(row, "rolls"),
+    });
+    out.set(stockId, arr);
+  }
+  for (const arr of out.values()) arr.sort((a, b) => a.width - b.width);
+  return out;
+}
+
 /** Receipt status for specific Label Traxx PO numbers. */
 export async function fetchPoReceipts(
   poNumbers: string[],

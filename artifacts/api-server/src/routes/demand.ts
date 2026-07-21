@@ -11,6 +11,7 @@ import {
   fetchStockInfo,
   fetchOpenTickets,
   fetchPoReceipts,
+  fetchOnHandByWidth,
   computeStockMetrics,
   bucketHistory,
   defaultDemandWindow,
@@ -306,11 +307,12 @@ function parseEmails(raw: string | null | undefined): string[] {
 router.get(
   "/demand/purchasing",
   asyncHandler(async (_req, res) => {
-    const [stockInfo, tickets, goalRows, activeStockIds] = await Promise.all([
+    const [stockInfo, tickets, goalRows, activeStockIds, widthsByStock] = await Promise.all([
       fetchStockInfo(),
       fetchOpenTickets(),
       db.select().from(stockGoalTable),
       fetchActiveStockIds(),
+      fetchOnHandByWidth(),
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
 
@@ -362,6 +364,11 @@ router.get(
           faceColor: info?.faceColor ?? null,
           topCoat: info?.topCoat ?? null,
           areaToWeightFactor: info?.areaToWeightFactor ?? 0,
+          widthsOnHand: (widthsByStock.get(stockId) ?? []).map((w) => ({
+            width: w.width,
+            footage: Math.round(w.footage),
+            rolls: w.rolls,
+          })),
           tickets: (agg?.tickets ?? [])
             .sort((a, b) => (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"))
             .slice(0, 40)

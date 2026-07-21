@@ -51,8 +51,20 @@ const TICKET_STATUS_COLORS: Record<string, string> = {
   In: "#22c55e",
   Ordered: "#38bdf8",
   "Ordered Not Confirmed": "#a78bfa",
-  Out: "#ef4444",
+  Out: "#4338ca",
+  "Not Evaluated": "#94a3b8",
+  "Without Tickets": "#9ca3af",
 };
+
+// Worst-first severity when a material has tickets in mixed statuses.
+const STATUS_RANK: Record<string, number> = {
+  Out: 0,
+  "Ordered Not Confirmed": 1,
+  Ordered: 2,
+  "Not Evaluated": 3,
+  In: 4,
+};
+const STATUS_BY_RANK: Record<number, string> = { 0: "Out", 1: "Ordered Not Confirmed", 2: "Ordered", 3: "Not Evaluated", 4: "In" };
 
 type PoDocLine = {
   stockId: string;
@@ -231,6 +243,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
   const [unit, setUnit] = React.useState<"ft" | "usd">("ft");
   const [widthFilter, setWidthFilter] = React.useState<string>("all");
+  const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
 
@@ -282,6 +295,77 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const uncoveredUsd = React.useMemo(() => chartData.reduce((s2, d) => s2 + d.shortUsd, 0), [chartData]);
   const selectedItem = selectedStock ? (data?.items ?? []).find((it) => it.stockId === selectedStock) : null;
 
+  // Per-stock totals for hover cards and the drill-down strip (unit-aware).
+  const totalsById = React.useMemo(() => {
+    const metricsByStock = new Map(rows.map((r) => [r.stockId, r]));
+    const m2 = new Map<
+      string,
+      { onHand: number; onOrder: number; required: number; available: number; min: number; max: number }
+    >();
+    for (const it of data?.items ?? []) {
+      const m = metricsByStock.get(it.stockId);
+      const rate =
+        it.msiCost != null && (it.masterWidth ?? 0) > 0
+          ? ((it.msiCost + (it.freightMsi ?? 0)) * 12 * (it.masterWidth ?? 0)) / 1000
+          : 0;
+      const cv = (ft: number) => (unit === "usd" ? Math.round(ft * rate) : Math.round(ft));
+      const availableFt = (m?.onHandFootage ?? 0) + (m?.openPoFootage ?? 0) - (it.openTicketFootage ?? 0);
+      m2.set(it.stockId, {
+        onHand: cv(m?.onHandFootage ?? 0),
+        onOrder: cv(m?.openPoFootage ?? 0),
+        required: cv(it.openTicketFootage ?? 0),
+        available: cv(availableFt),
+        min: cv(m?.reorderPointFootage ?? 0),
+        max: cv(m?.maxFootage ?? 0),
+      });
+    }
+    return m2;
+  }, [data, rows, unit]);
+
+  // One row per material; one bar per roll WIDTH on hand (production view).
+  const summaryRows = React.useMemo(() => {
+    const metricsByStock = new Map(rows.map((r) => [r.stockId, r]));
+    return (data?.items ?? [])
+      .map((it) => {
+        const hasTix = (it.openTicketCount ?? 0) > 0;
+        let status = "Without Tickets";
+        if (hasTix) {
+          let best = 99;
+          for (const t of it.tickets ?? []) {
+            const rk = STATUS_RANK[t.stockIn] ?? 3;
+            if (rk < best) best = rk;
+          }
+          status = STATUS_BY_RANK[best] ?? "In";
+        }
+        let segs = (it.widthsOnHand ?? []).filter(
+          (w) => widthFilter === "all" || String(w.width) === widthFilter,
+        );
+        // Out-of-stock materials with open tickets still get a zero bar so
+        // production sees the gap.
+        if (segs.length === 0 && hasTix && (it.widthsOnHand ?? []).length === 0) {
+          const mw = it.masterWidth ?? 0;
+          if (widthFilter === "all" || String(mw) === widthFilter) {
+            segs = [{ width: mw, footage: 0, rolls: 0 }];
+          }
+        }
+        return {
+          stockId: it.stockId,
+          description: metricsByStock.get(it.stockId)?.description ?? it.classification ?? "",
+          status,
+          noTickets: !hasTix,
+          segs,
+        };
+      })
+      .filter((r) => r.segs.length > 0)
+      .filter((r) => !statusFilter || r.status === statusFilter)
+      .sort((a, b) => a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
+  }, [data, rows, widthFilter, statusFilter]);
+
+  const maxSegFootage = React.useMemo(
+    () => Math.max(1, ...summaryRows.flatMap((r) => r.segs.map((sg) => sg.footage))),
+    [summaryRows],
+  );
+
   const donutData = React.useMemo(
     () =>
       Object.entries(data?.statusCounts ?? {})
@@ -303,7 +387,8 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             <Ticket className="w-4 h-4 text-muted-foreground" /> Open Ticket Stock Status
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Label Traxx material availability across {totalTickets} open tickets
+            Label Traxx material availability across {totalTickets} open tickets · click a status to
+            filter the materials
           </p>
         </CardHeader>
         <CardContent>
@@ -318,9 +403,17 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   outerRadius={85}
                   paddingAngle={2}
                   isAnimationActive={false}
+                  className="cursor-pointer"
+                  onClick={(d: { name?: string }) =>
+                    d?.name && setStatusFilter((prev) => (prev === d.name ? null : d.name!))
+                  }
                 >
                   {donutData.map((d) => (
-                    <Cell key={d.name} fill={TICKET_STATUS_COLORS[d.name] ?? "#94a3b8"} />
+                    <Cell
+                      key={d.name}
+                      fill={TICKET_STATUS_COLORS[d.name] ?? "#94a3b8"}
+                      opacity={statusFilter && statusFilter !== d.name ? 0.3 : 1}
+                    />
                   ))}
                 </Pie>
                 <ReTooltip formatter={(v: number, n: string) => [`${v} tickets`, n]} />
@@ -335,13 +428,23 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <CardTitle className="text-base">On-Hand vs Open Ticket Requirements</CardTitle>
+              <CardTitle className="text-base">Stock Inventory Summary</CardTitle>
               <p className="text-xs text-muted-foreground">
-                {unit === "usd" ? "Material value" : "Footage"} by stock — click a bar to see its tickets
+                Roll widths on hand per material, colored by ticket status — click a material for its
+                tickets
                 {shortCount > 0 && (
                   <span className="text-red-600 dark:text-red-400 font-medium">
                     {" "}· {shortCount} short{uncoveredUsd > 0 ? ` (~$${fmt(uncoveredUsd)} uncovered)` : ""}
                   </span>
+                )}
+                {statusFilter && (
+                  <button
+                    type="button"
+                    className="ml-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] hover:bg-accent"
+                    onClick={() => setStatusFilter(null)}
+                  >
+                    {statusFilter} <X className="w-2.5 h-2.5" />
+                  </button>
                 )}
               </p>
             </div>
@@ -378,33 +481,97 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
           </div>
         </CardHeader>
         <CardContent>
-          {chartData.length === 0 ? (
+          {summaryRows.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
-              No open tickets with material requirements.
+              No materials match the current filters.
             </p>
           ) : (
-            <div style={{ height: Math.max(240, chartData.length * 34) }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={chartData}
-                  layout="vertical"
-                  margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
-                  onClick={(e) => {
-                    const stockId = (e?.activePayload?.[0]?.payload as { stockId?: string } | undefined)?.stockId;
-                    if (stockId) setSelectedStock((prev) => (prev === stockId ? null : stockId));
-                  }}
-                  className="cursor-pointer"
-                >
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="currentColor" opacity={0.1} />
-                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${fmt(v / 1000)}k`} />
-                  <YAxis type="category" dataKey="name" width={92} tick={{ fontSize: 10 }} />
-                  <ReTooltip content={<CompareTooltip unit={unit} />} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} iconSize={9} />
-                  <Bar isAnimationActive={false} dataKey="onHand" name="On hand" fill="#22c55e" radius={[0, 3, 3, 0]} barSize={10} />
-                  <Bar isAnimationActive={false} dataKey="onOrder" name="On order (open PO)" fill="#38bdf8" radius={[0, 3, 3, 0]} barSize={10} />
-                  <Bar isAnimationActive={false} dataKey="required" name="Open ticket requirement" fill="#6366f1" radius={[0, 3, 3, 0]} barSize={10} />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="max-h-[26rem] overflow-y-auto rounded-md border divide-y">
+              {summaryRows.map((r) => {
+                const totals = totalsById.get(r.stockId);
+                return (
+                  <div
+                    key={r.stockId}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedStock((prev) => (prev === r.stockId ? null : r.stockId))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") setSelectedStock((prev) => (prev === r.stockId ? null : r.stockId));
+                    }}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-1.5 cursor-pointer hover:bg-accent/40",
+                      selectedStock === r.stockId && "bg-accent/50",
+                    )}
+                  >
+                    <div className="w-28 shrink-0">
+                      <div className="text-xs font-semibold">#{r.stockId}</div>
+                      <div className="text-[10px] text-muted-foreground truncate" title={r.description}>
+                        {r.description}
+                      </div>
+                    </div>
+                    <div className="flex-1 flex items-center gap-1.5 flex-wrap py-0.5">
+                      {r.segs.map((sg) => (
+                        <div key={`${r.stockId}-${sg.width}`} className="relative group">
+                          <div
+                            className="relative h-6 rounded-sm flex items-center justify-center text-[11px] font-semibold text-white overflow-hidden"
+                            style={{
+                              width: Math.max(56, (sg.footage / maxSegFootage) * 300),
+                              background: TICKET_STATUS_COLORS[r.status] ?? "#94a3b8",
+                            }}
+                          >
+                            {sg.width > 0 ? `${sg.width}"` : "0 ft"}
+                            {r.noTickets && (
+                              <span className="absolute top-0 right-0 w-0 h-0 border-t-[9px] border-l-[9px] border-t-red-400 border-l-transparent" />
+                            )}
+                          </div>
+                          <div className="pointer-events-none absolute z-30 hidden group-hover:block top-7 left-0 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]">
+                            <div className="font-semibold">
+                              #{r.stockId} · {sg.width > 0 ? `${sg.width}" wide` : "no stock"} · {r.status}
+                              {r.noTickets && " (no open tickets)"}
+                            </div>
+                            <div className="text-muted-foreground mb-1.5">
+                              {fmt(sg.footage)} ft on hand at this width · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"}
+                            </div>
+                            {totals && (
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                <div>
+                                  <span className="text-muted-foreground">In Inventory</span>
+                                  <div className="font-semibold tabular-nums">
+                                    {unit === "usd" ? `$${fmt(totals.onHand)}` : `${fmt(totals.onHand)} ft`}
+                                  </div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Ordered</span>
+                                  <div className="font-semibold tabular-nums">
+                                    {unit === "usd" ? `$${fmt(totals.onOrder)}` : `${fmt(totals.onOrder)} ft`}
+                                  </div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Required</span>
+                                  <div className="font-semibold tabular-nums">
+                                    {unit === "usd" ? `$${fmt(totals.required)}` : `${fmt(totals.required)} ft`}
+                                  </div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Available</span>
+                                  <div
+                                    className={cn(
+                                      "font-semibold tabular-nums",
+                                      totals.available < 0 && "text-red-600 dark:text-red-400",
+                                    )}
+                                  >
+                                    {unit === "usd" ? `$${fmt(totals.available)}` : `${fmt(totals.available)} ft`}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           {selectedItem && (
@@ -435,7 +602,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                 </div>
               </div>
               {(() => {
-                const d = chartData.find((c) => c.stockId === selectedItem.stockId);
+                const d = totalsById.get(selectedItem.stockId);
                 if (!d) return null;
                 const u = (n: number) => (unit === "usd" ? `$${fmt(n)}` : `${fmt(n)} ft`);
                 const stat = (label: string, value: React.ReactNode) => (

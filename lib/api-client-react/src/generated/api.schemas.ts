@@ -479,6 +479,12 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface WidthOnHand {
+  width: number;
+  footage: number;
+  rolls: number;
+}
+
 export interface OpenTicket {
   ticketNumber: string;
   estFootage: number;
@@ -510,6 +516,7 @@ export interface PurchasingItem {
   faceColor?: string | null;
   topCoat?: string | null;
   areaToWeightFactor?: number;
+  widthsOnHand?: WidthOnHand[];
   tickets?: OpenTicket[];
 }
 

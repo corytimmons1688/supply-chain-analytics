@@ -1642,9 +1642,19 @@ components:
         faceColor: { type: string, nullable: true }
         topCoat: { type: string, nullable: true }
         areaToWeightFactor: { type: number }
+        widthsOnHand:
+          type: array
+          items: { $ref: "#/components/schemas/WidthOnHand" }
         tickets:
           type: array
           items: { $ref: "#/components/schemas/OpenTicket" }
+    WidthOnHand:
+      type: object
+      required: [width, footage, rolls]
+      properties:
+        width: { type: number }
+        footage: { type: number }
+        rolls: { type: number }
     OpenTicket:
       type: object
       required: [ticketNumber, estFootage, stockIn]
