@@ -799,6 +799,7 @@ export const SubmitMaterialPoResponse = zod.object({
   status: zod.string(),
   ltPoNumbers: zod.array(zod.string()).optional(),
   ltWriteEnabled: zod.boolean(),
+  ltError: zod.string().nullish(),
   email: zod.object({
     to: zod.string(),
     subject: zod.string(),

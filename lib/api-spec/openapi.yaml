@@ -1769,6 +1769,7 @@ components:
           type: array
           items: { type: string }
         ltWriteEnabled: { type: boolean }
+        ltError: { type: string, nullable: true }
         email: { $ref: "#/components/schemas/PoEmail" }
     GatewayHealth:
       type: object

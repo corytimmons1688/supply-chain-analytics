@@ -1,4 +1,5 @@
-import { runGatewaySql, pickString, pickNumber } from "./gateway";
+import { db, ltRollTable, ltPoTable } from "@workspace/db";
+import { and, gte, isNotNull } from "drizzle-orm";
 
 // =====================================================================
 // Label Traxx purchase-order lead-time source (READ-ONLY).
@@ -9,9 +10,8 @@ import { runGatewaySql, pickString, pickNumber } from "./gateway";
 // (PODate -> Received), never true on-time. This feeds the vendor scorecard as
 // an extra metric alongside the NetSuite on-time figure.
 //
-// We NEVER write to Label Traxx — all access is read-only SELECTs through the
-// ODBC gateway. Queries are chunked by Received month to dodge the gateway's
-// 1000-row result cap.
+// Reads come from the lt_po / lt_roll Postgres mirrors (synced from the LT
+// Cloud API — see lib/lt-sync.ts).
 // =====================================================================
 
 // ---- minimal date helpers (kept local; mirror demand.ts conventions) ----
@@ -88,47 +88,27 @@ export interface PoLeadTimeRow {
 }
 
 /**
- * Count the distinct *master* rolls received per PO. Slit children share a
- * parent via `Orig_RollID` (or an `IDNumber` like "6184-A" -> "6184"), so we
- * dedupe to avoid slitting inflating the count above the rolls ordered. Mirrors
- * demand.fetchPoRolls' identifier logic. Chunked by StkDate month to dodge the
- * gateway 1000-row cap. READ-ONLY.
+ * Count the distinct *master* rolls received per PO, from the lt_roll mirror.
+ * The LT API does not expose Orig_RollID, so slit children are rolled up by
+ * stripping a single "-X" suffix from the roll id (same fallback the ODBC
+ * path used).
  */
 async function fetchReceivedRollCounts(sinceIso: string): Promise<Map<string, number>> {
-  const ranges = eachMonthRange(sinceIso, todayIso());
-  const chunks = await Promise.all(
-    ranges.map(async (r) => {
-      const sql =
-        "SELECT PONumber, FootLength, IDNumber, Orig_RollID FROM rollstock " +
-        `WHERE PONumber IS NOT NULL AND StkDate >= {d '${r.from}'} AND StkDate <= {d '${r.to}'}`;
-      const rows = await runGatewaySql(sql);
-      if (rows.length >= 1000) {
-        // eslint-disable-next-line no-console
-        console.warn(`[labeltraxxPo.fetchReceivedRollCounts] chunk ${r.from}..${r.to} hit row cap (${rows.length})`);
-      }
-      return rows;
-    }),
-  );
+  const rows = await db
+    .select({ rollId: ltRollTable.rollId, poNumber: ltRollTable.poNumber, length: ltRollTable.length })
+    .from(ltRollTable)
+    .where(and(isNotNull(ltRollTable.poNumber), isNotNull(ltRollTable.stockDate), gte(ltRollTable.stockDate, sinceIso)));
   const perPo = new Map<string, Set<string>>();
-  let unkSeq = 0;
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const poNumber = pickString(row, "PONumber");
-      if (!poNumber) continue;
-      if (pickNumber(row, "FootLength") <= 0) continue;
-      const orig = pickString(row, "Orig_RollID");
-      const idn = pickString(row, "IDNumber");
-      let key = orig && orig.trim() ? orig.trim() : "";
-      if (!key && idn && idn.trim()) {
-        const t = idn.trim();
-        const m = t.match(/^(.+)-[A-Za-z0-9]+$/);
-        key = m ? m[1]! : t;
-      }
-      if (!key) key = `__unk:${poNumber}:${(unkSeq += 1)}`;
-      let set = perPo.get(poNumber);
-      if (!set) perPo.set(poNumber, (set = new Set<string>()));
-      set.add(key);
-    }
+  for (const row of rows) {
+    const poNumber = row.poNumber;
+    if (!poNumber) continue;
+    if ((row.length ?? 0) <= 0) continue;
+    const t = row.rollId.trim();
+    const m = t.match(/^(.+)-[A-Za-z0-9]+$/);
+    const key = m ? m[1]! : t;
+    let set = perPo.get(poNumber);
+    if (!set) perPo.set(poNumber, (set = new Set<string>()));
+    set.add(key);
   }
   const counts = new Map<string, number>();
   for (const [po, set] of perPo) counts.set(po, set.size);
@@ -137,58 +117,38 @@ async function fetchReceivedRollCounts(sinceIso: string): Promise<Map<string, nu
 
 /**
  * Received POs with a usable lead time, attributed to their Label Traxx
- * `Supplier`. Default lookback 730 days (2 years) so trend charts have history.
- * Chunked by Received month to dodge the gateway 1000-row cap.
+ * supplier. Default lookback 730 days (2 years) so trend charts have history.
+ * Reads the lt_po mirror.
  */
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function fetchPoLeadTimeRows(sinceIso?: string): Promise<PoLeadTimeRow[]> {
-  // Defense in depth: `since` is interpolated into SQL date literals, so accept
-  // ONLY a strict YYYY-MM-DD value; anything else falls back to the default.
   const since = sinceIso && ISO_DATE.test(sinceIso) ? sinceIso : addDaysIso(todayIso(), -730);
-  const ranges = eachMonthRange(since, todayIso());
-  const [chunks, rollCounts] = await Promise.all([
-    Promise.all(
-      ranges.map(async (r) => {
-        const sql =
-          "SELECT PONumber, PODate, Received, Supplier, POType, Quantity FROM purchaseorder " +
-          `WHERE PONumber IS NOT NULL AND Received >= {d '${r.from}'} AND Received <= {d '${r.to}'}`;
-        const rows = await runGatewaySql(sql);
-        if (rows.length >= 1000) {
-          // eslint-disable-next-line no-console
-          console.warn(`[labeltraxxPo.fetchPoLeadTimeRows] chunk ${r.from}..${r.to} hit row cap (${rows.length})`);
-        }
-        return rows;
-      }),
-    ),
+  const [rows, rollCounts] = await Promise.all([
+    db
+      .select()
+      .from(ltPoTable)
+      .where(and(isNotNull(ltPoTable.receivedDate), gte(ltPoTable.receivedDate, since))),
     fetchReceivedRollCounts(since),
   ]);
   const out: PoLeadTimeRow[] = [];
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const poNumber = pickString(row, "PONumber");
-      if (!poNumber) continue;
-      const supplier = (pickString(row, "Supplier") ?? "").trim();
-      if (!supplier || INTERNAL_SUPPLIERS.has(supplier.toLowerCase())) continue;
-      const placed = normalizeLabelTraxxDate(pickString(row, "PODate"));
-      const received = normalizeLabelTraxxDate(pickString(row, "Received"));
-      if (!placed || !received || isBlankDate(placed) || isBlankDate(received)) continue;
-      const days = diffDays(placed, received);
-      if (days <= 0 || days > 365) continue; // sanity bounds
-      const orderedRollsRaw = Math.round(pickNumber(row, "Quantity"));
-      const orderedRolls = orderedRollsRaw > 0 ? orderedRollsRaw : null;
-      const receivedRolls = rollCounts.get(poNumber) ?? null;
-      out.push({
-        poNumber,
-        supplierName: supplier,
-        placedDate: placed,
-        receivedDate: received,
-        leadDays: Math.round(days),
-        poType: pickString(row, "POType"),
-        orderedRolls,
-        receivedRolls,
-      });
-    }
+  for (const row of rows) {
+    const supplier = (row.supplierName ?? "").trim();
+    if (!supplier || INTERNAL_SUPPLIERS.has(supplier.toLowerCase())) continue;
+    if (!row.poDate || !row.receivedDate) continue;
+    const days = diffDays(row.poDate, row.receivedDate);
+    if (days <= 0 || days > 365) continue; // sanity bounds
+    const orderedRollsRaw = Math.round(row.quantity ?? 0);
+    out.push({
+      poNumber: row.poNumber,
+      supplierName: supplier,
+      placedDate: row.poDate,
+      receivedDate: row.receivedDate,
+      leadDays: Math.round(days),
+      poType: row.poType,
+      orderedRolls: orderedRollsRaw > 0 ? orderedRollsRaw : null,
+      receivedRolls: rollCounts.get(row.poNumber) ?? null,
+    });
   }
   return out;
 }

@@ -3,6 +3,7 @@ import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
+import { performLtApiSync } from "../lib/lt-sync";
 
 const router: IRouter = Router();
 
@@ -24,10 +25,15 @@ function cronAuthorized(req: Request, res: Response): boolean {
 router.get("/cron/netsuite-sync", async (req, res, next) => {
   try {
     if (!cronAuthorized(req, res)) return;
+    // The 06:00-07:00 UTC run (Vercel's daily backup cron) is the nightly
+    // "full" LT sync that also refreshes the complete used-roll history.
+    const fullLtSync = new Date().getUTCHours() === 6;
     const out: Record<string, unknown> = {};
     for (const [name, run] of [
       ["netsuite", performNetsuiteSync],
       ["quality", performQualitySync],
+      // Refresh the LT mirror BEFORE the vendor lead-time sync, which reads it.
+      ["labeltraxxApi", () => performLtApiSync({ full: fullLtSync })],
       ["labeltraxx", () => performLabeltraxxSync()],
     ] as const) {
       try {

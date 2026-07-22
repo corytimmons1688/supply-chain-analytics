@@ -18,6 +18,7 @@
 //   export type Post = typeof postsTable.$inferSelect;
 
 export * from "./goals";
+export * from "./labeltraxx";
 export * from "./purchasing";
 export * from "./snapshots";
 export * from "./vendors";

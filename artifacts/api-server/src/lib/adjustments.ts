@@ -1,6 +1,24 @@
 import { runGatewaySql, pick, pickString, pickNumber, sqlEscape, type GatewayRow } from "./gateway";
 import { parseCcDate } from "./cc";
 
+/**
+ * Total on-hand dollar value + roll count. Per-roll CostOfRoll is only
+ * available through the ODBC gateway (the LT Cloud API does not expose roll
+ * cost), so this intentionally stays on ODBC — the only reads that do, along
+ * with fetchAdjustments below.
+ */
+export async function fetchOnHandValue(): Promise<{ totalValue: number; rollCount: number }> {
+  const sql =
+    "SELECT IDNumber, CostOfRoll * 10 AS Tenths FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
+  const rows = await runGatewaySql(sql);
+  let totalTenths = 0;
+  for (const row of rows) totalTenths += pickNumber(row, "Tenths");
+  return {
+    totalValue: Math.round((totalTenths / 10) * 100) / 100,
+    rollCount: rows.length,
+  };
+}
+
 export interface AdjustmentRecord {
   id: string;
   rollTag: string;

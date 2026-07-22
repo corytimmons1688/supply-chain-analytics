@@ -53,3 +53,8 @@ Thumbs.db
 .vercel
 # Vercel serverless bundle (generated at build)
 api/index.mjs
+
+# Temporary LT migration backfill/parity scripts (one-time use)
+artifacts/api-server/backfill-lt.ts
+artifacts/api-server/parity-lt.ts
+artifacts/api-server/dist-backfill/

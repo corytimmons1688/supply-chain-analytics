@@ -1,5 +1,8 @@
-import { runGatewaySql, pickString, pickNumber, sqlEscape, type GatewayRow } from "./gateway";
+import { runGatewaySql, pickString, pickNumber, type GatewayRow } from "./gateway";
+import { ltGet, ltMapConcurrent, ltDate } from "./ltApi";
 import { bucketRange, eachBucket, type Bucket } from "./cc";
+import { db, ltRollTable, ltStockTable, ltTicketTable, ltPoTable } from "@workspace/db";
+import { and, eq, gte, lte, isNull, isNotNull, sql as dsql } from "drizzle-orm";
 
 // ---------- Date helpers ----------
 
@@ -186,49 +189,32 @@ export interface RollUsageRow {
 }
 
 /**
- * Fetch real ticket consumption from rollstock (excludes CC adjustment-removals).
- * The gateway caps responses at 1000 rows; for unfiltered (no stockId) calls we
- * chunk by month so that each chunk stays well below the cap.
+ * Real ticket consumption (excludes CC adjustment-removals). Reads the
+ * lt_roll mirror (synced from the LT Cloud API — see lib/lt-sync.ts).
  */
 export async function fetchUsage(opts: { from: string; to: string; stockId?: string }): Promise<RollUsageRow[]> {
-  const ranges = opts.stockId ? [{ from: opts.from, to: opts.to }] : eachMonthRange(opts.from, opts.to);
-  const stockClause = opts.stockId ? ` AND StockNum = '${sqlEscape(opts.stockId)}'` : "";
-
-  const chunks = await Promise.all(
-    ranges.map(async (r) => {
-      const sql =
-        `SELECT StockNum, FootLength, DateRollUsed, UsedTikNum, PONumber, Description FROM rollstock ` +
-        `WHERE DateRollUsed >= {d '${r.from}'} AND DateRollUsed <= {d '${r.to}'}${stockClause}`;
-      const rows = await runGatewaySql(sql);
-      if (rows.length >= 1000) {
-        // eslint-disable-next-line no-console
-        console.warn(`[demand.fetchUsage] chunk ${r.from}..${r.to} hit row cap (${rows.length}); demand totals may be undercounted`);
-      }
-      return rows;
-    }),
-  );
+  const conds = [
+    eq(ltRollTable.used, true),
+    isNotNull(ltRollTable.dateRollUsed),
+    gte(ltRollTable.dateRollUsed, opts.from),
+    lte(ltRollTable.dateRollUsed, opts.to),
+  ];
+  if (opts.stockId) conds.push(eq(ltRollTable.stockId, opts.stockId));
+  const rows = await db.select().from(ltRollTable).where(and(...conds));
 
   const out: RollUsageRow[] = [];
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const usedTikNum = pickString(row, "UsedTikNum");
-      if (startsWithCc(usedTikNum)) continue; // exclude CC adjustment removals
-      const dateUsed = normalizeLabelTraxxDate(pickString(row, "DateRollUsed"));
-      if (!dateUsed || isBlankDate(dateUsed)) continue;
-      if (dateUsed < opts.from || dateUsed > opts.to) continue;
-      const stockId = pickString(row, "StockNum") ?? "";
-      if (!stockId) continue;
-      const footage = pickNumber(row, "FootLength");
-      if (footage <= 0) continue;
-      out.push({
-        stockId,
-        dateUsed,
-        footage,
-        usedTikNum,
-        poNumber: pickString(row, "PONumber"),
-        description: pickString(row, "Description"),
-      });
-    }
+  for (const row of rows) {
+    if (startsWithCc(row.usedTikNum)) continue; // exclude CC adjustment removals
+    const footage = row.length ?? 0;
+    if (footage <= 0 || !row.stockId || !row.dateRollUsed) continue;
+    out.push({
+      stockId: row.stockId,
+      dateUsed: row.dateRollUsed,
+      footage,
+      usedTikNum: row.usedTikNum,
+      poNumber: row.poNumber,
+      description: row.description,
+    });
   }
   return out;
 }
@@ -270,19 +256,13 @@ export async function fetchOnHandByStock(): Promise<Map<string, OnHandRow>> {
   return m;
 }
 
-/** Set of StockNum that are NOT marked Inactive in Label Traxx. */
+/** Set of StockNum that are NOT marked Inactive in Label Traxx (lt_stock mirror). */
 export async function fetchActiveStockIds(): Promise<Set<string>> {
-  const sql = "SELECT StockNum, Inactive FROM stock";
-  const rows = await runGatewaySql(sql);
-  const out = new Set<string>();
-  for (const row of rows) {
-    const id = pickString(row, "StockNum");
-    if (!id) continue;
-    const inactive = (pickString(row, "Inactive") ?? "").toLowerCase().trim();
-    if (inactive === "true" || inactive === "yes" || inactive === "1") continue;
-    out.add(id);
-  }
-  return out;
+  const rows = await db
+    .select({ stockId: ltStockTable.stockId })
+    .from(ltStockTable)
+    .where(eq(ltStockTable.inactive, false));
+  return new Set(rows.map((r) => r.stockId));
 }
 
 // ---------------------------------------------------------------------
@@ -310,31 +290,25 @@ export interface StockInfoRow {
 }
 
 export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
-  const sql =
-    "SELECT StockNum, SupplierName, CostMSI, FreightMSI, MasterWidth, EstimatedDeliveryTime, " +
-    "InvMSI_Minimum, InvMSI_Maximum, Classification, MFGSpecNum, FaceStock, Adhesive, FaceColor, " +
-    "TopCoat, AreaToWeightFactor FROM stock";
-  const rows = await runGatewaySql(sql);
+  const rows = await db.select().from(ltStockTable);
   const out = new Map<string, StockInfoRow>();
-  for (const row of rows) {
-    const stockId = pickString(row, "StockNum")?.trim();
-    if (!stockId) continue;
-    out.set(stockId, {
-      stockId,
-      supplierName: pickString(row, "SupplierName")?.trim() || null,
-      costMsi: pickNumber(row, "CostMSI"),
-      freightMsi: pickNumber(row, "FreightMSI"),
-      masterWidth: pickNumber(row, "MasterWidth"),
-      estimatedDeliveryTime: pickString(row, "EstimatedDeliveryTime")?.trim() || null,
-      invMsiMinimum: pickNumber(row, "InvMSI_Minimum"),
-      invMsiMaximum: pickNumber(row, "InvMSI_Maximum"),
-      classification: pickString(row, "Classification")?.trim() || null,
-      mfgSpecNum: pickString(row, "MFGSpecNum")?.trim() || null,
-      faceStock: pickString(row, "FaceStock")?.trim() || null,
-      adhesive: pickString(row, "Adhesive")?.trim() || null,
-      faceColor: pickString(row, "FaceColor")?.trim() || null,
-      topCoat: pickString(row, "TopCoat")?.trim() || null,
-      areaToWeightFactor: pickNumber(row, "AreaToWeightFactor"),
+  for (const r of rows) {
+    out.set(r.stockId, {
+      stockId: r.stockId,
+      supplierName: r.supplierName,
+      costMsi: r.costMsi ?? 0,
+      freightMsi: r.freightMsi ?? 0,
+      masterWidth: r.masterWidth ?? 0,
+      estimatedDeliveryTime: r.estimatedDeliveryTime,
+      invMsiMinimum: r.invMsiMinimum ?? 0,
+      invMsiMaximum: r.invMsiMaximum ?? 0,
+      classification: r.classification,
+      mfgSpecNum: r.mfgSpecNum,
+      faceStock: r.faceStock,
+      adhesive: r.adhesive,
+      faceColor: r.faceColor,
+      topCoat: r.topCoat,
+      areaToWeightFactor: r.areaToWeightFactor ?? 0,
     });
   }
   return out;
@@ -355,35 +329,27 @@ export interface OpenTicketRow {
  * stocks (StockNum2/3) share the run length but LT does not split footage.
  */
 export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
-  // "Open" = not done, with a ship-by date from 30 days ago onward. Label
-  // Traxx keeps years of never-closed tickets; the recency window keeps this
-  // to genuinely current work (and under the gateway's 1000-row cap).
-  const since = new Date();
-  since.setDate(since.getDate() - 30);
-  const sinceIso = since.toISOString().slice(0, 10);
-  // Label Traxx stores "no date" as a pre-1900 sentinel, not SQL NULL —
-  // the same trick the on-hand query uses for DateRollUsed.
-  const sql =
-    "SELECT Number, StockNum1, EstFootage, StockIn, Ship_by_Date, GeneralDescr FROM ticket " +
-    `WHERE DateDone < {d '1900-01-01'} AND StockNum1 <> '' ` +
-    `AND Ship_by_Date >= {d '${sinceIso}'}`;
-  const rows = await runGatewaySql(sql);
+  // "Open" = not done, ship-by from 30 days ago onward (lt_ticket mirror).
+  const since = addDaysIso(todayIso(), -30);
+  const rows = await db
+    .select()
+    .from(ltTicketTable)
+    .where(and(isNull(ltTicketTable.dateDone), gte(ltTicketTable.shipByDate, since)));
   const out: OpenTicketRow[] = [];
   for (const row of rows) {
-    const stockId = pickString(row, "StockNum1")?.trim();
-    const ticketNumber = pickString(row, "Number")?.trim();
-    if (!stockId || !ticketNumber) continue;
-    const rawShip = pickString(row, "Ship_by_Date");
+    const allocs = Array.isArray(row.stockAllocs)
+      ? (row.stockAllocs as { stockNumber?: string }[])
+      : [];
+    const stockId = allocs[0]?.stockNumber?.trim() ?? "";
+    if (!stockId) continue;
+    const rawStatus = row.stockIn?.trim();
     out.push({
-      ticketNumber,
+      ticketNumber: row.ticketNumber,
       stockId,
-      estFootage: pickNumber(row, "EstFootage"),
-      stockIn: (() => {
-        const v = pickString(row, "StockIn")?.trim();
-        return !v || v === "***" ? "Not Evaluated" : v;
-      })(),
-      shipByDate: rawShip ? rawShip.split(" ")[0] ?? null : null,
-      description: pickString(row, "GeneralDescr")?.trim() || null,
+      estFootage: row.totalNeeded ?? 0,
+      stockIn: !rawStatus || rawStatus === "***" ? "Not Evaluated" : rawStatus,
+      shipByDate: row.shipByDate,
+      description: row.description,
     });
   }
   return out;
@@ -397,23 +363,22 @@ export interface OnHandWidthRow {
 
 /** On-hand inventory broken out by roll width per stock (production planning). */
 export async function fetchOnHandByWidth(): Promise<Map<string, OnHandWidthRow[]>> {
-  // SUM(x * 1.0) forces a float — plain COUNT/SUM come back as BigInt, which
-  // the gateway cannot serialize.
-  const sql =
-    "SELECT StockNum, Width, SUM(FootLength * 1.0) AS footage, SUM(1.0) AS rolls FROM rollstock " +
-    "WHERE DateRollUsed < {d '1900-01-01'} GROUP BY StockNum, Width";
-  const rows = await runGatewaySql(sql);
+  const rows = await db
+    .select({
+      stockId: ltRollTable.stockId,
+      width: ltRollTable.width,
+      footage: dsql<number>`COALESCE(SUM(${ltRollTable.length}), 0)`,
+      rolls: dsql<number>`COUNT(*)::float`,
+    })
+    .from(ltRollTable)
+    .where(eq(ltRollTable.used, false))
+    .groupBy(ltRollTable.stockId, ltRollTable.width);
   const out = new Map<string, OnHandWidthRow[]>();
   for (const row of rows) {
-    const stockId = pickString(row, "StockNum")?.trim();
-    if (!stockId) continue;
-    const arr = out.get(stockId) ?? [];
-    arr.push({
-      width: pickNumber(row, "Width"),
-      footage: pickNumber(row, "footage"),
-      rolls: pickNumber(row, "rolls"),
-    });
-    out.set(stockId, arr);
+    if (!row.stockId) continue;
+    const arr = out.get(row.stockId) ?? [];
+    arr.push({ width: row.width ?? 0, footage: Number(row.footage), rolls: Number(row.rolls) });
+    out.set(row.stockId, arr);
   }
   for (const arr of out.values()) arr.sort((a, b) => a.width - b.width);
   return out;
@@ -426,19 +391,16 @@ export async function fetchPoReceipts(
   const out = new Map<string, { received: string | null; poDate: string | null }>();
   const clean = [...new Set(poNumbers.map((n) => n.trim()).filter((n) => /^[0-9]+$/.test(n)))];
   if (clean.length === 0) return out;
-  const sql =
-    "SELECT PONumber, PODate, Received FROM purchaseorder WHERE PONumber IN (" +
-    clean.map((n) => `'${n}'`).join(",") +
-    ")";
-  const rows = await runGatewaySql(sql);
-  for (const row of rows) {
-    const po = pickString(row, "PONumber")?.trim();
+  const details = await ltMapConcurrent(clean, 4, (n) =>
+    ltGet<Record<string, unknown>>("/purchase-order-details", { PONumber: n }).catch(() => null),
+  );
+  for (const d of details) {
+    if (!d) continue;
+    const po = typeof d["poNumber"] === "string" ? d["poNumber"].trim() : null;
     if (!po) continue;
-    const rec = normalizeLabelTraxxDate(pickString(row, "Received"));
-    const poDate = normalizeLabelTraxxDate(pickString(row, "PODate"));
     out.set(po, {
-      received: rec && !isBlankDate(rec) ? rec : null,
-      poDate: poDate && !isBlankDate(poDate) ? poDate : null,
+      received: ltDate(d["receivedDate"] as string | null),
+      poDate: ltDate(d["orderDate"] as string | null),
     });
   }
   return out;
@@ -452,32 +414,16 @@ export interface PoLeadTime {
 /** Per-PO lead time (days between PODate placed and Received). Chunked by month to dodge gateway 1000-row cap. */
 export async function fetchPoLeadTimes(sinceIso?: string): Promise<Map<string, PoLeadTime>> {
   const since = sinceIso ?? addDaysIso(todayIso(), -540);
-  const ranges = eachMonthRange(since, todayIso());
-  const chunks = await Promise.all(
-    ranges.map(async (r) => {
-      const sql =
-        "SELECT PONumber, PODate, Received FROM purchaseorder " +
-        `WHERE PONumber IS NOT NULL AND Received >= {d '${r.from}'} AND Received <= {d '${r.to}'}`;
-      const rows = await runGatewaySql(sql);
-      if (rows.length >= 1000) {
-        // eslint-disable-next-line no-console
-        console.warn(`[demand.fetchPoLeadTimes] chunk ${r.from}..${r.to} hit row cap (${rows.length})`);
-      }
-      return rows;
-    }),
-  );
+  const rows = await db
+    .select()
+    .from(ltPoTable)
+    .where(and(isNotNull(ltPoTable.receivedDate), gte(ltPoTable.receivedDate, since)));
   const m = new Map<string, PoLeadTime>();
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const poNumber = pickString(row, "PONumber");
-      if (!poNumber) continue;
-      const placed = normalizeLabelTraxxDate(pickString(row, "PODate"));
-      const received = normalizeLabelTraxxDate(pickString(row, "Received"));
-      if (!placed || !received || isBlankDate(placed) || isBlankDate(received)) continue;
-      const days = diffDays(placed, received);
-      if (days <= 0 || days > 365) continue; // sanity bounds
-      m.set(poNumber, { poNumber, leadTimeDays: days });
-    }
+  for (const row of rows) {
+    if (!row.poDate || !row.receivedDate) continue;
+    const days = diffDays(row.poDate, row.receivedDate);
+    if (days <= 0 || days > 365) continue; // sanity bounds
+    m.set(row.poNumber, { poNumber: row.poNumber, leadTimeDays: days });
   }
   return m;
 }
@@ -496,58 +442,33 @@ export interface PoRollRow {
   origRollId: string;
 }
 
-/** All received rolls (have a real PO, not a CC adjustment). Chunked by month to dodge gateway 1000-row cap. */
+/** All received rolls (have a real PO, not a CC adjustment), from the lt_roll mirror. */
 export async function fetchPoRolls(sinceIso?: string): Promise<PoRollRow[]> {
   const since = sinceIso ?? addDaysIso(todayIso(), -540);
-  const ranges = eachMonthRange(since, todayIso());
-  const chunks = await Promise.all(
-    ranges.map(async (r) => {
-      const sql =
-        "SELECT StockNum, PONumber, FootLength, StkDate, IDNumber, Orig_RollID FROM rollstock " +
-        `WHERE PONumber IS NOT NULL AND StkDate >= {d '${r.from}'} AND StkDate <= {d '${r.to}'}`;
-      const rows = await runGatewaySql(sql);
-      if (rows.length >= 1000) {
-        // eslint-disable-next-line no-console
-        console.warn(`[demand.fetchPoRolls] chunk ${r.from}..${r.to} hit row cap (${rows.length})`);
-      }
-      return rows;
-    }),
-  );
+  const rows = await db
+    .select()
+    .from(ltRollTable)
+    .where(and(isNotNull(ltRollTable.poNumber), isNotNull(ltRollTable.stockDate), gte(ltRollTable.stockDate, since)));
   const out: PoRollRow[] = [];
-  let unkSeq = 0; // monotonic counter for rows lacking any roll identifier
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const poNumber = pickString(row, "PONumber");
-      if (!poNumber || startsWithCc(poNumber)) continue;
-      const stockId = pickString(row, "StockNum") ?? "";
-      if (!stockId) continue;
-      const footage = pickNumber(row, "FootLength");
-      if (footage <= 0) continue;
-      const orig = pickString(row, "Orig_RollID");
-      const idn = pickString(row, "IDNumber");
-      // Prefer Orig_RollID; else strip a single trailing "-X" suffix from
-      // IDNumber so slit children (e.g. "6184-A") roll up to their parent
-      // ("6184"); else use IDNumber as-is. As a last resort assign a unique
-      // synthetic id — never collapse distinct rolls into one parent, which
-      // would inflate the reconstructed roll size.
-      let origRollId = orig && orig.trim() ? orig.trim() : "";
-      if (!origRollId && idn && idn.trim()) {
-        const t = idn.trim();
-        const m = t.match(/^(.+)-[A-Za-z0-9]+$/);
-        origRollId = m ? m[1]! : t;
-      }
-      if (!origRollId) {
-        unkSeq += 1;
-        origRollId = `__unk:${stockId}:${poNumber}:${unkSeq}`;
-      }
-      out.push({
-        stockId,
-        poNumber,
-        footage,
-        stkDateIso: normalizeLabelTraxxDate(pickString(row, "StkDate")),
-        origRollId,
-      });
-    }
+  for (const row of rows) {
+    const poNumber = row.poNumber;
+    if (!poNumber || startsWithCc(poNumber)) continue;
+    if (!row.stockId) continue;
+    const footage = row.length ?? 0;
+    if (footage <= 0) continue;
+    // The LT API does not expose Orig_RollID; slit children carry an
+    // "-A"/"-B" suffix on the roll id, so strip one trailing suffix to roll
+    // them up to their parent (same fallback the ODBC path used).
+    const t = row.rollId.trim();
+    const m2 = t.match(/^(.+)-[A-Za-z0-9]+$/);
+    const origRollId = m2 ? m2[1]! : t;
+    out.push({
+      stockId: row.stockId,
+      poNumber,
+      footage,
+      stkDateIso: row.stockDate,
+      origRollId,
+    });
   }
   return out;
 }
@@ -571,46 +492,31 @@ export interface OpenPoRow {
  */
 export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
   const since = sinceIso ?? addDaysIso(todayIso(), -365 * 5);
-  const ranges = eachMonthRange(since, todayIso());
-  const chunks = await Promise.all(
-    ranges.map(async (r) => {
-      const sql =
-        "SELECT PONumber, PODate, OrderStockNum, Quantity, Closed, Description " +
-        "FROM purchaseorder " +
-        `WHERE POType = 'Stock' AND Received < {d '1900-01-01'} ` +
-        `AND PODate >= {d '${r.from}'} AND PODate <= {d '${r.to}'}`;
-      const rows = await runGatewaySql(sql);
-      if (rows.length >= 1000) {
-        // eslint-disable-next-line no-console
-        console.warn(`[demand.fetchOpenPos] chunk ${r.from}..${r.to} hit row cap (${rows.length})`);
-      }
-      return rows;
-    }),
-  );
+  const rows = await db
+    .select()
+    .from(ltPoTable)
+    .where(
+      and(
+        eq(ltPoTable.poType, "Stock"),
+        isNull(ltPoTable.receivedDate),
+        eq(ltPoTable.closed, false),
+        gte(ltPoTable.poDate, since),
+      ),
+    );
   const today = todayIso();
   const out: OpenPoRow[] = [];
-  for (const rows of chunks) {
-    for (const row of rows) {
-      const closed = (pickString(row, "Closed") ?? "").toLowerCase().trim();
-      if (closed === "true" || closed === "yes" || closed === "1") continue;
-      const poNumber = pickString(row, "PONumber");
-      if (!poNumber) continue;
-      const stockId = pickString(row, "OrderStockNum") ?? "";
-      if (!stockId) continue;
-      const quantityRolls = pickNumber(row, "Quantity");
-      if (quantityRolls <= 0) continue;
-      const placed = normalizeLabelTraxxDate(pickString(row, "PODate"));
-      const poDateIso = placed && !isBlankDate(placed) ? placed : null;
-      const daysOpen = poDateIso ? diffDays(poDateIso, today) : null;
-      out.push({
-        poNumber,
-        stockId,
-        poDateIso,
-        quantityRolls,
-        description: pickString(row, "Description"),
-        daysOpen,
-      });
-    }
+  for (const row of rows) {
+    if (!row.stockNum) continue;
+    const quantityRolls = row.quantity ?? 0;
+    if (quantityRolls <= 0) continue;
+    out.push({
+      poNumber: row.poNumber,
+      stockId: row.stockNum,
+      poDateIso: row.poDate,
+      quantityRolls,
+      description: row.description,
+      daysOpen: row.poDate ? diffDays(row.poDate, today) : null,
+    });
   }
   return out;
 }
@@ -841,11 +747,26 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   const orderUpTo = reorderPoint + Math.max(avgWeekly * 4, typicalRoll);
   const maxFootage = orderUpTo;
 
+  // Open (unreceived) Stock POs for this stock. Footage estimated as
+  // quantity (rolls) * effective typical roll size — the same number a buyer
+  // would use to size a fresh PO. Computed before the reorder decision so
+  // inbound stock counts toward the inventory position below.
+  const openPosForStock = input.openPos ?? [];
+  const openPoCount = openPosForStock.length;
+  const openPoRolls = openPosForStock.reduce((s, p) => s + p.quantityRolls, 0);
+  const openPoFootage = typicalRoll > 0 ? openPoRolls * typicalRoll : 0;
+
+  // Reorder against inventory POSITION (on-hand + on-order), not on-hand
+  // alone. Otherwise a material with a replenishment PO already inbound keeps
+  // triggering a reorder, and the suggested quantity double-counts what is
+  // already on the way.
+  const inventoryPosition = input.onHandFootage + openPoFootage;
+
   let suggestedOrderFootage = 0;
   let suggestedOrderRolls = 0;
-  const belowMin = input.onHandFootage < reorderPoint && reorderPoint > 0;
+  const belowMin = inventoryPosition < reorderPoint && reorderPoint > 0;
   if (belowMin) {
-    const rawNeed = maxFootage - input.onHandFootage;
+    const rawNeed = maxFootage - inventoryPosition;
     if (typicalRoll > 0) {
       suggestedOrderRolls = Math.ceil(rawNeed / typicalRoll);
       suggestedOrderFootage = suggestedOrderRolls * typicalRoll;
@@ -854,15 +775,9 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     }
   }
 
+  // Days of cover reflects PHYSICAL stock only — inbound rolls can't be
+  // consumed until they arrive — so this stays on on-hand footage.
   const daysOfCover = avgWeekly > 0 ? (input.onHandFootage / avgWeekly) * 7 : Infinity;
-
-  // Open (unreceived) Stock POs for this stock. Footage estimated as
-  // quantity (rolls) * effective typical roll size — the same number a buyer
-  // would use to size a fresh PO.
-  const openPosForStock = input.openPos ?? [];
-  const openPoCount = openPosForStock.length;
-  const openPoRolls = openPosForStock.reduce((s, p) => s + p.quantityRolls, 0);
-  const openPoFootage = typicalRoll > 0 ? openPoRolls * typicalRoll : 0;
 
   // Last-used date across the window (max DateRollUsed).
   let lastUsedIso: string | null = null;

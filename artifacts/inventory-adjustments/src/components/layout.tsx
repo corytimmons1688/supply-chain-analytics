@@ -149,18 +149,18 @@ export function Layout({ children }: LayoutProps) {
               )}
               title={
                 health?.odbcConnected
-                  ? "ODBC Connected"
+                  ? "Label Traxx Connected"
                   : health?.reachable
-                  ? "Gateway Up / ODBC Down"
-                  : "ODBC Disconnected"
+                  ? "Gateway Up / LT API Down"
+                  : "Label Traxx Disconnected"
               }
             />
             <span className="font-mono hidden md:inline">
               {health?.odbcConnected
-                ? "ODBC Connected"
+                ? "Label Traxx Connected"
                 : health?.reachable
-                ? "Gateway Up / ODBC Down"
-                : "ODBC Disconnected"}
+                ? "Gateway Up / LT API Down"
+                : "Label Traxx Disconnected"}
             </span>
           </div>
           <div className="hidden sm:flex items-center font-mono">

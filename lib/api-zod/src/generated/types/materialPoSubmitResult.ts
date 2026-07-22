@@ -12,5 +12,6 @@ export interface MaterialPoSubmitResult {
   status: string;
   ltPoNumbers?: string[];
   ltWriteEnabled: boolean;
+  ltError?: string | null;
   email: PoEmail;
 }

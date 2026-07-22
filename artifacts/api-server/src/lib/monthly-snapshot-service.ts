@@ -1,5 +1,4 @@
-import { runGatewaySql, pickNumber } from "./gateway";
-import { fetchAdjustments } from "./adjustments";
+import { fetchAdjustments, fetchOnHandValue } from "./adjustments";
 import {
   saveMonthlySnapshot,
   type MonthlySnapshot,
@@ -43,17 +42,7 @@ function fmtIso(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-async function fetchOnHand(): Promise<{ totalValue: number; rollCount: number }> {
-  const sql =
-    "SELECT IDNumber, CostOfRoll * 10 AS Tenths FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
-  const rows = await runGatewaySql(sql);
-  let totalTenths = 0;
-  for (const row of rows) totalTenths += pickNumber(row, "Tenths");
-  return {
-    totalValue: Math.round((totalTenths / 10) * 100) / 100,
-    rollCount: rows.length,
-  };
-}
+
 
 export async function captureMonthlySnapshot(
   now: Date = new Date(),
@@ -62,7 +51,7 @@ export async function captureMonthlySnapshot(
   logger.info({ monthKey, monthStart, monthEnd }, "Capturing monthly snapshot");
 
   const [onHand, adjustments] = await Promise.all([
-    fetchOnHand(),
+    fetchOnHandValue(),
     fetchAdjustments({ from: monthStart, to: monthEnd }),
   ]);
 

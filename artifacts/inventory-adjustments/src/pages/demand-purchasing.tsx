@@ -817,7 +817,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
         description:
           r.status === "submitted_lt"
             ? `LT PO #${(r.ltPoNumbers ?? []).join(", ")}`
-            : "Recorded here — Label Traxx entry pending (LT writes not yet enabled)",
+            : (r.ltError ?? "Recorded here — enter it in Label Traxx and link the PO # for receipt tracking"),
+        variant: r.status === "submitted_lt" ? undefined : "destructive",
       });
       setEmails((prev) => ({ ...prev, [vendorName]: { ...r.email, poId: r.id } }));
     } catch (e) {

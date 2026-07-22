@@ -289,7 +289,7 @@ router.get(
 // suggested-PO workflow for Demand Planning.
 // =====================================================================
 
-const LT_WRITE_ENABLED = process.env["LT_WRITE_ENABLED"] === "true";
+const LT_WRITE_ENABLED = Boolean(process.env["LT_API_KEY"]);
 
 function parseEmails(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -408,31 +408,11 @@ router.put(
       .values({ stockId, ...patch })
       .onConflictDoUpdate({ target: stockGoalTable.stockId, set: patch });
 
-    // Label Traxx write-back (SupplierName / CostMSI / EstimatedDeliveryTime)
-    // is implemented but ships disabled until the gateway owner confirms the
-    // ODBC bridge accepts UPDATEs. Overrides above always take effect.
-    let ltUpdated = false;
-    if (LT_WRITE_ENABLED) {
-      const sets: string[] = [];
-      if (patch.vendorName != null) sets.push(`SupplierName = '${sqlEscapeLocal(patch.vendorName)}'`);
-      if (patch.msiCost != null && Number.isFinite(patch.msiCost)) sets.push(`CostMSI = ${patch.msiCost}`);
-      if (patch.leadTimeDays != null && Number.isFinite(patch.leadTimeDays))
-        sets.push(`EstimatedDeliveryTime = '${Math.round(patch.leadTimeDays)} days'`);
-      if (sets.length > 0) {
-        const { runGatewaySql } = await import("../lib/gateway");
-        await runGatewaySql(
-          `UPDATE stock SET ${sets.join(", ")} WHERE StockNum = '${sqlEscapeLocal(stockId)}'`,
-        );
-        ltUpdated = true;
-      }
-    }
-    res.json({ stockId, saved: true, ltUpdated });
+    // The LT Cloud API has no stock-update endpoint, so purchasing config
+    // lives as dashboard overrides only (no write-back to Label Traxx).
+    res.json({ stockId, saved: true, ltUpdated: false });
   }),
 );
-
-function sqlEscapeLocal(v: string): string {
-  return v.replace(/'/g, "''");
-}
 
 interface PoLineInput {
   stockId: string;
@@ -610,26 +590,48 @@ router.post(
 
     let ltPoNumbers: string[] = [];
     let status = "submitted";
-    if (LT_WRITE_ENABLED) {
-      const { runGatewaySql } = await import("../lib/gateway");
-      const maxRows = await runGatewaySql(
-        "SELECT MAX(CAST(PONumber AS INTEGER)) AS maxpo FROM purchaseorder WHERE ISNUMERIC(PONumber) = 1",
-      );
-      let next = Number(maxRows[0]?.["maxpo"] ?? maxRows[0]?.["MAXPO"] ?? 0) + 1;
+    let ltError: string | null = null;
+    const { ltApiConfigured, ltPost } = await import("../lib/ltApi");
+    if (ltApiConfigured()) {
+      // Official LT Cloud API: POST /stock-purchase-order-create goes through
+      // Label Traxx's own app layer (PO numbering, supplier, costing). One PO
+      // per line; slittingSpec carries one row per master roll at the stock's
+      // master width (mirrors LT's own stock-PO form).
+      const stockInfo = await fetchStockInfo();
       const today = new Date().toISOString().slice(0, 10);
       const dateReq = po.requestedDeliveryDate ?? today;
-      for (const l of lines) {
-        await runGatewaySql(
-          `INSERT INTO purchaseorder (PONumber, PODate, DateReq, SupplierNum, Supplier, OrderStockNum, ` +
-            `Description, Quantity, CostMSI, POType, EntryDate, EntryBy, ShipName, ShipAddr1, ShipCity, ShipState, ShipZip, ShipCountry) VALUES (` +
-            `'${next}', {d '${today}'}, {d '${dateReq}'}, '', '${sqlEscapeLocal(po.vendorName)}', '${sqlEscapeLocal(l.stockId)}', ` +
-            `'${sqlEscapeLocal((l.description ?? "").slice(0, 100))}', ${l.rolls}, ${l.msiCost ?? 0}, 'Stock', {d '${today}'}, ` +
-            `'Supply Chain Dashboard', 'Calyx Containers', '1991 Parkway Blvd', 'West Valley City', 'UT', '84119', 'USA')`,
-        );
-        ltPoNumbers.push(String(next));
-        next += 1;
+      const signerRaw = process.env["LT_PO_SIGNER"];
+      const poSigner = signerRaw && Number.isFinite(Number(signerRaw)) ? Number(signerRaw) : undefined;
+      try {
+        for (const l of lines) {
+          const info = stockInfo.get(l.stockId);
+          const footagePerRoll =
+            l.footage != null && l.rolls > 0 ? Math.round(l.footage / l.rolls) : 0;
+          const rollCount = Math.min(Math.max(1, l.rolls), 200);
+          const body: Record<string, unknown> = {
+            stockNo: l.stockId,
+            poDate: today,
+            requestedDelivery: dateReq,
+            notes: `Created by Supply Chain Dashboard (PO ${po.id.slice(0, 8)})`,
+            slittingSpec: Array.from({ length: rollCount }, () => ({
+              ordered: footagePerRoll,
+              exact: true,
+              no1: 1,
+              cut1: info?.masterWidth ?? 0,
+            })),
+          };
+          if (poSigner !== undefined) body["poSigner"] = poSigner;
+          const created = await ltPost<Record<string, unknown>>("/stock-purchase-order-create", body);
+          const assigned =
+            (typeof created?.["poNumber"] === "string" && created["poNumber"]) ||
+            (typeof created?.["number"] === "string" && created["number"]) ||
+            (created?.["poNumber"] != null ? String(created["poNumber"]) : null);
+          if (assigned) ltPoNumbers.push(String(assigned));
+        }
+        status = ltPoNumbers.length > 0 ? "submitted_lt" : "submitted";
+      } catch (e) {
+        ltError = e instanceof Error ? e.message : String(e);
       }
-      status = "submitted_lt";
     }
 
     await db
@@ -649,7 +651,7 @@ router.post(
         estCost: l.estCost,
       })),
     });
-    res.json({ id, status, ltPoNumbers, ltWriteEnabled: LT_WRITE_ENABLED, email });
+    res.json({ id, status, ltPoNumbers, ltWriteEnabled: true, ltError, email });
   }),
 );
 
