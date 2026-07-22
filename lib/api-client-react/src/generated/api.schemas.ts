@@ -936,6 +936,16 @@ export type MonthlySnapshot = MonthlySnapshotSummary & {
   rolls: SnapshotRoll[];
 };
 
+export type DemandStockMetricsReorderReason =
+  (typeof DemandStockMetricsReorderReason)[keyof typeof DemandStockMetricsReorderReason];
+
+export const DemandStockMetricsReorderReason = {
+  below_rop: "below_rop",
+  committed: "committed",
+  both: "both",
+  none: "none",
+} as const;
+
 /**
  * Roll-up of recent demand activity:
 - active: used within the last 60 days
@@ -1009,6 +1019,9 @@ export interface DemandStockMetrics {
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
+  openTicketFootage: number;
+  committedShortageFootage: number;
+  reorderReason: DemandStockMetricsReorderReason;
   daysOfCover: number;
   forecast12wkFootage: number;
   /** Number of open (unreceived, non-cancelled) Stock-type purchase orders for this stock. */

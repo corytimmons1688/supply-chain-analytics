@@ -2140,6 +2140,9 @@ components:
         - suggestedOrderFootage
         - suggestedOrderRolls
         - belowMin
+        - openTicketFootage
+        - committedShortageFootage
+        - reorderReason
         - daysOfCover
         - forecast12wkFootage
         - openPoCount
@@ -2189,6 +2192,9 @@ components:
         suggestedOrderFootage: { type: number }
         suggestedOrderRolls: { type: integer }
         belowMin: { type: boolean }
+        openTicketFootage: { type: number }
+        committedShortageFootage: { type: number }
+        reorderReason: { type: string, enum: [below_rop, committed, both, none] }
         daysOfCover: { type: integer }
         forecast12wkFootage: { type: number }
         openPoCount: { type: integer, description: "Number of open (unreceived, non-cancelled) Stock-type purchase orders for this stock." }

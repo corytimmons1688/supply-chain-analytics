@@ -934,6 +934,9 @@ export const GetDemandSummaryResponse = zod.object({
       suggestedOrderFootage: zod.number(),
       suggestedOrderRolls: zod.number(),
       belowMin: zod.boolean(),
+      openTicketFootage: zod.number(),
+      committedShortageFootage: zod.number(),
+      reorderReason: zod.enum(["below_rop", "committed", "both", "none"]),
       daysOfCover: zod.number(),
       forecast12wkFootage: zod.number(),
       openPoCount: zod
@@ -1096,6 +1099,9 @@ export const GetDemandStockDetailResponse = zod.object({
     suggestedOrderFootage: zod.number(),
     suggestedOrderRolls: zod.number(),
     belowMin: zod.boolean(),
+    openTicketFootage: zod.number(),
+    committedShortageFootage: zod.number(),
+    reorderReason: zod.enum(["below_rop", "committed", "both", "none"]),
     daysOfCover: zod.number(),
     forecast12wkFootage: zod.number(),
     openPoCount: zod

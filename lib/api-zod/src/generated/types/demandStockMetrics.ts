@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DemandStockMetricsActivityStatus } from "./demandStockMetricsActivityStatus";
+import type { DemandStockMetricsReorderReason } from "./demandStockMetricsReorderReason";
 
 export interface DemandStockMetrics {
   stockId: string;
@@ -62,6 +63,9 @@ export interface DemandStockMetrics {
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
+  openTicketFootage: number;
+  committedShortageFootage: number;
+  reorderReason: DemandStockMetricsReorderReason;
   daysOfCover: number;
   forecast12wkFootage: number;
   /** Number of open (unreceived, non-cancelled) Stock-type purchase orders for this stock. */

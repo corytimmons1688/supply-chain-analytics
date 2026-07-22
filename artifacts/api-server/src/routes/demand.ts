@@ -97,7 +97,7 @@ router.get(
 
     const { from, to } = defaultDemandWindow(monthsBack);
 
-    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows] = await Promise.all([
+    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets] = await Promise.all([
       fetchUsage({ from, to }),
       fetchOnHandByStock(),
       fetchPoLeadTimes(),
@@ -105,7 +105,15 @@ router.get(
       fetchOpenPos(),
       fetchActiveStockIds(),
       db.select().from(stockGoalTable),
+      fetchOpenTickets(),
     ]);
+
+    // Committed material requirements: sum each open ticket's footage against
+    // every material in its BOM (fetchOpenTickets emits one row per material).
+    const openTicketFootageByStock = new Map<string, number>();
+    for (const t of openTickets) {
+      openTicketFootageByStock.set(t.stockId, (openTicketFootageByStock.get(t.stockId) ?? 0) + t.estFootage);
+    }
     const overridesByStock = new Map<string, StockOverrides>();
     for (const row of stockGoalRows) overridesByStock.set(row.stockId, rowToOverrides(row));
 
@@ -137,6 +145,9 @@ router.get(
     // Stocks with only open POs (no recent usage and nothing on hand) still
     // matter for the buyer — surface them in the summary.
     for (const k of openPosByStock.keys()) if (activeStockIds.has(k)) allStockIds.add(k);
+    // Likewise, a material needed by open tickets must surface even with no
+    // recent usage history (committed demand is a reorder driver on its own).
+    for (const k of openTicketFootageByStock.keys()) if (activeStockIds.has(k)) allStockIds.add(k);
 
     // Global fallback lead time: median across all observed POs (else 14 days)
     const allLts = Array.from(poLeadTimes.values()).map((p) => p.leadTimeDays);
@@ -166,6 +177,7 @@ router.get(
         poLeadTimes,
         poRolls: stockPoRolls,
         openPos: openPosByStock.get(stockId) ?? [],
+        openTicketFootage: openTicketFootageByStock.get(stockId) ?? 0,
         serviceLevel,
         ...(effDemandCv !== undefined ? { demandCvOverride: effDemandCv } : {}),
         ...(effLeadTimeCv !== undefined ? { leadTimeCvOverride: effLeadTimeCv } : {}),
@@ -177,11 +189,13 @@ router.get(
         customized: overrides.customized,
       });
 
-      // Skip stocks with no signal at all (zero history AND zero on-hand AND no open POs)
+      // Skip stocks with no signal at all (zero history AND zero on-hand AND
+      // no open POs AND no committed open-ticket demand)
       if (
         metrics.totalDemandFootage === 0 &&
         metrics.onHandFootage === 0 &&
-        metrics.openPoCount === 0
+        metrics.openPoCount === 0 &&
+        metrics.openTicketFootage === 0
       ) continue;
       items.push(metrics);
     }
@@ -316,13 +330,20 @@ router.get(
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
 
+    // tickets now has one row per (ticket × material in the BOM). Aggregate
+    // required footage per material across every ticket that lists it, but
+    // count each distinct ticket only once in the status donut.
     const ticketAgg = new Map<
       string,
       { requiredFootage: number; ticketCount: number; tickets: typeof tickets }
     >();
     const statusCounts: Record<string, number> = {};
+    const countedTickets = new Set<string>();
     for (const t of tickets) {
-      statusCounts[t.stockIn] = (statusCounts[t.stockIn] ?? 0) + 1;
+      if (!countedTickets.has(t.ticketNumber)) {
+        countedTickets.add(t.ticketNumber);
+        statusCounts[t.stockIn] = (statusCounts[t.stockIn] ?? 0) + 1;
+      }
       let agg = ticketAgg.get(t.stockId);
       if (!agg) {
         agg = { requiredFootage: 0, ticketCount: 0, tickets: [] };

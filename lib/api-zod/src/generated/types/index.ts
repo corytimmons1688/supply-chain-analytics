@@ -30,6 +30,7 @@ export * from "./demandPoint";
 export * from "./demandStockDetail";
 export * from "./demandStockMetrics";
 export * from "./demandStockMetricsActivityStatus";
+export * from "./demandStockMetricsReorderReason";
 export * from "./demandSummary";
 export * from "./fromParameter";
 export * from "./gatewayHealth";

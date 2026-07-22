@@ -682,6 +682,8 @@ type SuggestionLine = {
   belowMin: boolean;
   daysOfCover: number;
   openTicketFootage: number;
+  reorderReason: DemandStockMetrics["reorderReason"];
+  committedShortageFootage: number;
 };
 
 function lineEstCost(l: SuggestionLine): number | null {
@@ -736,8 +738,15 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
   React.useEffect(() => {
     if (!purch) return;
     const purchByStock = new Map(purch.items.map((it) => [it.stockId, it]));
+    const committedDriven = (r: DemandStockMetrics) => r.reorderReason === "committed" || r.reorderReason === "both";
     const next: SuggestionLine[] = rows
-      .filter((r) => r.suggestedOrderRolls > 0 && r.activityStatus !== "dormant" && r.activityStatus !== "never")
+      // Committed-demand suggestions always show; forecast-only ones are
+      // hidden for dormant/never materials (no recent usage = no forecast need).
+      .filter(
+        (r) =>
+          r.suggestedOrderRolls > 0 &&
+          (committedDriven(r) || (r.activityStatus !== "dormant" && r.activityStatus !== "never")),
+      )
       .map((r) => {
         const p = purchByStock.get(r.stockId);
         return {
@@ -756,6 +765,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           belowMin: r.belowMin,
           daysOfCover: r.daysOfCover,
           openTicketFootage: p?.openTicketFootage ?? 0,
+          reorderReason: r.reorderReason,
+          committedShortageFootage: r.committedShortageFootage,
         };
       })
       .sort((a, b) => Number(b.belowMin) - Number(a.belowMin) || a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
@@ -898,12 +909,19 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                             <span className="text-muted-foreground">{(l.description ?? "").slice(0, 44)}</span>
                           </td>
                           <td className="px-2 py-1.5">
-                            {l.belowMin ? (
-                              <Badge variant="outline" className="text-[10px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40">
+                            {(l.reorderReason === "committed" || l.reorderReason === "both") && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40"
+                                title="Open tickets require more than on-hand + on-order"
+                              >
+                                short for orders · {fmt(l.committedShortageFootage)} ft
+                              </Badge>
+                            )}
+                            {l.reorderReason === "below_rop" && (
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40">
                                 below ROP · {l.daysOfCover >= 0 ? `${fmt(l.daysOfCover)}d cover` : "no demand"}
                               </Badge>
-                            ) : (
-                              <span className="text-muted-foreground">{fmt(l.daysOfCover)}d cover</span>
                             )}
                             {l.openTicketFootage > 0 && (
                               <span className="text-muted-foreground"> · {fmt(l.openTicketFootage)} ft on open tickets</span>

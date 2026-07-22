@@ -321,6 +321,8 @@ export interface OpenTicketRow {
   stockIn: string; // Label Traxx availability status: In / Ordered / Out / ...
   shipByDate: string | null;
   description: string | null;
+  /** True when this material is the ticket's primary (first BOM) stock. */
+  primary: boolean;
 }
 
 /**
@@ -340,16 +342,27 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
     const allocs = Array.isArray(row.stockAllocs)
       ? (row.stockAllocs as { stockNumber?: string }[])
       : [];
-    const stockId = allocs[0]?.stockNumber?.trim() ?? "";
-    if (!stockId) continue;
+    // Emit one row per material in the ticket's BOM (all stock allocations),
+    // not just the primary. Calyx does NOT run LT stock allocation, but the
+    // BOM (stock numbers + widths) is populated from the job spec regardless
+    // of allocation state, so a run needs its full footage of EACH material
+    // it lists — laminates/zippers ride as secondary and must still count.
     const rawStatus = row.stockIn?.trim();
-    out.push({
-      ticketNumber: row.ticketNumber,
-      stockId,
-      estFootage: row.totalNeeded ?? 0,
-      stockIn: !rawStatus || rawStatus === "***" ? "Not Evaluated" : rawStatus,
-      shipByDate: row.shipByDate,
-      description: row.description,
+    const stockIn = !rawStatus || rawStatus === "***" ? "Not Evaluated" : rawStatus;
+    const seen = new Set<string>();
+    allocs.forEach((a, i) => {
+      const stockId = a.stockNumber?.trim() ?? "";
+      if (!stockId || seen.has(stockId)) return;
+      seen.add(stockId);
+      out.push({
+        ticketNumber: row.ticketNumber,
+        stockId,
+        estFootage: row.totalNeeded ?? 0,
+        stockIn,
+        shipByDate: row.shipByDate,
+        description: row.description,
+        primary: i === 0,
+      });
     });
   }
   return out;
@@ -629,6 +642,8 @@ export interface StockMetricsInput {
   poLeadTimes: Map<string, PoLeadTime>;
   poRolls: PoRollRow[]; // pre-filtered to this stock
   openPos?: OpenPoRow[]; // pre-filtered to this stock; unreceived Stock-type POs
+  /** Committed footage required by open (undone) tickets that list this material. */
+  openTicketFootage?: number;
   serviceLevel: number;
   demandCvOverride?: number;
   leadTimeCvOverride?: number;
@@ -674,6 +689,12 @@ export interface StockMetrics {
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
+  /** Committed footage required by open tickets that list this material. */
+  openTicketFootage: number;
+  /** How short the inventory position is vs committed open-ticket demand (>0 = short). */
+  committedShortageFootage: number;
+  /** Why a reorder is suggested: forecast reorder point, committed orders, both, or none. */
+  reorderReason: "below_rop" | "committed" | "both" | "none";
   daysOfCover: number;
   forecast12wkFootage: number;
   openPoCount: number;
@@ -738,9 +759,17 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     parentSizes.set(r.origRollId, (parentSizes.get(r.origRollId) ?? 0) + r.footage);
   }
   const autoTypicalRoll = typicalRollSize(Array.from(parentSizes.values()));
-  const typicalRoll = input.typicalRollFootageOverride != null && input.typicalRollFootageOverride > 0
+  let typicalRoll = input.typicalRollFootageOverride != null && input.typicalRollFootageOverride > 0
     ? input.typicalRollFootageOverride
     : autoTypicalRoll;
+  // Fallback when a material has no received-PO roll history (common for
+  // components only ever consumed, or brand-new stocks with committed demand):
+  // use the average on-hand roll size, else a modest default, so a roll count
+  // can still be suggested and the material isn't silently dropped.
+  if (typicalRoll <= 0 && input.onHandRollCount > 0 && input.onHandFootage > 0) {
+    typicalRoll = input.onHandFootage / input.onHandRollCount;
+  }
+  if (typicalRoll <= 0) typicalRoll = 5000;
 
   // Max = enough to cover lead time + 4 weeks of demand on top of safety stock,
   // rounded up to a typical roll. Falls back to ROP + one roll if no roll history.
@@ -762,11 +791,32 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   // already on the way.
   const inventoryPosition = input.onHandFootage + openPoFootage;
 
+  // Two independent reorder drivers:
+  //  1. Forecast — position below the statistical reorder point (avg demand
+  //     over lead time + safety stock). Steady-state replenishment.
+  //  2. Committed — position can't cover the footage already booked on open
+  //     tickets. A demand spike beyond the historical average still surfaces
+  //     even when the forecast trigger is quiet.
+  const openTicketFootage = input.openTicketFootage ?? 0;
+  const forecastShort = reorderPoint > 0 && inventoryPosition < reorderPoint;
+  const committedShortageFootage = Math.max(0, openTicketFootage - inventoryPosition);
+  const committedShort = committedShortageFootage > 0;
+  const belowMin = forecastShort || committedShort;
+  const reorderReason: StockMetrics["reorderReason"] = forecastShort && committedShort
+    ? "both"
+    : committedShort
+      ? "committed"
+      : forecastShort
+        ? "below_rop"
+        : "none";
+
   let suggestedOrderFootage = 0;
   let suggestedOrderRolls = 0;
-  const belowMin = inventoryPosition < reorderPoint && reorderPoint > 0;
   if (belowMin) {
-    const rawNeed = maxFootage - inventoryPosition;
+    // Order up to whichever is higher: the forecast max level, or enough to
+    // cover all committed open tickets. Then net out the current position.
+    const targetLevel = Math.max(maxFootage, openTicketFootage);
+    const rawNeed = targetLevel - inventoryPosition;
     if (typicalRoll > 0) {
       suggestedOrderRolls = Math.ceil(rawNeed / typicalRoll);
       suggestedOrderFootage = suggestedOrderRolls * typicalRoll;
@@ -842,6 +892,9 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       suggestedOrderFootage: Math.round(suggestedOrderFootage),
       suggestedOrderRolls,
       belowMin,
+      openTicketFootage: Math.round(openTicketFootage),
+      committedShortageFootage: Math.round(committedShortageFootage),
+      reorderReason,
       daysOfCover: Number.isFinite(daysOfCover) ? Math.round(daysOfCover) : -1,
       forecast12wkFootage: Math.round(forecast12wkTotal),
       openPoCount,
