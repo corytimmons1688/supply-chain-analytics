@@ -34,7 +34,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, CheckCircle2, Settings2, Printer, ExternalLink, X, PackageCheck } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function fmt(n: number | null | undefined, digits = 0): string {
@@ -66,115 +66,163 @@ const STATUS_RANK: Record<string, number> = {
 };
 const STATUS_BY_RANK: Record<number, string> = { 0: "Out", 1: "Ordered Not Confirmed", 2: "Ordered", 3: "Not Evaluated", 4: "In" };
 
-type PoDocLine = {
-  stockId: string;
-  description: string | null;
-  rolls: number;
-  footage: number | null;
-  msiCost: number | null;
-};
-
-/**
- * Open a print-ready PO document styled after the Label Traxx stock PO form
- * (header, supplier/ship-to blocks, per-material spec + roll table, MSI /
- * weight / price totals). Print → Save as PDF.
- */
-function openPoDocument(opts: {
+type PoDocData = {
   poNumber: string;
-  vendorName: string;
-  vendorEmails: string | null;
+  isDraft: boolean;
   orderedDate: string;
   requestedDeliveryDate: string | null;
-  lines: PoDocLine[];
-  purchByStock: Map<string, PurchasingItem>;
-}) {
+  type: string;
+  supplier: {
+    company: string;
+    customerId: string | null;
+    address1: string | null;
+    address2: string | null;
+    city: string | null;
+    state: string | null;
+    zip: string | null;
+    country: string | null;
+    phone: string | null;
+    fax: string | null;
+    terms: string | null;
+  };
+  shipTo: { name: string; address1: string; city: string; state: string; zip: string; country: string; phone: string };
+  material: {
+    stockId: string;
+    vendorPartNum: string | null;
+    description: string | null;
+    mfgSpecNum: string | null;
+    masterWidth: number;
+    costMsi: number;
+    color: string | null;
+    adhesive: string | null;
+    topCoat: string | null;
+  };
+  rolls: { no: number; footage: number; width: number }[];
+  totals: { rolls: number; areaMsi: number; purchasePrice: number; weight: number };
+};
+
+const esc = (v: unknown) =>
+  String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+/**
+ * Fetch a PO's assembled document data and render it into `win` in the
+ * Label Traxx stock-PO layout (one material per PO — see PO 2590): header
+ * fields, supplier + ship-to blocks, material spec, numbered slitting table,
+ * and MSI / weight / price totals. The window is opened by the caller (sync,
+ * to dodge popup blockers); this fills it once the data lands.
+ */
+async function openPoDocument(win: Window, poId: string): Promise<void> {
+  win.document.write("<!doctype html><title>Purchase Order</title><body style='font:13px Helvetica,Arial;padding:40px'>Generating purchase order…</body>");
+  win.document.close();
+  let d: PoDocData;
+  try {
+    const res = await fetch(`/api/demand/pos/${poId}/document`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    d = (await res.json()) as PoDocData;
+  } catch (e) {
+    win.document.body.innerHTML = `Could not load PO document: ${esc(e instanceof Error ? e.message : String(e))}`;
+    return;
+  }
+
   const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const num = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  let grandTotal = 0;
+  const m = d.material;
+  const supAddr = [
+    d.supplier.address1,
+    d.supplier.address2,
+    [d.supplier.city, d.supplier.state, d.supplier.zip].filter(Boolean).join(", "),
+    d.supplier.country,
+  ]
+    .filter(Boolean)
+    .map((l) => esc(l))
+    .join("<br/>");
 
-  const sections = opts.lines
-    .map((l) => {
-      const it = opts.purchByStock.get(l.stockId);
-      const width = it?.masterWidth ?? 0;
-      const footagePerRoll = l.footage && l.rolls > 0 ? l.footage / l.rolls : 0;
-      const totalFootage = l.footage ?? 0;
-      const msi = width > 0 ? (totalFootage * 12 * width) / 1000 : 0;
-      const cost = l.msiCost ?? it?.msiCost ?? 0;
-      const price = msi * cost;
-      grandTotal += price;
-      const weight = it?.areaToWeightFactor ? msi / it.areaToWeightFactor : 0;
-      const rollRows = Array.from({ length: Math.min(l.rolls, 60) })
-        .map(
-          (_, i) =>
-            `<tr><td>${i + 1}</td><td>${num(footagePerRoll)}</td><td>${width || "—"}</td><td class="c">X</td></tr>`,
-        )
-        .join("");
-      return `
-      <div class="material">
-        <table class="spec">
-          <tr><th>Our Stock No.</th><td>${l.stockId}</td><th>MFG Spec. No.</th><td>${it?.mfgSpecNum ?? "—"}</td></tr>
-          <tr><th>Face Stock</th><td>${it?.faceStock ?? l.description ?? "—"}</td><th>Color</th><td>${it?.faceColor ?? "—"}</td></tr>
-          <tr><th>Adhesive</th><td>${it?.adhesive ?? "—"}</td><th>Top Coating</th><td>${it?.topCoat || "None"}</td></tr>
-          <tr><th>Master Width</th><td>${width ? `${width}"` : "—"}</td><th>Cost Per MSI</th><td>${cost ? money(cost) : "—"}</td></tr>
-          <tr><th>Ordered</th><td>${l.rolls} roll${l.rolls === 1 ? "" : "s"} · Exact Rolls</td><th>Req. Delivery</th><td>${opts.requestedDeliveryDate ?? "—"}</td></tr>
-        </table>
-        <table class="rolls">
-          <thead><tr><th>No.</th><th>Ordered (ft)</th><th>Width (in)</th><th>Exact</th></tr></thead>
-          <tbody>${rollRows}</tbody>
-        </table>
-        <p class="totals">
-          Total: ${num(totalFootage)} ft · Area (MSI): ${num(msi)}${weight ? ` · Weight: ${num(weight)} lb.` : ""} ·
-          <strong>Purchase Price: ${money(price)}</strong>
-        </p>
-      </div>`;
-    })
+  const rollRows = d.rolls
+    .map(
+      (r) =>
+        `<tr><td class="c">${r.no}</td><td>${num(r.footage)}</td><td class="c">0</td>` +
+        `<td class="c">1</td><td>${r.width || "—"}</td>` +
+        `<td class="c">0</td><td></td><td class="c">0</td><td></td><td class="c">0</td><td></td><td class="c">0</td></tr>`,
+    )
     .join("");
 
-  const html = `<!doctype html><html><head><title>PO ${opts.poNumber} — ${opts.vendorName}</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>PO ${esc(d.poNumber)} — ${esc(d.supplier.company)}</title>
   <style>
-    body { font-family: Helvetica, Arial, sans-serif; font-size: 11px; color: #111; margin: 32px; }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
-    .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 8px; }
-    .head table td { padding: 1px 8px 1px 0; }
-    .blocks { display: flex; gap: 32px; margin: 14px 0; }
-    .block { flex: 1; }
-    .block h3 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 4px; border-bottom: 1px solid #999; padding-bottom: 2px; }
-    .material { margin-top: 14px; page-break-inside: avoid; }
-    table.spec { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
-    table.spec th { text-align: left; font-size: 9px; text-transform: uppercase; color: #555; padding: 2px 6px 2px 0; width: 12%; }
-    table.spec td { padding: 2px 12px 2px 0; width: 38%; }
-    table.rolls { border-collapse: collapse; width: 60%; }
-    table.rolls th, table.rolls td { border: 1px solid #bbb; padding: 2px 8px; text-align: right; font-size: 10px; }
-    table.rolls th { background: #f0f0f0; font-size: 9px; text-transform: uppercase; }
-    table.rolls td.c { text-align: center; }
-    .totals { margin: 6px 0 0; }
-    .grand { margin-top: 16px; border-top: 2px solid #111; padding-top: 8px; text-align: right; font-size: 13px; }
-    .foot { margin-top: 24px; font-size: 10px; color: #444; }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 11px; color: #111; margin: 28px; }
+    .title { font-size: 20px; font-weight: bold; letter-spacing: 1px; }
+    .draft { color: #b45309; font-size: 11px; font-weight: normal; }
+    table.hdr { border-collapse: collapse; margin-top: 6px; }
+    table.hdr td { border: 1px solid #333; padding: 3px 10px; font-size: 10px; }
+    table.hdr td.l { background: #f0f0f0; font-weight: bold; text-transform: uppercase; font-size: 9px; }
+    .blocks { display: flex; gap: 24px; margin: 14px 0 6px; }
+    .block { flex: 1; border: 1px solid #999; padding: 8px 10px; }
+    .block h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 5px; color: #555; }
+    .spec { width: 100%; border-collapse: collapse; margin: 10px 0 4px; }
+    .spec th { text-align: left; font-size: 8.5px; text-transform: uppercase; color: #555; padding: 2px 6px 2px 0; white-space: nowrap; width: 1%; }
+    .spec td { padding: 2px 18px 2px 0; font-weight: 600; }
+    table.rolls { border-collapse: collapse; width: 100%; margin-top: 6px; }
+    table.rolls th, table.rolls td { border: 1px solid #bbb; padding: 2px 6px; text-align: right; font-size: 9.5px; }
+    table.rolls td.c, table.rolls th.c { text-align: center; }
+    table.rolls th { background: #f0f0f0; font-size: 8px; text-transform: uppercase; }
+    .totals { display: flex; justify-content: flex-end; gap: 28px; margin-top: 10px; border-top: 2px solid #111; padding-top: 8px; font-size: 12px; }
+    .foot { margin-top: 20px; font-size: 9px; color: #666; }
     @media print { body { margin: 12mm; } }
   </style></head><body>
-  <div class="head">
-    <div><h1>PURCHASE ORDER</h1><div style="font-size:12px;margin-top:2px;">Calyx Containers</div></div>
-    <table>
-      <tr><td><strong>Purchase Order</strong></td><td>${opts.poNumber}</td></tr>
-      <tr><td><strong>Ordered</strong></td><td>${opts.orderedDate}</td></tr>
-      <tr><td><strong>Req. Delivery</strong></td><td>${opts.requestedDeliveryDate ?? "—"}</td></tr>
-      <tr><td><strong>Type</strong></td><td>New Order · Stock</td></tr>
-    </table>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <div class="title">Purchase Order${d.isDraft ? ' <span class="draft">(DRAFT — not yet in Label Traxx)</span>' : ""}</div>
+      <div style="font-size:12px;margin-top:2px">Calyx Containers</div>
+    </div>
+    <table class="hdr"><tbody>
+      <tr><td class="l">Order Date</td><td>${esc(d.orderedDate)}</td><td class="l">P.O. Number</td><td>${esc(d.poNumber)}</td></tr>
+      <tr><td class="l">Req. Delivery</td><td>${esc(d.requestedDeliveryDate ?? "—")}</td><td class="l">Type</td><td>${esc(d.type)} · Stock</td></tr>
+      <tr><td class="l">Promised</td><td>00/00/00</td><td class="l">Terms</td><td>${esc(d.supplier.terms ?? "—")}</td></tr>
+    </tbody></table>
   </div>
+
   <div class="blocks">
-    <div class="block"><h3>Supplier</h3>${opts.vendorName}${opts.vendorEmails ? `<br/>${opts.vendorEmails}` : ""}</div>
-    <div class="block"><h3>Ship To</h3>Calyx Containers<br/>1991 Parkway Blvd<br/>West Valley City, UT 84119<br/>USA<br/>1 (888) 432-7766</div>
+    <div class="block">
+      <h3>Supplier</h3>
+      <strong>${esc(d.supplier.company)}</strong>${d.supplier.customerId ? `<br/>ID: ${esc(d.supplier.customerId)}` : ""}
+      ${supAddr ? `<br/>${supAddr}` : ""}
+      ${d.supplier.phone ? `<br/>Ph. ${esc(d.supplier.phone)}` : ""}${d.supplier.fax ? ` · Fax ${esc(d.supplier.fax)}` : ""}
+    </div>
+    <div class="block">
+      <h3>Ship To</h3>
+      <strong>${esc(d.shipTo.name)}</strong><br/>${esc(d.shipTo.address1)}<br/>
+      ${esc(d.shipTo.city)}, ${esc(d.shipTo.state)} ${esc(d.shipTo.zip)}<br/>${esc(d.shipTo.country)}<br/>${esc(d.shipTo.phone)}
+    </div>
   </div>
-  ${sections}
-  <div class="grand"><strong>Total Purchase Price: ${money(grandTotal)}</strong></div>
-  <div class="foot">Cuts are in inches · Area (MSI) · Questions: ctimmons@calyxcontainers.com</div>
-  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));</script>
+
+  <table class="spec"><tbody>
+    <tr><th>Our Stock No.</th><td>${esc(m.stockId)}</td><th>MFG Spec. No.</th><td>${esc(m.mfgSpecNum ?? "—")}</td><th>Vendor Part No.</th><td>${esc(m.vendorPartNum ?? "—")}</td></tr>
+    <tr><th>Face Stock</th><td colspan="3">${esc(m.description ?? "—")}</td><th>Master Width</th><td>${m.masterWidth ? esc(m.masterWidth) + '"' : "—"}</td></tr>
+    <tr><th>Color</th><td>${esc(m.color ?? "—")}</td><th>Adhesive</th><td>${esc(m.adhesive ?? "—")}</td><th>Top Coating</th><td>${esc(m.topCoat ?? "None")}</td></tr>
+    <tr><th>Ordered</th><td>${d.totals.rolls} roll${d.totals.rolls === 1 ? "" : "s"} · Exact Rolls</td><th>Cost Per MSI</th><td>${d.material.costMsi ? "$" + d.material.costMsi.toFixed(5) : "—"}</td><th>&nbsp;</th><td>&nbsp;</td></tr>
+  </tbody></table>
+
+  <table class="rolls">
+    <thead><tr>
+      <th class="c">Roll</th><th>Ordered (ft)</th><th class="c">Received</th>
+      <th class="c">No.</th><th>1st Cut</th><th class="c">No.</th><th>2nd Cut</th>
+      <th class="c">No.</th><th>3rd Cut</th><th class="c">No.</th><th>4th Cut</th><th class="c">O'Cut</th>
+    </tr></thead>
+    <tbody>${rollRows}</tbody>
+  </table>
+
+  <div class="totals">
+    <span>Master Rolls: <strong>${d.totals.rolls}</strong></span>
+    <span>Area (MSI): <strong>${num(d.totals.areaMsi)}</strong></span>
+    ${d.totals.weight ? `<span>Weight: <strong>${num(d.totals.weight)} lb.</strong></span>` : ""}
+    <span>Purchase Price: <strong>${money(d.totals.purchasePrice)}</strong></span>
+  </div>
+  <div class="foot">Cuts are in inches · Area (MSI) · Generated by Calyx Supply Chain Dashboard · ctimmons@calyxcontainers.com</div>
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 350));</script>
   </body></html>`;
 
-  const w = window.open("", "_blank", "width=920,height=1100");
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 // ---------------------------------------------------------------------
@@ -701,27 +749,16 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
   const submitPo = useSubmitMaterialPo();
   const updatePo = useUpdateMaterialPo();
 
-  const purchByStock = React.useMemo(
-    () => new Map((purch?.items ?? []).map((it) => [it.stockId, it])),
-    [purch],
-  );
-
-  const printPo = (po: MaterialPo) =>
-    openPoDocument({
-      poNumber: po.ltPoNumbers || `DRAFT-${po.id.slice(0, 6).toUpperCase()}`,
-      vendorName: po.vendorName,
-      vendorEmails: po.vendorEmails ?? null,
-      orderedDate: new Date(po.createdAt).toLocaleDateString(),
-      requestedDeliveryDate: po.requestedDeliveryDate ?? null,
-      lines: po.lines.map((l) => ({
-        stockId: l.stockId,
-        description: l.description ?? null,
-        rolls: l.rolls,
-        footage: l.footage ?? null,
-        msiCost: l.msiCost ?? null,
-      })),
-      purchByStock,
-    });
+  const printPo = (po: MaterialPo) => {
+    // Open the window synchronously (popup-blocker safe), then fill it from
+    // the assembled document endpoint.
+    const win = window.open("", "_blank", "width=920,height=1100");
+    if (!win) {
+      toast({ title: "Pop-up blocked", description: "Allow pop-ups for this site to print POs", variant: "destructive" });
+      return;
+    }
+    void openPoDocument(win, po.id);
+  };
 
   const attachLtNumber = async (po: MaterialPo, value: string | null) => {
     try {
@@ -733,7 +770,6 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     }
   };
   const [lines, setLines] = React.useState<SuggestionLine[]>([]);
-  const [emails, setEmails] = React.useState<Record<string, { to: string; subject: string; body: string; poId: string }>>({});
 
   React.useEffect(() => {
     if (!purch) return;
@@ -792,36 +828,43 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       toast({ title: "Nothing selected", description: "Check at least one line first", variant: "destructive" });
       return;
     }
-    const maxLead = Math.max(14, ...selected.map((l) => l.leadTimeDays || 0));
-    const due = new Date();
-    due.setDate(due.getDate() + maxLead);
     try {
-      const r = await createPo.mutateAsync({
-        data: {
-          vendorName,
-          vendorEmails: selected[0]!.vendorEmails,
-          requestedDeliveryDate: due.toISOString().slice(0, 10),
-          lines: selected.map((l) => ({
-            stockId: l.stockId,
-            description: l.description,
-            rolls: l.rolls,
-            footage: l.rolls * l.footagePerRoll || null,
-            msiCost: l.msiCost,
-            estCost: lineEstCost(l),
-          })),
-        },
-      });
-      setEmails((prev) => ({ ...prev, [vendorName]: { ...r.email, poId: r.id } }));
+      // One PO per material — POs are strictly 1-to-1 with a stock; materials
+      // are never combined on a single PO.
+      for (const l of selected) {
+        const due = new Date();
+        due.setDate(due.getDate() + Math.max(14, l.leadTimeDays || 0));
+        await createPo.mutateAsync({
+          data: {
+            vendorName,
+            vendorEmails: l.vendorEmails,
+            requestedDeliveryDate: due.toISOString().slice(0, 10),
+            lines: [
+              {
+                stockId: l.stockId,
+                description: l.description,
+                rolls: l.rolls,
+                footage: l.rolls * l.footagePerRoll || null,
+                msiCost: l.msiCost,
+                estCost: lineEstCost(l),
+              },
+            ],
+          },
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
-      toast({ title: "PO draft created", description: `${selected.length} line(s) for ${vendorName}` });
+      toast({
+        title: `${selected.length} PO${selected.length === 1 ? "" : "s"} created`,
+        description: `One per material for ${vendorName} — review & submit in PO History below`,
+      });
     } catch (e) {
       toast({ title: "Failed", description: String(e), variant: "destructive" });
     }
   };
 
-  const handleSubmit = async (poId: string, vendorName: string) => {
+  const handleSubmit = async (po: MaterialPo) => {
     try {
-      const r = await submitPo.mutateAsync({ id: poId });
+      const r = await submitPo.mutateAsync({ id: po.id });
       await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
       toast({
         title: r.status === "submitted_lt" ? "PO created in Label Traxx" : "PO submitted",
@@ -831,10 +874,25 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
             : (r.ltError ?? "Recorded here — enter it in Label Traxx and link the PO # for receipt tracking"),
         variant: r.status === "submitted_lt" ? undefined : "destructive",
       });
-      setEmails((prev) => ({ ...prev, [vendorName]: { ...r.email, poId: r.id } }));
     } catch (e) {
       toast({ title: "Submit failed", description: String(e), variant: "destructive" });
     }
+  };
+
+  // Vendor PO email built client-side from the PO's single material line.
+  const poMailto = (po: MaterialPo): string => {
+    const l = po.lines[0];
+    const line = l
+      ? `  • Stock #${l.stockId}${l.description ? ` — ${l.description}` : ""}: ${l.rolls} roll${l.rolls === 1 ? "" : "s"}` +
+        (l.footage ? ` (~${Math.round(l.footage).toLocaleString()} ft)` : "")
+      : "";
+    const body =
+      `Hi ${po.vendorName} team,\n\nPlease find our purchase order below:\n\n${line}\n\n` +
+      (po.requestedDeliveryDate ? `Requested delivery: ${po.requestedDeliveryDate}\n` : "") +
+      `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
+      `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
+    const subject = `Calyx Containers PO — ${po.vendorName} — Stock #${l?.stockId ?? ""}`;
+    return `mailto:${encodeURIComponent(po.vendorEmails ?? "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   };
 
   if (isLoading) return <Skeleton className="h-72 rounded-lg" />;
@@ -851,7 +909,6 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
         byVendor.map(([vendorName, vendorLines]) => {
           const selected = vendorLines.filter((l) => l.selected && l.rolls > 0);
           const total = selected.reduce((s, l) => s + (lineEstCost(l) ?? 0), 0);
-          const email = emails[vendorName];
           return (
             <Card key={vendorName}>
               <CardHeader className="pb-2">
@@ -878,8 +935,9 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       size="sm"
                       disabled={createPo.isPending || selected.length === 0}
                       onClick={() => handleCreate(vendorName, vendorLines)}
+                      title="Creates one separate PO per selected material"
                     >
-                      <Send className="w-3.5 h-3.5 mr-1" /> Create PO ({selected.length})
+                      <Send className="w-3.5 h-3.5 mr-1" /> Create {selected.length} PO{selected.length === 1 ? "" : "s"}
                     </Button>
                   </div>
                 </div>
@@ -946,38 +1004,6 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     </tbody>
                   </table>
                 </div>
-                {email && (
-                  <div className="mt-2 flex items-center gap-2 text-xs">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>PO draft ready.</span>
-                    <a
-                      className="text-primary hover:underline inline-flex items-center gap-1"
-                      href={`mailto:${encodeURIComponent(email.to)}?subject=${encodeURIComponent(email.subject)}&body=${encodeURIComponent(email.body)}`}
-                    >
-                      <Mail className="w-3.5 h-3.5" /> Email PO to vendor
-                    </a>
-                    <span className="text-muted-foreground">·</span>
-                    <button
-                      type="button"
-                      className="text-primary hover:underline inline-flex items-center gap-1"
-                      disabled={submitPo.isPending}
-                      onClick={() => handleSubmit(email.poId, vendorName)}
-                    >
-                      <Send className="w-3.5 h-3.5" /> Submit PO{purch?.ltWriteEnabled ? " to Label Traxx" : ""}
-                    </button>
-                    <span className="text-muted-foreground">·</span>
-                    <button
-                      type="button"
-                      className="text-primary hover:underline inline-flex items-center gap-1"
-                      onClick={() => {
-                        const po = poList?.items.find((p) => p.id === email.poId);
-                        if (po) printPo(po);
-                      }}
-                    >
-                      <Printer className="w-3.5 h-3.5" /> Print PO PDF
-                    </button>
-                  </div>
-                )}
               </CardContent>
             </Card>
           );
@@ -1020,14 +1046,34 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                     />
                   </div>
+                  {po.vendorEmails && (
+                    <a
+                      href={poMailto(po)}
+                      title="Email this PO to the vendor"
+                      className="text-primary hover:text-primary/80 p-1"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                    </a>
+                  )}
                   <button
                     type="button"
-                    title="Print PO document"
+                    title="Print PO document (Label Traxx format)"
                     className="text-primary hover:text-primary/80 p-1"
                     onClick={() => printPo(po)}
                   >
                     <Printer className="w-3.5 h-3.5" />
                   </button>
+                  {(po.status === "draft" || po.status === "submitted") && (
+                    <button
+                      type="button"
+                      disabled={submitPo.isPending}
+                      title={purch?.ltWriteEnabled ? "Create this PO in Label Traxx" : "Mark submitted"}
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline p-1 disabled:opacity-50"
+                      onClick={() => handleSubmit(po)}
+                    >
+                      <Send className="w-3.5 h-3.5" /> {purch?.ltWriteEnabled ? "Submit to LT" : "Submit"}
+                    </button>
+                  )}
                   <Badge
                     variant="outline"
                     className={cn(

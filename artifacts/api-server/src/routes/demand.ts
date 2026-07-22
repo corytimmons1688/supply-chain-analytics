@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { eq } from "drizzle-orm";
-import { db, stockGoalTable, materialPoTable, materialPoLineTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, materialPoTable, materialPoLineTable, ltStockTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -577,6 +577,101 @@ router.post(
       lines: lineValues,
     });
     res.json({ id: po!.id, status: "draft", email });
+  }),
+);
+
+/**
+ * Assemble the full data for a print-ready PO document in the Label Traxx PO
+ * format (single material). Supplier address comes live from the LT API;
+ * material spec from the lt_stock mirror.
+ */
+router.get(
+  "/demand/pos/:id/document",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
+    const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
+    const line = lines[0];
+    if (!line) return void res.status(400).json({ error: "PO has no line" });
+
+    const [stock] = await db.select().from(ltStockTable).where(eq(ltStockTable.stockId, line.stockId)).limit(1);
+
+    // Supplier address + customer id, live from the LT API.
+    let supplier: Record<string, unknown> = {};
+    let vendorPartNum: string | null = null;
+    const { ltGet } = await import("../lib/ltApi");
+    if (stock?.supplierNumber) {
+      supplier = (await ltGet<Record<string, unknown>>("/supplier-details", {
+        SupplierNumber: stock.supplierNumber,
+      }).catch(() => ({}))) as Record<string, unknown>;
+    }
+    // If already in Label Traxx, pull the real vendor part number off the PO.
+    const firstLtPo = (po.ltPoNumbers ?? "").split(",").map((n) => n.trim()).filter(Boolean)[0];
+    if (firstLtPo) {
+      const ltPo = await ltGet<Record<string, unknown>>("/purchase-order-details", { PONumber: firstLtPo }).catch(() => null);
+      const items = ltPo && Array.isArray(ltPo["poItems"]) ? (ltPo["poItems"] as Record<string, unknown>[]) : [];
+      vendorPartNum = items[0]?.["vendorPartNum"] != null ? String(items[0]!["vendorPartNum"]) : null;
+    }
+
+    const company = String(supplier["company"] ?? po.vendorName);
+    const custIdMatch = /customer\s*id[:#\s]*([0-9]+)/i.exec(company);
+    const masterWidth = stock?.masterWidth ?? 0;
+    const rolls = Math.max(1, line.rolls);
+    const totalFootage = line.footage ?? 0;
+    const footagePerRoll = totalFootage > 0 ? Math.round(totalFootage / rolls) : 0;
+    const costMsi = line.msiCost ?? stock?.costMsi ?? 0;
+    const areaMsi = masterWidth > 0 ? (totalFootage * 12 * masterWidth) / 1000 : 0;
+    const purchasePrice = areaMsi * costMsi;
+    const weight = stock?.areaToWeightFactor ? areaMsi / stock.areaToWeightFactor : 0;
+
+    res.json({
+      poNumber: firstLtPo ?? `DRAFT-${po.id.slice(0, 6).toUpperCase()}`,
+      isDraft: !firstLtPo,
+      orderedDate: po.createdAt.toISOString().slice(0, 10),
+      requestedDeliveryDate: po.requestedDeliveryDate,
+      type: "New Order",
+      supplier: {
+        company: company.replace(/\s*customer\s*id[:#\s]*[0-9]+/i, "").trim(),
+        customerId: custIdMatch ? custIdMatch[1] : (supplier["accountNumber"] ? String(supplier["accountNumber"]) : null),
+        address1: supplier["address1"] ?? null,
+        address2: supplier["address2"] ?? null,
+        city: supplier["city"] ?? null,
+        state: supplier["state"] ?? null,
+        zip: supplier["zip"] ?? null,
+        country: supplier["country"] ?? null,
+        phone: supplier["phone"] ?? null,
+        fax: supplier["fax"] ?? null,
+        terms: supplier["terms"] ?? null,
+      },
+      shipTo: {
+        name: "Calyx Containers",
+        address1: "1991 Parkway Blvd",
+        city: "West Valley City",
+        state: "UT",
+        zip: "84119",
+        country: "USA",
+        phone: "1 (888) 432-7766",
+      },
+      material: {
+        stockId: line.stockId,
+        vendorPartNum,
+        description: stock?.faceStock ?? line.description ?? null,
+        mfgSpecNum: stock?.mfgSpecNum ?? null,
+        masterWidth,
+        costMsi,
+        color: stock?.faceColor ?? null,
+        adhesive: stock?.adhesive ?? null,
+        topCoat: stock?.topCoat || "None",
+      },
+      rolls: Array.from({ length: rolls }, (_, i) => ({ no: i + 1, footage: footagePerRoll, width: masterWidth })),
+      totals: {
+        rolls,
+        areaMsi: Math.round(areaMsi),
+        purchasePrice: Math.round(purchasePrice * 100) / 100,
+        weight: Math.round(weight),
+      },
+    });
   }),
 );
 
