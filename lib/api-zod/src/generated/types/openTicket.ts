@@ -14,6 +14,8 @@ export interface OpenTicket {
   grossFootage?: number;
   /** Footage already run (rolls consumed) against this ticket for this stock. */
   consumedFootage?: number;
+  /** Width this ticket needs this material at (0 = unspecified). */
+  requiredWidth?: number;
   stockIn: string;
   computedStatus?: string;
   shipByDate?: string | null;

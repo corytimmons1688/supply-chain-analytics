@@ -94,6 +94,9 @@ export const ltPoTable = pgTable(
     supplierName: text("supplier_name"),
     stockNum: text("stock_num"),
     quantity: doublePrecision("quantity"),
+    // Master roll width ordered on this PO — the width its rolls supply (used
+    // for width-aware availability; on-order at this width covers demand at it).
+    masterWidth: doublePrecision("master_width"),
     subTotal: doublePrecision("sub_total"),
     description: text("description"),
     items: jsonb("items"),

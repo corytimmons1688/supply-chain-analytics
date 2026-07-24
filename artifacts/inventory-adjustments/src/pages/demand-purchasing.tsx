@@ -636,7 +636,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                           <div
                             className="relative h-6 w-24 rounded-sm flex items-center justify-center text-[11px] font-semibold text-white overflow-hidden"
                             style={{
-                              background: TICKET_STATUS_COLORS[r.status] ?? "#94a3b8",
+                              background: TICKET_STATUS_COLORS[sg.status ?? r.status] ?? "#94a3b8",
                             }}
                           >
                             {sg.width > 0 ? `${sg.width}"` : "0 ft"}
@@ -671,47 +671,39 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                           </div>
                           <div className="pointer-events-none absolute z-30 hidden group-hover:block top-7 left-0 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]">
                             <div className="font-semibold">
-                              #{r.stockId} · {sg.width > 0 ? `${sg.width}" wide` : "no stock"} · {r.status}
-                              {r.noTickets && " (no open tickets)"}
+                              #{r.stockId} · {sg.width > 0 ? `${sg.width}" wide` : "no stock"} · {sg.status ?? r.status}
                             </div>
                             <div className="text-muted-foreground mb-1.5">
-                              {fmt(sg.footage)} ft on hand at this width · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"}
+                              {fmt(sg.footage)} ft on hand · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"} at this width
                               {r.belowMin && <span className="text-blue-600 dark:text-blue-400"> · below min</span>}
                               {r.aboveMax && <span className="text-purple-600 dark:text-purple-400"> · above max</span>}
                             </div>
-                            {totals && (
-                              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                <div>
-                                  <span className="text-muted-foreground">In Inventory</span>
-                                  <div className="font-semibold tabular-nums">
-                                    {unit === "usd" ? `$${fmt(totals.onHand)}` : `${fmt(totals.onHand)} ft`}
-                                  </div>
-                                </div>
-                                <div>
-                                  <span className="text-muted-foreground">Ordered</span>
-                                  <div className="font-semibold tabular-nums">
-                                    {unit === "usd" ? `$${fmt(totals.onOrder)}` : `${fmt(totals.onOrder)} ft`}
-                                  </div>
-                                </div>
-                                <div>
-                                  <span className="text-muted-foreground">Required</span>
-                                  <div className="font-semibold tabular-nums">
-                                    {unit === "usd" ? `$${fmt(totals.required)}` : `${fmt(totals.required)} ft`}
-                                  </div>
-                                </div>
-                                <div>
-                                  <span className="text-muted-foreground">Available</span>
-                                  <div
-                                    className={cn(
-                                      "font-semibold tabular-nums",
-                                      totals.available < 0 && "text-red-600 dark:text-red-400",
-                                    )}
-                                  >
-                                    {unit === "usd" ? `$${fmt(totals.available)}` : `${fmt(totals.available)} ft`}
-                                  </div>
+                            {/* Per-width availability (exact width — no slitting across widths). */}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                              <div>
+                                <span className="text-muted-foreground">On hand ({sg.width}")</span>
+                                <div className="font-semibold tabular-nums">{fmt(sg.footage)} ft</div>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">On order ({sg.width}")</span>
+                                <div className="font-semibold tabular-nums">{fmt(sg.onOrderFootage ?? 0)} ft</div>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Required ({sg.width}")</span>
+                                <div className="font-semibold tabular-nums">{fmt(sg.requiredFootage ?? 0)} ft</div>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Short</span>
+                                <div
+                                  className={cn(
+                                    "font-semibold tabular-nums",
+                                    (sg.shortFootage ?? 0) > 0 && "text-red-600 dark:text-red-400",
+                                  )}
+                                >
+                                  {fmt(sg.shortFootage ?? 0)} ft
                                 </div>
                               </div>
-                            )}
+                            </div>
                           </div>
                         </div>
                       ))}

@@ -8,6 +8,15 @@
 
 export interface WidthOnHand {
   width: number;
+  /** On-hand footage at this width. */
   footage: number;
   rolls: number;
+  /** Open-PO footage whose master width matches this width. */
+  onOrderFootage?: number;
+  /** Open-ticket footage requiring this exact width. */
+  requiredFootage?: number;
+  /** max(0, required − onHand − onOrder) at this width. */
+  shortFootage?: number;
+  /** Computed availability for this width (In / Ordered / Ordered Not Confirmed / Out / Without Tickets). */
+  status?: string;
 }

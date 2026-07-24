@@ -716,8 +716,28 @@ export const GetDemandPurchasingResponse = zod.object({
         .array(
           zod.object({
             width: zod.number(),
-            footage: zod.number(),
+            footage: zod.number().describe("On-hand footage at this width."),
             rolls: zod.number(),
+            onOrderFootage: zod
+              .number()
+              .optional()
+              .describe(
+                "Open-PO footage whose master width matches this width.",
+              ),
+            requiredFootage: zod
+              .number()
+              .optional()
+              .describe("Open-ticket footage requiring this exact width."),
+            shortFootage: zod
+              .number()
+              .optional()
+              .describe("max(0, required − onHand − onOrder) at this width."),
+            status: zod
+              .string()
+              .optional()
+              .describe(
+                "Computed availability for this width (In \/ Ordered \/ Ordered Not Confirmed \/ Out \/ Without Tickets).",
+              ),
           }),
         )
         .optional(),
@@ -737,6 +757,12 @@ export const GetDemandPurchasingResponse = zod.object({
               .optional()
               .describe(
                 "Footage already run (rolls consumed) against this ticket for this stock.",
+              ),
+            requiredWidth: zod
+              .number()
+              .optional()
+              .describe(
+                "Width this ticket needs this material at (0 = unspecified).",
               ),
             stockIn: zod.string(),
             computedStatus: zod.string().optional(),

@@ -361,6 +361,8 @@ export interface OpenTicketRow {
   grossFootage: number;
   /** Footage already run (rolls consumed) against this ticket for this stock. */
   consumedFootage: number;
+  /** Width this ticket needs this material at (from the BOM alloc); 0 = unspecified. */
+  requiredWidth: number;
   stockIn: string; // Label Traxx availability status: In / Ordered / Out / ...
   shipByDate: string | null;
   description: string | null;
@@ -432,7 +434,7 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
   const out: OpenTicketRow[] = [];
   for (const row of rows) {
     const allocs = Array.isArray(row.stockAllocs)
-      ? (row.stockAllocs as { stockNumber?: string }[])
+      ? (row.stockAllocs as { stockNumber?: string; width?: string | number }[])
       : [];
     // Emit one row per material in the ticket's BOM (all stock allocations),
     // not just the primary. Calyx does NOT run LT stock allocation, but the
@@ -450,12 +452,14 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
       // material on this ticket.
       const gross = row.totalNeeded ?? 0;
       const consumed = consumedByTicketStock.get(`${row.ticketNumber}|${stockId}`) ?? 0;
+      const requiredWidth = Number(a.width) || 0;
       out.push({
         ticketNumber: row.ticketNumber,
         stockId,
         estFootage: Math.max(0, gross - consumed),
         grossFootage: gross,
         consumedFootage: Math.round(consumed),
+        requiredWidth,
         stockIn,
         shipByDate: row.shipByDate,
         description: row.description,
@@ -557,6 +561,134 @@ export function vendorLeadTimeMedians(poLeadTimes: Map<string, PoLeadTime>): Map
   return out;
 }
 
+// ---------- Width-aware availability ----------
+
+/** Round a width to a stable 2-decimal bucket key so demand/supply match. */
+function widthKey(w: number): number {
+  return Math.round((w || 0) * 100) / 100;
+}
+
+export interface WidthAvailLine {
+  key: string; // caller's line id (e.g. `${ticket}|${stock}`)
+  requiredWidth: number;
+  footage: number; // remaining required footage
+  shipByDate: string | null;
+}
+export interface WidthRow {
+  width: number;
+  onHandFootage: number;
+  onHandRolls: number;
+  onOrderFootage: number;
+  requiredFootage: number;
+  shortFootage: number;
+  status: string; // In | Ordered | Ordered Not Confirmed | Out | Without Tickets
+}
+export interface WidthAvailInput {
+  onHand: { width: number; footage: number; rolls: number }[];
+  openPos: { masterWidth: number | null; quantityRolls: number; dueDateIso: string | null }[];
+  lines: WidthAvailLine[];
+  avgRollFootage: number;
+  masterWidthFallback: number;
+}
+export interface WidthAvailResult {
+  widthRows: WidthRow[];
+  lineStatus: Map<string, string>;
+  committedShortageFootage: number;
+}
+
+/**
+ * Exact-width availability: demand at a width is covered ONLY by on-hand +
+ * on-order (PO master width) at that same width — no slitting across widths.
+ * Per-line status is netted earliest-ship-first within each width bucket
+ * (on-hand → confirmed PO → unconfirmed PO); per-width rows and the total
+ * committed shortage are aggregates for the reorder engine and the UI.
+ */
+export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResult {
+  const fallback = widthKey(input.masterWidthFallback);
+  const bucketFor = (w: number) => {
+    const k = widthKey(w);
+    return k > 0 ? k : fallback; // unspecified width → the stock's master width
+  };
+
+  // Supply pools per width (consumed during netting).
+  const avail = new Map<number, number>();
+  const onHandRolls = new Map<number, number>();
+  for (const w of input.onHand) {
+    const k = widthKey(w.width);
+    avail.set(k, (avail.get(k) ?? 0) + w.footage);
+    onHandRolls.set(k, (onHandRolls.get(k) ?? 0) + w.rolls);
+  }
+  const confirmed = new Map<number, number>();
+  const unconfirmed = new Map<number, number>();
+  for (const po of input.openPos) {
+    const k = bucketFor(po.masterWidth ?? 0);
+    const ft = po.quantityRolls * input.avgRollFootage;
+    if (po.dueDateIso) confirmed.set(k, (confirmed.get(k) ?? 0) + ft);
+    else unconfirmed.set(k, (unconfirmed.get(k) ?? 0) + ft);
+  }
+  // Snapshot original supply totals (netting mutates the pools).
+  const onHand0 = new Map(avail);
+  const conf0 = new Map(confirmed);
+  const unconf0 = new Map(unconfirmed);
+  const onOrder0 = new Map<number, number>();
+  for (const [k, v] of conf0) onOrder0.set(k, (onOrder0.get(k) ?? 0) + v);
+  for (const [k, v] of unconf0) onOrder0.set(k, (onOrder0.get(k) ?? 0) + v);
+
+  // Demand per width + per-line netting (earliest ship first).
+  const requiredByW = new Map<number, number>();
+  const lineStatus = new Map<string, string>();
+  const ordered = [...input.lines].sort((a, b) =>
+    (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"),
+  );
+  for (const line of ordered) {
+    const k = bucketFor(line.requiredWidth);
+    requiredByW.set(k, (requiredByW.get(k) ?? 0) + line.footage);
+    let need = line.footage;
+    const a = Math.min(avail.get(k) ?? 0, need);
+    avail.set(k, (avail.get(k) ?? 0) - a);
+    need -= a;
+    const c = Math.min(confirmed.get(k) ?? 0, need);
+    confirmed.set(k, (confirmed.get(k) ?? 0) - c);
+    need -= c;
+    const u = Math.min(unconfirmed.get(k) ?? 0, need);
+    unconfirmed.set(k, (unconfirmed.get(k) ?? 0) - u);
+    need -= u;
+    lineStatus.set(
+      line.key,
+      need > 1 ? "Out" : u > 0 ? "Ordered Not Confirmed" : c > 0 ? "Ordered" : "In",
+    );
+  }
+
+  // Per-width rows over the union of supply + demand widths.
+  const allW = new Set<number>([...onHand0.keys(), ...onOrder0.keys(), ...requiredByW.keys()]);
+  const widthRows: WidthRow[] = [];
+  let committedShortageFootage = 0;
+  for (const k of allW) {
+    const oh = onHand0.get(k) ?? 0;
+    const oo = onOrder0.get(k) ?? 0;
+    const req = requiredByW.get(k) ?? 0;
+    const short = Math.max(0, req - oh - oo);
+    committedShortageFootage += short;
+    let status: string;
+    if (req <= 0) status = "Without Tickets";
+    else if (req <= oh) status = "In";
+    else if (req <= oh + (conf0.get(k) ?? 0)) status = "Ordered";
+    else if (short <= 0) status = "Ordered Not Confirmed";
+    else status = "Out";
+    widthRows.push({
+      width: k,
+      onHandFootage: Math.round(oh),
+      onHandRolls: onHandRolls.get(k) ?? 0,
+      onOrderFootage: Math.round(oo),
+      requiredFootage: Math.round(req),
+      shortFootage: Math.round(short),
+      status,
+    });
+  }
+  widthRows.sort((a, b) => a.width - b.width);
+  return { widthRows, lineStatus, committedShortageFootage: Math.round(committedShortageFootage) };
+}
+
 export interface PoRollRow {
   stockId: string;
   poNumber: string;
@@ -608,6 +740,8 @@ export interface OpenPoRow {
   poDateIso: string | null;
   dueDateIso: string | null;
   quantityRolls: number;
+  /** Master roll width this PO supplies (for width-aware availability). */
+  masterWidth: number | null;
   description: string | null;
   daysOpen: number | null;
 }
@@ -645,6 +779,7 @@ export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
       poDateIso: row.poDate,
       dueDateIso: row.dueDate,
       quantityRolls,
+      masterWidth: row.masterWidth ?? null,
       description: row.description,
       daysOpen: row.poDate ? diffDays(row.poDate, today) : null,
     });
@@ -762,6 +897,11 @@ export interface StockMetricsInput {
   openPos?: OpenPoRow[]; // pre-filtered to this stock; unreceived Stock-type POs
   /** Committed footage required by open (undone) tickets that list this material. */
   openTicketFootage?: number;
+  /**
+   * Exact-width committed shortage (Σ per-width max(0, demand − on-hand − on-order)).
+   * When provided, overrides the pooled shortage so reorder respects width.
+   */
+  committedShortageOverride?: number;
   /**
    * Per-ticket committed lines (footage + ship-by date) for this material, used
    * to time-phase demand: requirements due within the lead-time horizon are
@@ -1044,7 +1184,12 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   // End-of-life SKUs still show on-hand for sell-through but never reorder.
   const discontinued = input.discontinued ?? false;
   const forecastShort = !discontinued && reorderPoint > 0 && inventoryPosition < reorderPoint;
-  const committedShortageFootage = Math.max(0, openTicketFootage - inventoryPosition);
+  // Width-aware committed shortage when supplied (demand at a width covered only
+  // by supply at that width); else the pooled fallback.
+  const committedShortageFootage =
+    input.committedShortageOverride != null
+      ? Math.max(0, input.committedShortageOverride)
+      : Math.max(0, openTicketFootage - inventoryPosition);
   const committedShort = !discontinued && committedShortageFootage > 0;
   const belowMin = forecastShort || committedShort;
   const reorderReason: StockMetrics["reorderReason"] = forecastShort && committedShort
@@ -1058,10 +1203,9 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   let suggestedOrderFootage = 0;
   let suggestedOrderRolls = 0;
   if (belowMin) {
-    // Order up to whichever is higher: the forecast max level, or enough to
-    // cover all committed open tickets. Then net out the current position.
-    const targetLevel = Math.max(maxFootage, openTicketFootage);
-    const rawNeed = targetLevel - inventoryPosition;
+    // Order enough to reach the forecast max level, or to cover the (width-aware)
+    // committed shortfall — whichever is larger.
+    const rawNeed = Math.max(maxFootage - inventoryPosition, committedShortageFootage);
     if (typicalRoll > 0) {
       // Never order below the economic batch — a (Q,r) policy places at least
       // EOQ each time, but a big committed backlog can push the quantity higher.

@@ -1672,8 +1672,12 @@ components:
       required: [width, footage, rolls]
       properties:
         width: { type: number }
-        footage: { type: number }
+        footage: { type: number, description: "On-hand footage at this width." }
         rolls: { type: number }
+        onOrderFootage: { type: number, description: "Open-PO footage whose master width matches this width." }
+        requiredFootage: { type: number, description: "Open-ticket footage requiring this exact width." }
+        shortFootage: { type: number, description: "max(0, required − onHand − onOrder) at this width." }
+        status: { type: string, description: "Computed availability for this width (In / Ordered / Ordered Not Confirmed / Out / Without Tickets)." }
     OpenTicket:
       type: object
       required: [ticketNumber, estFootage, stockIn]
@@ -1682,6 +1686,7 @@ components:
         estFootage: { type: number, description: "Remaining footage required (gross − consumed)." }
         grossFootage: { type: number, description: "Full run requirement (LT total needed)." }
         consumedFootage: { type: number, description: "Footage already run (rolls consumed) against this ticket for this stock." }
+        requiredWidth: { type: number, description: "Width this ticket needs this material at (0 = unspecified)." }
         stockIn: { type: string }
         computedStatus: { type: string }
         shipByDate: { type: string, nullable: true }

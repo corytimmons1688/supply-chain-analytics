@@ -14,11 +14,13 @@ import {
   fetchOnHandByWidth,
   computeStockMetrics,
   vendorLeadTimeMedians,
+  computeWidthAvailability,
   bucketHistory,
   defaultDemandWindow,
   type RollUsageRow,
   type PoRollRow,
   type OpenPoRow,
+  type WidthRow,
 } from "../lib/demand";
 import type { Bucket } from "../lib/cc";
 
@@ -98,7 +100,7 @@ router.get(
 
     const { from, to } = defaultDemandWindow(monthsBack);
 
-    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets, stockInfo, globalRows] = await Promise.all([
+    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets, stockInfo, globalRows, onHandByWidth] = await Promise.all([
       fetchUsage({ from, to }),
       fetchOnHandByStock(),
       fetchPoLeadTimes(),
@@ -109,6 +111,7 @@ router.get(
       fetchOpenTickets(),
       fetchStockInfo(),
       db.select().from(globalGoalTable).where(eq(globalGoalTable.id, "global")),
+      fetchOnHandByWidth(),
     ]);
 
     // EOQ economics: fixed cost to place a PO and annual carrying rate. Query
@@ -125,12 +128,15 @@ router.get(
     // Also keep the per-ticket lines (footage + ship-by date) so computeStock-
     // Metrics can time-phase demand against the lead-time horizon.
     const openTicketFootageByStock = new Map<string, number>();
-    const openTicketLinesByStock = new Map<string, { footage: number; shipByDate: string | null }[]>();
+    const openTicketLinesByStock = new Map<
+      string,
+      { ticketNumber: string; footage: number; shipByDate: string | null; requiredWidth: number }[]
+    >();
     for (const t of openTickets) {
       openTicketFootageByStock.set(t.stockId, (openTicketFootageByStock.get(t.stockId) ?? 0) + t.estFootage);
       let lines = openTicketLinesByStock.get(t.stockId);
       if (!lines) { lines = []; openTicketLinesByStock.set(t.stockId, lines); }
-      lines.push({ footage: t.estFootage, shipByDate: t.shipByDate });
+      lines.push({ ticketNumber: t.ticketNumber, footage: t.estFootage, shipByDate: t.shipByDate, requiredWidth: t.requiredWidth });
     }
     const overridesByStock = new Map<string, StockOverrides>();
     for (const row of stockGoalRows) overridesByStock.set(row.stockId, rowToOverrides(row));
@@ -156,6 +162,32 @@ router.get(
       let arr = openPosByStock.get(p.stockId);
       if (!arr) { arr = []; openPosByStock.set(p.stockId, arr); }
       arr.push(p);
+    }
+
+    // Exact-width committed shortage per stock (demand at a width covered only by
+    // on-hand + on-order at that width) — drives the width-aware reorder.
+    const committedShortageByStock = new Map<string, number>();
+    for (const [stockId, lines] of openTicketLinesByStock) {
+      const widths = onHandByWidth.get(stockId) ?? [];
+      const rolls = widths.reduce((s, w) => s + w.rolls, 0);
+      const ft = widths.reduce((s, w) => s + w.footage, 0);
+      const { committedShortageFootage } = computeWidthAvailability({
+        onHand: widths,
+        openPos: (openPosByStock.get(stockId) ?? []).map((p) => ({
+          masterWidth: p.masterWidth,
+          quantityRolls: p.quantityRolls,
+          dueDateIso: p.dueDateIso,
+        })),
+        lines: lines.map((l) => ({
+          key: l.ticketNumber,
+          requiredWidth: l.requiredWidth,
+          footage: l.footage,
+          shipByDate: l.shipByDate,
+        })),
+        avgRollFootage: rolls > 0 ? ft / rolls : 5000,
+        masterWidthFallback: stockInfo.get(stockId)?.masterWidth ?? 0,
+      });
+      committedShortageByStock.set(stockId, committedShortageFootage);
     }
 
     const allStockIds = new Set<string>();
@@ -215,6 +247,7 @@ router.get(
         openPos: openPosByStock.get(stockId) ?? [],
         openTicketFootage: openTicketFootageByStock.get(stockId) ?? 0,
         openTicketLines: openTicketLinesByStock.get(stockId) ?? [],
+        committedShortageOverride: committedShortageByStock.get(stockId) ?? 0,
         serviceLevel,
         orderingCost,
         carryingRatePct,
@@ -377,20 +410,18 @@ router.get(
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
 
-    // Group open POs per stock, split by whether the supplier has confirmed a
-    // delivery date (dueDate present = "Ordered"; no dueDate = "Ordered Not
-    // Confirmed"). Footage is reconstructed later from each stock's roll size.
-    const posByStock = new Map<string, { confirmedRolls: number; unconfirmedRolls: number }>();
+    // Open POs grouped per stock (kept as full rows so we can bucket on-order by
+    // the PO's master width for exact-width availability).
+    const posListByStock = new Map<string, typeof openPos>();
     for (const po of openPos) {
-      const bucket = posByStock.get(po.stockId) ?? { confirmedRolls: 0, unconfirmedRolls: 0 };
-      if (po.dueDateIso) bucket.confirmedRolls += po.quantityRolls;
-      else bucket.unconfirmedRolls += po.quantityRolls;
-      posByStock.set(po.stockId, bucket);
+      let arr = posListByStock.get(po.stockId);
+      if (!arr) { arr = []; posListByStock.set(po.stockId, arr); }
+      arr.push(po);
     }
 
     // tickets has one row per (ticket × material in the BOM). Aggregate required
     // footage per material and keep the per-material ticket lines so we can net
-    // demand against inventory → POs → shortfall below.
+    // demand against inventory → POs → shortfall by WIDTH below.
     const ticketAgg = new Map<
       string,
       { requiredFootage: number; ticketCount: number; tickets: typeof tickets }
@@ -406,23 +437,18 @@ router.get(
       agg.tickets.push(t);
     }
 
-    // Computed availability status per (ticket × material) line. We ignore Label
-    // Traxx's un-run StockIn field entirely and derive status the way Batched
-    // does: net each stock's demand (earliest ship date first) against on-hand
-    // inventory, then confirmed POs, then unconfirmed POs. Whatever bucket the
-    // last covering footage comes from names the status; a shortfall is "Out".
     const STATUS_SEVERITY: Record<string, number> = {
       In: 0,
       Ordered: 1,
       "Ordered Not Confirmed": 2,
       Out: 3,
     };
-    // Best (lowest-severity) status seen for each ticket, across all its
-    // materials — this feeds the donut so each ticket is counted once by its
-    // worst-covered material.
+    // Worst status per ticket (across all its materials) → the donut.
     const ticketWorstStatus = new Map<string, string>();
-    // Worst status among a stock's own ticket lines — colours its bar.
+    // Worst status among a stock's own lines → the stock's overall bar colour.
     const stockLineStatus = new Map<string, string>();
+    // Per-stock per-width availability rows for the Stock Inventory Summary.
+    const widthRowsByStock = new Map<string, WidthRow[]>();
 
     function avgRollFootage(stockId: string): number {
       const widths = widthsByStock.get(stockId) ?? [];
@@ -435,34 +461,30 @@ router.get(
       return rolls > 0 ? ft / rolls : 5000;
     }
 
+    // Availability is EXACT WIDTH: demand at a width is covered only by on-hand
+    // + on-order (PO master width) at that same width (no slitting across widths).
     for (const [stockId, agg] of ticketAgg) {
-      const widths = widthsByStock.get(stockId) ?? [];
-      let avail = widths.reduce((s, w) => s + w.footage, 0);
-      const roll = avgRollFootage(stockId);
-      const poBucket = posByStock.get(stockId) ?? { confirmedRolls: 0, unconfirmedRolls: 0 };
-      let confirmed = poBucket.confirmedRolls * roll;
-      let unconfirmed = poBucket.unconfirmedRolls * roll;
-      const ordered = [...agg.tickets].sort((a, b) =>
-        (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"),
-      );
-      for (const line of ordered) {
-        let need = line.estFootage;
-        const fromInv = Math.min(avail, need);
-        avail -= fromInv;
-        need -= fromInv;
-        const fromConfirmed = Math.min(confirmed, need);
-        confirmed -= fromConfirmed;
-        need -= fromConfirmed;
-        const fromUnconfirmed = Math.min(unconfirmed, need);
-        unconfirmed -= fromUnconfirmed;
-        need -= fromUnconfirmed;
-        let status: string;
-        if (need > 1) status = "Out";
-        else if (fromUnconfirmed > 0) status = "Ordered Not Confirmed";
-        else if (fromConfirmed > 0) status = "Ordered";
-        else status = "In";
+      const info = stockInfo.get(stockId);
+      const result = computeWidthAvailability({
+        onHand: widthsByStock.get(stockId) ?? [],
+        openPos: (posListByStock.get(stockId) ?? []).map((p) => ({
+          masterWidth: p.masterWidth,
+          quantityRolls: p.quantityRolls,
+          dueDateIso: p.dueDateIso,
+        })),
+        lines: agg.tickets.map((t) => ({
+          key: t.ticketNumber,
+          requiredWidth: t.requiredWidth,
+          footage: t.estFootage,
+          shipByDate: t.shipByDate,
+        })),
+        avgRollFootage: avgRollFootage(stockId),
+        masterWidthFallback: info?.masterWidth ?? 0,
+      });
+      widthRowsByStock.set(stockId, result.widthRows);
+      for (const line of agg.tickets) {
+        const status = result.lineStatus.get(line.ticketNumber) ?? "In";
         line.computedStatus = status;
-        // roll up to the ticket (worst wins) and to the stock's bar (worst wins)
         const prevTicket = ticketWorstStatus.get(line.ticketNumber);
         if (prevTicket == null || STATUS_SEVERITY[status]! > STATUS_SEVERITY[prevTicket]!) {
           ticketWorstStatus.set(line.ticketNumber, status);
@@ -496,6 +518,19 @@ router.get(
         // its bar shows the worst computed status among its ticket lines.
         const hasTickets = (agg?.ticketCount ?? 0) > 0;
         const computedStatus = hasTickets ? stockLineStatus.get(stockId) ?? "In" : null;
+        // Per-width availability rows (exact-width). Falls back to plain on-hand
+        // widths for stocks with no open tickets (nothing to net).
+        const widthRows: WidthRow[] =
+          widthRowsByStock.get(stockId) ??
+          widths.map((w) => ({
+            width: w.width,
+            onHandFootage: Math.round(w.footage),
+            onHandRolls: w.rolls,
+            onOrderFootage: 0,
+            requiredFootage: 0,
+            shortFootage: 0,
+            status: "Without Tickets",
+          }));
         return {
           stockId,
           classification: info?.classification ?? null,
@@ -528,10 +563,17 @@ router.get(
           faceColor: info?.faceColor ?? null,
           topCoat: info?.topCoat ?? null,
           areaToWeightFactor: info?.areaToWeightFactor ?? 0,
-          widthsOnHand: widths.map((w) => ({
+          // One row per width (union of on-hand / on-order / required widths),
+          // each netted exact-width. `footage` = on-hand at that width (kept for
+          // back-compat); onOrder/required/short/status are per width.
+          widthsOnHand: widthRows.map((w) => ({
             width: w.width,
-            footage: Math.round(w.footage),
-            rolls: w.rolls,
+            footage: w.onHandFootage,
+            rolls: w.onHandRolls,
+            onOrderFootage: w.onOrderFootage,
+            requiredFootage: w.requiredFootage,
+            shortFootage: w.shortFootage,
+            status: w.status,
           })),
           tickets: (agg?.tickets ?? [])
             .sort((a, b) => (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"))
@@ -541,6 +583,7 @@ router.get(
               estFootage: Math.round(t.estFootage),
               grossFootage: Math.round(t.grossFootage),
               consumedFootage: Math.round(t.consumedFootage),
+              requiredWidth: t.requiredWidth,
               stockIn: t.stockIn,
               computedStatus: t.computedStatus ?? "In",
               shipByDate: t.shipByDate,
