@@ -385,7 +385,16 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
   const rows = await db
     .select()
     .from(ltTicketTable)
-    .where(and(isNull(ltTicketTable.dateDone), gte(ltTicketTable.shipByDate, since)));
+    .where(
+      and(
+        isNull(ltTicketTable.dateDone),
+        gte(ltTicketTable.shipByDate, since),
+        // "Digital Proof" tickets are proofing jobs, not production runs — they
+        // don't consume material, so exclude them from demand. IS DISTINCT FROM
+        // keeps tickets whose priority is null/anything else.
+        dsql`${ltTicketTable.priority} IS DISTINCT FROM 'Digital Proof'`,
+      ),
+    );
 
   // Footage already RUN (rolls consumed) against these open tickets, per
   // (ticket × stock). A partially-produced ticket still reports its full

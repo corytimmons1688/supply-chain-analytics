@@ -61,6 +61,9 @@ export const ltTicketTable = pgTable(
   {
     ticketNumber: text("ticket_number").primaryKey(),
     status: text("status"),
+    // LT ticket priority (e.g. "Standard", "Digital Proof"). "Digital Proof"
+    // tickets are proofing jobs — excluded from material demand.
+    priority: text("priority"),
     stockIn: text("stock_in"),
     shipByDate: text("ship_by_date"), // ISO
     dateDone: text("date_done"), // ISO; null = open

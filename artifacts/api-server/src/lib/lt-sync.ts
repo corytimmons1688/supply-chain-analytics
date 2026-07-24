@@ -130,6 +130,7 @@ async function upsertTicketDetails(numbers: string[]): Promise<number> {
     .map((d) => ({
       ticketNumber: str(d["number"])!,
       status: str(d["status"]),
+      priority: str(d["priority"]),
       stockIn: str(d["stockIn"]),
       shipByDate: ltDate(str(d["shipByDate"]) ?? str(d["shipDate"])),
       dateDone: ltDate(str(d["dateDone"])),
@@ -149,6 +150,7 @@ async function upsertTicketDetails(numbers: string[]): Promise<number> {
         target: ltTicketTable.ticketNumber,
         set: {
           status: sql`excluded.status`,
+          priority: sql`excluded.priority`,
           stockIn: sql`excluded.stock_in`,
           shipByDate: sql`excluded.ship_by_date`,
           dateDone: sql`excluded.date_done`,
@@ -165,7 +167,7 @@ async function upsertTicketDetails(numbers: string[]): Promise<number> {
   return values.length;
 }
 
-export async function syncLtTickets(opts: { sinceDays?: number } = {}): Promise<{ tickets: number }> {
+export async function syncLtTickets(opts: { sinceDays?: number; full?: boolean } = {}): Promise<{ tickets: number }> {
   const since = new Date();
   since.setDate(since.getDate() - (opts.sinceDays ?? 3));
   // Query params take ISO dates (responses use MM/DD/YYYY).
@@ -182,23 +184,23 @@ export async function syncLtTickets(opts: { sinceDays?: number } = {}): Promise<
     }),
     ltGetAllPages<TicketListRow>("/custom-tickets", { ModifyDateSince: sinceParam }),
   ]);
-  // Only fetch full details for tickets that changed (the ModifyDateSince list)
-  // or are new to the mirror. Re-fetching details for EVERY open ticket each run
-  // pushed this step past 250s and the whole sync past the 300s serverless limit
-  // (root cause of the 2026-07-22 sync outage). Steady-state now fetches only a
-  // handful. As long as the sync runs at least every `sinceDays` days, no change
-  // is missed.
-  const existing = new Set(
-    (await db.select({ n: ltTicketTable.ticketNumber }).from(ltTicketTable)).map((r) => r.n),
-  );
+  const openNums = openList.map((t) => t.number).filter(Boolean);
   const changed = new Set(changedList.map((t) => t.number).filter(Boolean));
-  const numbers = [
-    ...new Set(
-      [...openList.map((t) => t.number).filter(Boolean), ...changed].filter(
-        (n) => changed.has(n) || !existing.has(n),
-      ),
-    ),
-  ];
+  // `full` re-fetches details for EVERY open ticket (used to backfill new
+  // fields like priority across the existing book). The default is incremental:
+  // only tickets that changed (the ModifyDateSince list) or are new to the
+  // mirror — re-fetching all open tickets each run pushed the step past 250s and
+  // the whole sync past the 300s serverless limit (the 2026-07-22 outage). As
+  // long as the sync runs at least every `sinceDays` days, no change is missed.
+  let numbers: string[];
+  if (opts.full) {
+    numbers = [...new Set([...openNums, ...changed])];
+  } else {
+    const existing = new Set(
+      (await db.select({ n: ltTicketTable.ticketNumber }).from(ltTicketTable)).map((r) => r.n),
+    );
+    numbers = [...new Set([...openNums, ...changed].filter((n) => changed.has(n) || !existing.has(n)))];
+  }
   const upserted = await upsertTicketDetails(numbers);
   return { tickets: upserted };
 }
@@ -464,7 +466,7 @@ export async function performLtApiSync(opts: { full?: boolean } = {}): Promise<R
   if (!ltApiConfigured()) throw new Error("LT_API_KEY is not configured");
   const out: Record<string, unknown> = {};
   out["stocks"] = (await syncLtStocks()).stocks;
-  out["tickets"] = (await syncLtTickets()).tickets;
+  out["tickets"] = (await syncLtTickets({ full: opts.full })).tickets;
   out["pos"] = (await syncLtPos({ full: opts.full })).pos;
   const onHand = await syncLtOnHandRolls();
   out["onHandRolls"] = onHand.onHand;
