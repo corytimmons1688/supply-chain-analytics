@@ -292,7 +292,12 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
   const [unit, setUnit] = React.useState<"ft" | "usd">("ft");
   const [widthFilter, setWidthFilter] = React.useState<string>("all");
-  const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
+  const [statusFilters, setStatusFilters] = React.useState<string[]>([]);
+  const toggleStatus = React.useCallback(
+    (name: string) =>
+      setStatusFilters((prev) => (prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name])),
+    [],
+  );
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const [summaryView, setSummaryView] = React.useState<"bars" | "grid">("bars");
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
@@ -410,14 +415,10 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
         };
       })
       .filter((r) => r.segs.length > 0)
-      .filter((r) => !statusFilter || r.status === statusFilter)
+      .filter((r) => statusFilters.length === 0 || statusFilters.includes(r.status))
       .sort((a, b) => a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
-  }, [data, rows, widthFilter, statusFilter]);
+  }, [data, rows, widthFilter, statusFilters]);
 
-  const maxSegFootage = React.useMemo(
-    () => Math.max(1, ...summaryRows.flatMap((r) => r.segs.map((sg) => sg.footage))),
-    [summaryRows],
-  );
 
   const donutData = React.useMemo(() => {
     const counts = data?.statusCounts ?? {};
@@ -453,7 +454,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
           </p>
         </CardHeader>
         <CardContent>
-          <div className="relative h-56">
+          <div className="relative h-56 [&_.recharts-sector]:outline-none [&_.recharts-surface]:outline-none [&_svg]:focus:outline-none">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -464,16 +465,15 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   outerRadius={85}
                   paddingAngle={2}
                   isAnimationActive={false}
-                  className="cursor-pointer"
-                  onClick={(d: { name?: string }) =>
-                    d?.name && setStatusFilter((prev) => (prev === d.name ? null : d.name!))
-                  }
+                  className="cursor-pointer focus:outline-none"
+                  onClick={(d: { name?: string }) => d?.name && toggleStatus(d.name)}
                 >
                   {donutData.map((d) => (
                     <Cell
                       key={d.name}
                       fill={TICKET_STATUS_COLORS[d.name] ?? "#94a3b8"}
-                      opacity={statusFilter && statusFilter !== d.name ? 0.3 : 1}
+                      opacity={statusFilters.length > 0 && !statusFilters.includes(d.name) ? 0.3 : 1}
+                      style={{ outline: "none" }}
                     />
                   ))}
                 </Pie>
@@ -503,15 +503,16 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                     {" "}· {shortCount} short{uncoveredUsd > 0 ? ` (~$${fmt(uncoveredUsd)} uncovered)` : ""}
                   </span>
                 )}
-                {statusFilter && (
+                {statusFilters.map((s) => (
                   <button
+                    key={s}
                     type="button"
                     className="ml-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] hover:bg-accent"
-                    onClick={() => setStatusFilter(null)}
+                    onClick={() => toggleStatus(s)}
                   >
-                    {statusFilter} <X className="w-2.5 h-2.5" />
+                    {s} <X className="w-2.5 h-2.5" />
                   </button>
-                )}
+                ))}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -633,9 +634,8 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                       {r.segs.map((sg) => (
                         <div key={`${r.stockId}-${sg.width}`} className="relative group">
                           <div
-                            className="relative h-6 rounded-sm flex items-center justify-center text-[11px] font-semibold text-white overflow-hidden"
+                            className="relative h-6 w-24 rounded-sm flex items-center justify-center text-[11px] font-semibold text-white overflow-hidden"
                             style={{
-                              width: Math.max(56, (sg.footage / maxSegFootage) * 300),
                               background: TICKET_STATUS_COLORS[r.status] ?? "#94a3b8",
                             }}
                           >
