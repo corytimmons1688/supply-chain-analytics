@@ -379,9 +379,19 @@ export interface OpenTicketRow {
  * requirement. EstFootage is attributed to StockNum1 — laminate/secondary
  * stocks (StockNum2/3) share the run length but LT does not split footage.
  */
+/**
+ * Forward demand horizon (days). Open tickets shipping beyond this are excluded
+ * from material demand: LT parks tickets with no firm date on placeholder ship
+ * dates (2030-01-01, 2099-01-01, etc.), and those shouldn't drive a reorder
+ * until a real near-term date is set. 180 days clears every current placeholder
+ * (all ship ≥ 2029) while keeping all genuine near-term demand.
+ */
+export const OPEN_TICKET_HORIZON_DAYS = 180;
+
 export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
-  // "Open" = not done, ship-by from 30 days ago onward (lt_ticket mirror).
+  // "Open" = not done, ship-by within [30 days ago, +horizon] (lt_ticket mirror).
   const since = addDaysIso(todayIso(), -30);
+  const horizon = addDaysIso(todayIso(), OPEN_TICKET_HORIZON_DAYS);
   const rows = await db
     .select()
     .from(ltTicketTable)
@@ -389,6 +399,8 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
       and(
         isNull(ltTicketTable.dateDone),
         gte(ltTicketTable.shipByDate, since),
+        // Exclude far-future placeholder ship dates (see OPEN_TICKET_HORIZON_DAYS).
+        lte(ltTicketTable.shipByDate, horizon),
         // "Digital Proof" tickets are proofing jobs, not production runs — they
         // don't consume material, so exclude them from demand. IS DISTINCT FROM
         // keeps tickets whose priority is null/anything else.
