@@ -436,6 +436,14 @@ paths:
         - name: forecastWeeks
           in: query
           schema: { type: integer, default: 12 }
+        - name: orderingCost
+          in: query
+          description: Fixed cost per PO ($) for EOQ. Omit to use the saved global default (or $150).
+          schema: { type: number }
+        - name: carryingRatePct
+          in: query
+          description: Annual carrying rate (fraction) for EOQ. Omit to use the saved global default (or 0.20).
+          schema: { type: number }
       responses:
         "200":
           description: Demand summary
@@ -1632,8 +1640,19 @@ components:
         ltEstimatedDeliveryTime: { type: string, nullable: true }
         ltInvMsiMinimum: { type: number }
         ltInvMsiMaximum: { type: number }
+        onHandMsi: { type: number }
+        computedStatus:
+          type: string
+          nullable: true
+          description: "Computed availability (In / Ordered / Ordered Not Confirmed / Out); null when the stock has no open tickets"
+        withoutTickets: { type: boolean }
+        belowMin: { type: boolean }
+        aboveMax: { type: boolean }
         leadTimeDaysOverride: { type: number, nullable: true }
         typicalRollFootageOverride: { type: number, nullable: true }
+        orderQuantityRolls: { type: number, nullable: true }
+        discontinued: { type: boolean }
+        demandFromStockId: { type: string, nullable: true }
         openTicketFootage: { type: number }
         openTicketCount: { type: integer }
         mfgSpecNum: { type: string, nullable: true }
@@ -1660,8 +1679,11 @@ components:
       required: [ticketNumber, estFootage, stockIn]
       properties:
         ticketNumber: { type: string }
-        estFootage: { type: number }
+        estFootage: { type: number, description: "Remaining footage required (gross − consumed)." }
+        grossFootage: { type: number, description: "Full run requirement (LT total needed)." }
+        consumedFootage: { type: number, description: "Footage already run (rolls consumed) against this ticket for this stock." }
         stockIn: { type: string }
+        computedStatus: { type: string }
         shipByDate: { type: string, nullable: true }
         description: { type: string, nullable: true }
     PurchasingResponse:
@@ -1683,6 +1705,9 @@ components:
         msiCost: { type: number, nullable: true }
         leadTimeDays: { type: number, nullable: true }
         typicalRollFootage: { type: number, nullable: true }
+        orderQuantityRolls: { type: number, nullable: true, description: "Manual order quantity (master rolls) overriding EOQ. Null clears." }
+        discontinued: { type: boolean, description: "End-of-life: keep visible with on-hand, but never suggest a reorder." }
+        demandFromStockId: { type: string, nullable: true, description: "Predecessor stock number whose usage history this SKU inherits. Null clears." }
     DemandConfigResult:
       type: object
       required: [stockId, saved]
@@ -1870,6 +1895,14 @@ components:
           type: number
           nullable: true
           description: Shared Demand Planning lead-time-CV override default. Null = no override.
+        orderingCost:
+          type: number
+          nullable: true
+          description: Fixed cost to place one PO ($), for EOQ. Null = app default $150.
+        carryingRatePct:
+          type: number
+          nullable: true
+          description: Annual inventory carrying rate (fraction, e.g. 0.20), for EOQ. Null = app default 0.20.
     GoalBandInput:
       type: object
       properties:
@@ -1879,6 +1912,8 @@ components:
         leadTimeCv: { type: number, nullable: true }
         serviceLevel: { type: number, nullable: true }
         monthsBack: { type: integer, nullable: true }
+        orderingCost: { type: number, nullable: true }
+        carryingRatePct: { type: number, nullable: true }
         seasonalityWeights:
           type: array
           nullable: true
@@ -1911,6 +1946,9 @@ components:
           items: { type: number }
         leadTimeDays: { type: number, nullable: true }
         typicalRollFootage: { type: number, nullable: true }
+        orderQuantityRolls: { type: number, nullable: true }
+        discontinued: { type: boolean }
+        demandFromStockId: { type: string, nullable: true }
     RootCauseItem:
       type: object
       required:
@@ -2137,11 +2175,21 @@ components:
         - safetyStockFootage
         - reorderPointFootage
         - maxFootage
+        - eoqFootage
+        - eoqRolls
+        - orderQtySource
+        - discontinued
+        - demandFromStockId
         - suggestedOrderFootage
         - suggestedOrderRolls
         - belowMin
         - openTicketFootage
+        - committedWithinLeadFootage
         - committedShortageFootage
+        - reorderMethod
+        - leadTimeDemandSamples
+        - leadTimeSource
+        - leadTimeObservations
         - reorderReason
         - daysOfCover
         - forecast12wkFootage
@@ -2165,6 +2213,8 @@ components:
         avgLeadTimeDays: { type: number, description: "Effective average lead time in days (override if set, else auto-derived from PO history)." }
         autoLeadTimeDays: { type: number, description: "Auto-derived average lead time in days from observed PO history." }
         leadTimeDaysOverridden: { type: boolean, description: "True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value." }
+        leadTimeSource: { type: string, enum: [stock, vendor, global, override], description: "Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override." }
+        leadTimeObservations: { type: integer, description: "Count of this stock's own received POs behind the lead-time estimate." }
         leadTimeStdDev: { type: number }
         leadTimeCv: { type: number, description: "Effective lead-time CV used in safety-stock math (override if set, else auto-derived)." }
         autoLeadTimeCv: { type: number, description: "Auto-derived lead-time CV from observed PO lead times." }
@@ -2189,11 +2239,19 @@ components:
         safetyStockFootage: { type: number }
         reorderPointFootage: { type: number }
         maxFootage: { type: number }
+        eoqFootage: { type: number, description: "Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable." }
+        eoqRolls: { type: integer, description: "Order quantity in whole master rolls (manual override, EOQ, or 0)." }
+        orderQtySource: { type: string, enum: [manual, eoq, heuristic], description: "How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic." }
+        discontinued: { type: boolean, description: "End-of-life: still counted for on-hand but never suggested for reorder." }
+        demandFromStockId: { type: string, nullable: true, description: "Predecessor stock whose demand history is merged into this SKU (null = none)." }
         suggestedOrderFootage: { type: number }
         suggestedOrderRolls: { type: integer }
         belowMin: { type: boolean }
         openTicketFootage: { type: number }
+        committedWithinLeadFootage: { type: number, description: "Committed footage due to ship within the lead-time horizon (drives the reorder point)." }
         committedShortageFootage: { type: number }
+        reorderMethod: { type: string, enum: [empirical, statistical], description: "How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback." }
+        leadTimeDemandSamples: { type: integer, description: "Number of lead-time-demand windows behind an empirical reorder point (0 = statistical fallback)." }
         reorderReason: { type: string, enum: [below_rop, committed, both, none] }
         daysOfCover: { type: integer }
         forecast12wkFootage: { type: number }

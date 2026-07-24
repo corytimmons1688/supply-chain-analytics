@@ -26,6 +26,9 @@ function rowToStockGoal(r: StockGoalRow) {
     seasonalityWeights: weights,
     leadTimeDays: r.leadTimeDays,
     typicalRollFootage: r.typicalRollFootage,
+    orderQuantityRolls: r.orderQuantityRolls,
+    discontinued: r.discontinued,
+    demandFromStockId: r.demandFromStockId,
   };
 }
 
@@ -45,6 +48,8 @@ router.get(
         monthsBack: g?.monthsBack ?? null,
         demandCv: g?.demandCv ?? null,
         leadTimeCv: g?.leadTimeCv ?? null,
+        orderingCost: g?.orderingCost ?? null,
+        carryingRatePct: g?.carryingRatePct ?? null,
       },
       perStock: perStockRows.map(rowToStockGoal),
     });
@@ -63,10 +68,14 @@ router.put(
     const hasMonthsBack = Object.prototype.hasOwnProperty.call(body, "monthsBack");
     const hasDemandCv = Object.prototype.hasOwnProperty.call(body, "demandCv");
     const hasLeadTimeCv = Object.prototype.hasOwnProperty.call(body, "leadTimeCv");
+    const hasOrderingCost = Object.prototype.hasOwnProperty.call(body, "orderingCost");
+    const hasCarryingRatePct = Object.prototype.hasOwnProperty.call(body, "carryingRatePct");
     const serviceLevel = hasServiceLevel ? (body.serviceLevel ?? null) : undefined;
     const monthsBack = hasMonthsBack ? (body.monthsBack ?? null) : undefined;
     const demandCv = hasDemandCv ? (body.demandCv ?? null) : undefined;
     const leadTimeCv = hasLeadTimeCv ? (body.leadTimeCv ?? null) : undefined;
+    const orderingCost = hasOrderingCost ? (body.orderingCost ?? null) : undefined;
+    const carryingRatePct = hasCarryingRatePct ? (body.carryingRatePct ?? null) : undefined;
 
     const insertValues: typeof globalGoalTable.$inferInsert = {
       id: GLOBAL_KEY,
@@ -76,12 +85,16 @@ router.put(
       ...(monthsBack !== undefined ? { monthsBack } : {}),
       ...(demandCv !== undefined ? { demandCv } : {}),
       ...(leadTimeCv !== undefined ? { leadTimeCv } : {}),
+      ...(orderingCost !== undefined ? { orderingCost } : {}),
+      ...(carryingRatePct !== undefined ? { carryingRatePct } : {}),
     };
     const updateSet: Record<string, unknown> = { min, max, updatedAt: new Date() };
     if (serviceLevel !== undefined) updateSet.serviceLevel = serviceLevel;
     if (monthsBack !== undefined) updateSet.monthsBack = monthsBack;
     if (demandCv !== undefined) updateSet.demandCv = demandCv;
     if (leadTimeCv !== undefined) updateSet.leadTimeCv = leadTimeCv;
+    if (orderingCost !== undefined) updateSet.orderingCost = orderingCost;
+    if (carryingRatePct !== undefined) updateSet.carryingRatePct = carryingRatePct;
 
     await db
       .insert(globalGoalTable)
@@ -99,6 +112,8 @@ router.put(
       monthsBack: row?.monthsBack ?? null,
       demandCv: row?.demandCv ?? null,
       leadTimeCv: row?.leadTimeCv ?? null,
+      orderingCost: row?.orderingCost ?? null,
+      carryingRatePct: row?.carryingRatePct ?? null,
     });
   }),
 );

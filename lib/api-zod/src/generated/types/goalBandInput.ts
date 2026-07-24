@@ -13,6 +13,8 @@ export interface GoalBandInput {
   leadTimeCv?: number | null;
   serviceLevel?: number | null;
   monthsBack?: number | null;
+  orderingCost?: number | null;
+  carryingRatePct?: number | null;
   /**
    * Quarterly seasonality weights for months 1, 2, 3 of each quarter. Should sum to ~1.0.
    * @minItems 3

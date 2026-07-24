@@ -34,7 +34,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function fmt(n: number | null | undefined, digits = 0): string {
@@ -56,15 +56,16 @@ const TICKET_STATUS_COLORS: Record<string, string> = {
   "Without Tickets": "#9ca3af",
 };
 
-// Worst-first severity when a material has tickets in mixed statuses.
-const STATUS_RANK: Record<string, number> = {
-  Out: 0,
-  "Ordered Not Confirmed": 1,
-  Ordered: 2,
-  "Not Evaluated": 3,
-  In: 4,
-};
-const STATUS_BY_RANK: Record<number, string> = { 0: "Out", 1: "Ordered Not Confirmed", 2: "Ordered", 3: "Not Evaluated", 4: "In" };
+// Donut/legend order — availability statuses, best → worst.
+const STATUS_ORDER = ["In", "Ordered", "Ordered Not Confirmed", "Out"] as const;
+
+// Corner-flag markers (drawn as small triangles on each bar), matching the
+// Batched Material Availability layout.
+const MARKER_COLORS = {
+  withoutTickets: "#fb7185", // coral
+  belowMin: "#3b82f6", // blue
+  aboveMax: "#a855f7", // purple
+} as const;
 
 type PoDocData = {
   poNumber: string;
@@ -293,6 +294,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [widthFilter, setWidthFilter] = React.useState<string>("all");
   const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
+  const [summaryView, setSummaryView] = React.useState<"bars" | "grid">("bars");
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
 
   const widthOptions = React.useMemo(() => {
@@ -371,20 +373,14 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   }, [data, rows, unit]);
 
   // One row per material; one bar per roll WIDTH on hand (production view).
+  // Status is now computed server-side (inventory → POs → shortfall) so it no
+  // longer depends on Label Traxx's un-run StockIn field.
   const summaryRows = React.useMemo(() => {
     const metricsByStock = new Map(rows.map((r) => [r.stockId, r]));
     return (data?.items ?? [])
       .map((it) => {
         const hasTix = (it.openTicketCount ?? 0) > 0;
-        let status = "Without Tickets";
-        if (hasTix) {
-          let best = 99;
-          for (const t of it.tickets ?? []) {
-            const rk = STATUS_RANK[t.stockIn] ?? 3;
-            if (rk < best) best = rk;
-          }
-          status = STATUS_BY_RANK[best] ?? "In";
-        }
+        const status = it.withoutTickets ? "Without Tickets" : it.computedStatus ?? "In";
         let segs = (it.widthsOnHand ?? []).filter(
           (w) => widthFilter === "all" || String(w.width) === widthFilter,
         );
@@ -396,11 +392,20 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             segs = [{ width: mw, footage: 0, rolls: 0 }];
           }
         }
+        // Below Min / Above Max flags now share the reorder engine's computed
+        // Min (reorder point) and Max, in footage — one source of truth instead
+        // of Label Traxx's separately-maintained MSI thresholds.
+        const m = metricsByStock.get(it.stockId);
+        const onHandFt = m?.onHandFootage ?? 0;
+        const rop = m?.reorderPointFootage ?? 0;
+        const max = m?.maxFootage ?? 0;
         return {
           stockId: it.stockId,
-          description: metricsByStock.get(it.stockId)?.description ?? it.classification ?? "",
+          description: m?.description ?? it.classification ?? "",
           status,
           noTickets: !hasTix,
+          belowMin: rop > 0 && onHandFt < rop,
+          aboveMax: max > 0 && onHandFt > max,
           segs,
         };
       })
@@ -414,13 +419,21 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
     [summaryRows],
   );
 
-  const donutData = React.useMemo(
-    () =>
-      Object.entries(data?.statusCounts ?? {})
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value),
-    [data],
-  );
+  const donutData = React.useMemo(() => {
+    const counts = data?.statusCounts ?? {};
+    // Fixed best→worst order so colours/legend stay stable run to run.
+    const ordered = STATUS_ORDER.filter((n) => (counts[n] ?? 0) > 0).map((name) => ({
+      name: name as string,
+      value: counts[name]!,
+    }));
+    // Any status the server emits that isn't in STATUS_ORDER (defensive).
+    for (const [name, value] of Object.entries(counts)) {
+      if (!STATUS_ORDER.includes(name as (typeof STATUS_ORDER)[number]) && value > 0) {
+        ordered.push({ name, value });
+      }
+    }
+    return ordered;
+  }, [data]);
   const totalTickets = donutData.reduce((s, d) => s + d.value, 0);
   const shortCount = chartData.filter((d) => d.short > 0).length;
 
@@ -432,15 +445,15 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <Ticket className="w-4 h-4 text-muted-foreground" /> Open Ticket Stock Status
+            <Ticket className="w-4 h-4 text-muted-foreground" /> Ticket Stock Availability Status
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Label Traxx material availability across {totalTickets} open tickets · click a status to
-            filter the materials
+            Availability computed across {totalTickets} open ticket{totalTickets === 1 ? "" : "s"} —
+            inventory, then POs, then shortfall · click a status to filter
           </p>
         </CardHeader>
         <CardContent>
-          <div className="h-56">
+          <div className="relative h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -468,6 +481,11 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                 <Legend verticalAlign="bottom" height={40} iconSize={9} wrapperStyle={{ fontSize: 11 }} />
               </PieChart>
             </ResponsiveContainer>
+            {/* Center total, matching Batched's donut. Offset up to clear the legend. */}
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center -translate-y-3">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</span>
+              <span className="text-2xl font-semibold tabular-nums leading-none">{totalTickets}</span>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -478,8 +496,8 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             <div>
               <CardTitle className="text-base">Stock Inventory Summary</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Roll widths on hand per material, colored by ticket status — click a material for its
-                tickets
+                On-hand roll widths per material, colored by computed availability — click a material for
+                its tickets
                 {shortCount > 0 && (
                   <span className="text-red-600 dark:text-red-400 font-medium">
                     {" "}· {shortCount} short{uncoveredUsd > 0 ? ` (~$${fmt(uncoveredUsd)} uncovered)` : ""}
@@ -525,7 +543,61 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   </button>
                 ))}
               </div>
+              <div className="flex items-center rounded-md border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setSummaryView("bars")}
+                  title="Bar view"
+                  className={cn(
+                    "px-2 py-1",
+                    summaryView === "bars" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryView("grid")}
+                  title="Grid view"
+                  className={cn(
+                    "px-2 py-1",
+                    summaryView === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
+          </div>
+          {/* Legend: availability statuses + corner-flag markers (Batched parity). */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+            {STATUS_ORDER.map((s) => (
+              <span key={s} className="inline-flex items-center gap-1">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: TICKET_STATUS_COLORS[s] }} />
+                {s}
+              </span>
+            ))}
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block w-0 h-0"
+                style={{ borderTop: `9px solid ${MARKER_COLORS.withoutTickets}`, borderLeft: "9px solid transparent" }}
+              />
+              Without Tickets
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block w-0 h-0"
+                style={{ borderBottom: `9px solid ${MARKER_COLORS.belowMin}`, borderRight: "9px solid transparent" }}
+              />
+              Below Min
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block w-0 h-0"
+                style={{ borderTop: `9px solid ${MARKER_COLORS.aboveMax}`, borderRight: "9px solid transparent" }}
+              />
+              Above Max
+            </span>
           </div>
         </CardHeader>
         <CardContent>
@@ -533,7 +605,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
             <p className="text-sm text-muted-foreground py-8 text-center">
               No materials match the current filters.
             </p>
-          ) : (
+          ) : summaryView === "bars" ? (
             <div className="max-h-[26rem] overflow-y-auto rounded-md border divide-y">
               {summaryRows.map((r) => {
                 const totals = totalsById.get(r.stockId);
@@ -568,8 +640,33 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                             }}
                           >
                             {sg.width > 0 ? `${sg.width}"` : "0 ft"}
+                            {/* Corner-flag markers, matching Batched. */}
                             {r.noTickets && (
-                              <span className="absolute top-0 right-0 w-0 h-0 border-t-[9px] border-l-[9px] border-t-red-400 border-l-transparent" />
+                              <span
+                                className="absolute top-0 right-0 w-0 h-0"
+                                style={{
+                                  borderTop: `9px solid ${MARKER_COLORS.withoutTickets}`,
+                                  borderLeft: "9px solid transparent",
+                                }}
+                              />
+                            )}
+                            {r.aboveMax && (
+                              <span
+                                className="absolute top-0 left-0 w-0 h-0"
+                                style={{
+                                  borderTop: `9px solid ${MARKER_COLORS.aboveMax}`,
+                                  borderRight: "9px solid transparent",
+                                }}
+                              />
+                            )}
+                            {r.belowMin && (
+                              <span
+                                className="absolute bottom-0 left-0 w-0 h-0"
+                                style={{
+                                  borderBottom: `9px solid ${MARKER_COLORS.belowMin}`,
+                                  borderRight: "9px solid transparent",
+                                }}
+                              />
                             )}
                           </div>
                           <div className="pointer-events-none absolute z-30 hidden group-hover:block top-7 left-0 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]">
@@ -579,6 +676,8 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                             </div>
                             <div className="text-muted-foreground mb-1.5">
                               {fmt(sg.footage)} ft on hand at this width · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"}
+                              {r.belowMin && <span className="text-blue-600 dark:text-blue-400"> · below min</span>}
+                              {r.aboveMax && <span className="text-purple-600 dark:text-purple-400"> · above max</span>}
                             </div>
                             {totals && (
                               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -620,6 +719,91 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   </div>
                 );
               })}
+            </div>
+          ) : (
+            <div className="max-h-[26rem] overflow-y-auto rounded-md border">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/60 backdrop-blur">
+                  <tr className="text-muted-foreground">
+                    <th className="text-left px-3 py-1.5 font-medium">Stock</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Status</th>
+                    <th className="text-right px-3 py-1.5 font-medium">In Inv.</th>
+                    <th className="text-right px-3 py-1.5 font-medium">Ordered</th>
+                    <th className="text-right px-3 py-1.5 font-medium">Required</th>
+                    <th className="text-right px-3 py-1.5 font-medium">Available</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Flags</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryRows.map((r) => {
+                    const totals = totalsById.get(r.stockId);
+                    const u = (n: number | undefined) =>
+                      n == null ? "—" : unit === "usd" ? `$${fmt(n)}` : `${fmt(n)} ft`;
+                    return (
+                      <tr
+                        key={r.stockId}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedStock((prev) => (prev === r.stockId ? null : r.stockId))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") setSelectedStock((prev) => (prev === r.stockId ? null : r.stockId));
+                        }}
+                        className={cn(
+                          "border-t cursor-pointer hover:bg-accent/40",
+                          selectedStock === r.stockId && "bg-accent/50",
+                        )}
+                      >
+                        <td className="px-3 py-1.5">
+                          <div className="font-semibold">#{r.stockId}</div>
+                          <div className="text-[10px] text-muted-foreground truncate max-w-[12rem]" title={r.description}>
+                            {r.description}
+                          </div>
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="inline-block w-2 h-2 rounded-full"
+                              style={{ background: TICKET_STATUS_COLORS[r.status] ?? "#94a3b8" }}
+                            />
+                            {r.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{u(totals?.onHand)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{u(totals?.onOrder)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{u(totals?.required)}</td>
+                        <td
+                          className={cn(
+                            "px-3 py-1.5 text-right tabular-nums",
+                            (totals?.available ?? 0) < 0 && "text-red-600 dark:text-red-400 font-medium",
+                          )}
+                        >
+                          {u(totals?.available)}
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <span className="inline-flex items-center gap-1">
+                            {r.belowMin && (
+                              <span
+                                className="rounded px-1 text-[9px] font-medium text-white"
+                                style={{ background: MARKER_COLORS.belowMin }}
+                              >
+                                Below Min
+                              </span>
+                            )}
+                            {r.aboveMax && (
+                              <span
+                                className="rounded px-1 text-[9px] font-medium text-white"
+                                style={{ background: MARKER_COLORS.aboveMax }}
+                              >
+                                Above Max
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
           {selectedItem && (
@@ -679,7 +863,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                     <tr className="border-b text-muted-foreground">
                       <th className="text-left px-3 py-1 font-medium">Ticket</th>
                       <th className="text-left px-3 py-1 font-medium">Job</th>
-                      <th className="text-right px-3 py-1 font-medium">Footage</th>
+                      <th className="text-right px-3 py-1 font-medium">Remaining</th>
                       <th className="text-left px-3 py-1 font-medium">Stock status</th>
                       <th className="text-right px-3 py-1 font-medium">Ship by</th>
                     </tr>
@@ -689,13 +873,20 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                       <tr key={t.ticketNumber} className="border-b last:border-b-0">
                         <td className="px-3 py-1 font-medium">#{t.ticketNumber}</td>
                         <td className="px-3 py-1 text-muted-foreground truncate max-w-[16rem]">{t.description ?? "—"}</td>
-                        <td className="px-3 py-1 text-right tabular-nums">{fmt(t.estFootage)} ft</td>
+                        <td className="px-3 py-1 text-right tabular-nums">
+                          {fmt(t.estFootage)} ft
+                          {(t.consumedFootage ?? 0) > 0 && (
+                            <div className="text-[10px] text-muted-foreground">
+                              {fmt(t.consumedFootage)} of {fmt(t.grossFootage)} ft run
+                            </div>
+                          )}
+                        </td>
                         <td className="px-3 py-1">
                           <span
                             className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
-                            style={{ background: TICKET_STATUS_COLORS[t.stockIn] ?? "#94a3b8" }}
+                            style={{ background: TICKET_STATUS_COLORS[t.computedStatus ?? "In"] ?? "#94a3b8" }}
                           />
-                          {t.stockIn}
+                          {t.computedStatus ?? "In"}
                         </td>
                         <td className="px-3 py-1 text-right tabular-nums">{t.shipByDate ?? "—"}</td>
                       </tr>
@@ -727,6 +918,10 @@ type SuggestionLine = {
   freightMsi: number;
   masterWidth: number;
   leadTimeDays: number;
+  leadTimeSource: DemandStockMetrics["leadTimeSource"];
+  leadTimeObservations: number;
+  eoqRolls: number;
+  orderQtySource: DemandStockMetrics["orderQtySource"];
   belowMin: boolean;
   daysOfCover: number;
   openTicketFootage: number;
@@ -798,6 +993,10 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           freightMsi: p?.freightMsi ?? 0,
           masterWidth: p?.masterWidth ?? 0,
           leadTimeDays: Math.round(r.avgLeadTimeDays),
+          leadTimeSource: r.leadTimeSource,
+          leadTimeObservations: r.leadTimeObservations,
+          eoqRolls: r.eoqRolls,
+          orderQtySource: r.orderQtySource,
           belowMin: r.belowMin,
           daysOfCover: r.daysOfCover,
           openTicketFootage: p?.openTicketFootage ?? 0,
@@ -993,12 +1192,38 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                               value={l.rolls}
                               onChange={(e) => setLine(l.stockId, { rolls: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
                             />
+                            {l.eoqRolls > 0 && (
+                              <div
+                                className="text-[9px] text-muted-foreground mt-0.5"
+                                title={
+                                  l.orderQtySource === "manual"
+                                    ? `Manual order quantity: ${l.eoqRolls} roll${l.eoqRolls === 1 ? "" : "s"}`
+                                    : `Economic order quantity: ${l.eoqRolls} roll${l.eoqRolls === 1 ? "" : "s"} (balances ordering vs holding cost)`
+                                }
+                              >
+                                {l.orderQtySource === "manual" ? "Set" : "EOQ"} {l.eoqRolls}
+                              </div>
+                            )}
                           </td>
                           <td className="px-2 py-1.5 text-right tabular-nums">{fmt(l.rolls * l.footagePerRoll)} ft</td>
                           <td className="px-2 py-1.5 text-right tabular-nums">
                             {lineEstCost(l) != null ? `$${fmt(lineEstCost(l))}` : "—"}
                           </td>
-                          <td className="px-2 py-1.5 text-right text-muted-foreground">{l.leadTimeDays || "—"}d</td>
+                          <td className="px-2 py-1.5 text-right text-muted-foreground whitespace-nowrap">
+                            {l.leadTimeDays || "—"}d
+                            {l.leadTimeSource === "stock" && (
+                              <span className="ml-1 text-[9px]" title={`From this stock's own ${l.leadTimeObservations} received PO${l.leadTimeObservations === 1 ? "" : "s"}`}>·{l.leadTimeObservations}PO</span>
+                            )}
+                            {l.leadTimeSource === "vendor" && (
+                              <span className="ml-1 text-[9px] uppercase text-amber-600 dark:text-amber-400" title="Vendor median — too few POs for this stock alone">vend</span>
+                            )}
+                            {l.leadTimeSource === "global" && (
+                              <span className="ml-1 text-[9px] uppercase text-muted-foreground" title="Global median — no PO history for this stock or its vendor">glob</span>
+                            )}
+                            {l.leadTimeSource === "override" && (
+                              <span className="ml-1 text-[9px] uppercase text-primary" title="Manual lead-time override (Configuration tab)">set</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1207,8 +1432,11 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                 <th className="text-left px-2 py-1.5 font-medium min-w-[14rem]">Vendor PO email(s)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Lead time (days)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Footage / roll</th>
+                <th className="text-right px-2 py-1.5 font-medium">Order qty (rolls)</th>
                 <th className="text-right px-2 py-1.5 font-medium">MSI cost ($)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Width (in)</th>
+                <th className="text-left px-2 py-1.5 font-medium">Demand from #</th>
+                <th className="text-center px-2 py-1.5 font-medium" title="End of life — keep on-hand visible but stop reordering">EOL</th>
               </tr>
             </thead>
             <tbody>
@@ -1256,12 +1484,34 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                     <td className="px-2 py-1.5 text-right">
                       <EditableCell
                         numeric
+                        value={it.orderQuantityRolls != null ? String(it.orderQuantityRolls) : ""}
+                        placeholder={m && m.eoqRolls > 0 ? `EOQ ${m.eoqRolls}` : "auto"}
+                        onSave={(v) => save(it.stockId, { orderQuantityRolls: v == null ? null : Number(v) })}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <EditableCell
+                        numeric
                         value={it.msiCost != null && it.msiCostSource === "override" ? String(it.msiCost) : ""}
                         placeholder={it.msiCostSource === "labeltraxx" ? `LT ${it.msiCost}` : "—"}
                         onSave={(v) => save(it.stockId, { msiCost: v == null ? null : Number(v) })}
                       />
                     </td>
                     <td className="px-2 py-1.5 text-right text-muted-foreground tabular-nums">{it.masterWidth || "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <EditableCell
+                        value={it.demandFromStockId ?? ""}
+                        placeholder="—"
+                        onSave={(v) => save(it.stockId, { demandFromStockId: v })}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      <Checkbox
+                        checked={it.discontinued}
+                        onCheckedChange={(c) => save(it.stockId, { discontinued: c === true })}
+                        title="End of life — keep on-hand visible but stop reordering"
+                      />
+                    </td>
                   </tr>
                 );
               })}

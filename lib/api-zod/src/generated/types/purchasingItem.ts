@@ -21,8 +21,17 @@ export interface PurchasingItem {
   ltEstimatedDeliveryTime?: string | null;
   ltInvMsiMinimum?: number;
   ltInvMsiMaximum?: number;
+  onHandMsi?: number;
+  /** Computed availability (In / Ordered / Ordered Not Confirmed / Out); null when the stock has no open tickets */
+  computedStatus?: string | null;
+  withoutTickets?: boolean;
+  belowMin?: boolean;
+  aboveMax?: boolean;
   leadTimeDaysOverride?: number | null;
   typicalRollFootageOverride?: number | null;
+  orderQuantityRolls?: number | null;
+  discontinued?: boolean;
+  demandFromStockId?: string | null;
   openTicketFootage?: number;
   openTicketCount?: number;
   mfgSpecNum?: string | null;

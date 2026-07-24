@@ -17,4 +17,8 @@ export interface GoalBand {
   demandCv?: number | null;
   /** Shared Demand Planning lead-time-CV override default. Null = no override. */
   leadTimeCv?: number | null;
+  /** Fixed cost to place one PO ($), for EOQ. Null = app default $150. */
+  orderingCost?: number | null;
+  /** Annual inventory carrying rate (fraction, e.g. 0.20), for EOQ. Null = app default 0.20. */
+  carryingRatePct?: number | null;
 }

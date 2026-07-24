@@ -182,7 +182,23 @@ export async function syncLtTickets(opts: { sinceDays?: number } = {}): Promise<
     }),
     ltGetAllPages<TicketListRow>("/custom-tickets", { ModifyDateSince: sinceParam }),
   ]);
-  const numbers = [...new Set([...openList, ...changedList].map((t) => t.number).filter(Boolean))];
+  // Only fetch full details for tickets that changed (the ModifyDateSince list)
+  // or are new to the mirror. Re-fetching details for EVERY open ticket each run
+  // pushed this step past 250s and the whole sync past the 300s serverless limit
+  // (root cause of the 2026-07-22 sync outage). Steady-state now fetches only a
+  // handful. As long as the sync runs at least every `sinceDays` days, no change
+  // is missed.
+  const existing = new Set(
+    (await db.select({ n: ltTicketTable.ticketNumber }).from(ltTicketTable)).map((r) => r.n),
+  );
+  const changed = new Set(changedList.map((t) => t.number).filter(Boolean));
+  const numbers = [
+    ...new Set(
+      [...openList.map((t) => t.number).filter(Boolean), ...changed].filter(
+        (n) => changed.has(n) || !existing.has(n),
+      ),
+    ),
+  ];
   const upserted = await upsertTicketDetails(numbers);
   return { tickets: upserted };
 }
@@ -370,10 +386,18 @@ export async function syncLtOnHandRolls(): Promise<{ onHand: number; newlyUsed: 
  */
 export async function syncLtRollDates(opts: { limit?: number } = {}): Promise<{ enriched: number }> {
   const limit = opts.limit ?? 3000;
+  // Also (re)enrich recently-consumed rolls that are missing their used-ticket
+  // number — the hourly on-hand sync flags a roll used but can't set which
+  // ticket consumed it; without this, consumption-netting for open tickets has
+  // no data until the nightly full used-roll pull. Bounded to the last 60 days
+  // (only recent consumption maps to still-open tickets).
+  const usedTikSince = new Date();
+  usedTikSince.setDate(usedTikSince.getDate() - 60);
+  const usedTikSinceIso = usedTikSince.toISOString().slice(0, 10);
   const missing = await db
     .select({ rollId: ltRollTable.rollId })
     .from(ltRollTable)
-    .where(sql`${ltRollTable.stockDate} IS NULL OR (${ltRollTable.used} = true AND ${ltRollTable.dateRollUsed} IS NULL)`)
+    .where(sql`${ltRollTable.stockDate} IS NULL OR (${ltRollTable.used} = true AND ${ltRollTable.dateRollUsed} IS NULL) OR (${ltRollTable.used} = true AND ${ltRollTable.usedTikNum} IS NULL AND ${ltRollTable.dateRollUsed} >= ${usedTikSinceIso})`)
     // Roll ids are mostly numeric but slit children look like "3860-A" —
     // order by the leading digits so the newest rolls enrich first.
     .orderBy(sql`NULLIF(regexp_replace(${ltRollTable.rollId}, '[^0-9].*$', ''), '')::bigint DESC NULLS LAST`)
@@ -395,6 +419,8 @@ export async function syncLtRollDates(opts: { limit?: number } = {}): Promise<{ 
             dateRollUsed: ltDate(str(d["dateRollUsed"])),
             stockDate: ltDate(str(d["stockDate"])),
             used: d["stockUsed"] === true || ltDate(str(d["dateRollUsed"])) != null,
+            usedTikNum: str(d["usedTikNumber"]),
+            allocTikNum: str(d["allocTikNumber"]),
             syncedAt: new Date(),
           })
           .where(eq(ltRollTable.rollId, rollId));

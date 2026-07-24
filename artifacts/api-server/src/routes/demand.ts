@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { eq } from "drizzle-orm";
-import { db, stockGoalTable, materialPoTable, materialPoLineTable, ltStockTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -13,6 +13,7 @@ import {
   fetchPoReceipts,
   fetchOnHandByWidth,
   computeStockMetrics,
+  vendorLeadTimeMedians,
   bucketHistory,
   defaultDemandWindow,
   type RollUsageRow,
@@ -97,7 +98,7 @@ router.get(
 
     const { from, to } = defaultDemandWindow(monthsBack);
 
-    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets] = await Promise.all([
+    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets, stockInfo, globalRows] = await Promise.all([
       fetchUsage({ from, to }),
       fetchOnHandByStock(),
       fetchPoLeadTimes(),
@@ -106,16 +107,34 @@ router.get(
       fetchActiveStockIds(),
       db.select().from(stockGoalTable),
       fetchOpenTickets(),
+      fetchStockInfo(),
+      db.select().from(globalGoalTable).where(eq(globalGoalTable.id, "global")),
     ]);
+
+    // EOQ economics: fixed cost to place a PO and annual carrying rate. Query
+    // param → saved global default → hard-coded default ($150 / 20%/yr).
+    const g = globalRows[0];
+    const orderingCost = parseNum(req.query["orderingCost"], g?.orderingCost ?? 150);
+    const carryingRatePct = parseNum(req.query["carryingRatePct"], g?.carryingRatePct ?? 0.2);
+    // Per-vendor median lead time — the fallback tier when a stock has too
+    // little PO history of its own.
+    const vendorLtMedians = vendorLeadTimeMedians(poLeadTimes);
 
     // Committed material requirements: sum each open ticket's footage against
     // every material in its BOM (fetchOpenTickets emits one row per material).
+    // Also keep the per-ticket lines (footage + ship-by date) so computeStock-
+    // Metrics can time-phase demand against the lead-time horizon.
     const openTicketFootageByStock = new Map<string, number>();
+    const openTicketLinesByStock = new Map<string, { footage: number; shipByDate: string | null }[]>();
     for (const t of openTickets) {
       openTicketFootageByStock.set(t.stockId, (openTicketFootageByStock.get(t.stockId) ?? 0) + t.estFootage);
+      let lines = openTicketLinesByStock.get(t.stockId);
+      if (!lines) { lines = []; openTicketLinesByStock.set(t.stockId, lines); }
+      lines.push({ footage: t.estFootage, shipByDate: t.shipByDate });
     }
     const overridesByStock = new Map<string, StockOverrides>();
     for (const row of stockGoalRows) overridesByStock.set(row.stockId, rowToOverrides(row));
+    const goalRowByStock = new Map(stockGoalRows.map((r) => [r.stockId, r]));
 
     // Group everything by stockId
     const usageByStock = new Map<string, RollUsageRow[]>();
@@ -157,7 +176,13 @@ router.get(
 
     const items = [];
     for (const stockId of allStockIds) {
-      const stockUsage = usageByStock.get(stockId) ?? [];
+      // A successor SKU merges its EOL predecessor's full usage history so its
+      // forecast / reorder point reflect the demand it inherited.
+      const ownUsage = usageByStock.get(stockId) ?? [];
+      const predecessorId = goalRowByStock.get(stockId)?.demandFromStockId ?? null;
+      const stockUsage = predecessorId
+        ? [...ownUsage, ...(usageByStock.get(predecessorId) ?? [])]
+        : ownUsage;
       const stockOnHand = onHand.get(stockId);
       const stockPoRolls = poRollsByStock.get(stockId) ?? [];
       const description = descByStock.get(stockId) ?? stockOnHand?.description ?? null;
@@ -165,6 +190,17 @@ router.get(
       // Per-stock overrides win over the request-level (global) overrides.
       const effDemandCv = overrides.demandCv ?? demandCvOverride;
       const effLeadTimeCv = overrides.leadTimeCv ?? leadTimeCvOverride;
+
+      // Effective vendor (override → LT supplier) drives the lead-time fallback
+      // tier; effective landed cost/ft (override → LT CostMSI) drives EOQ holding cost.
+      const info = stockInfo.get(stockId);
+      const goalRow = goalRowByStock.get(stockId);
+      const vendorName = goalRow?.vendorName ?? info?.supplierName ?? null;
+      const vendorLeadTimeDays = vendorName ? vendorLtMedians.get(vendorName) : undefined;
+      const effMsiCost = goalRow?.msiCost ?? (info && info.costMsi > 0 ? info.costMsi : 0);
+      const width = info?.masterWidth ?? 0;
+      const unitValuePerFoot =
+        effMsiCost > 0 && width > 0 ? ((effMsiCost + (info?.freightMsi ?? 0)) * 12 * width) / 1000 : 0;
 
       const { metrics } = computeStockMetrics({
         stockId,
@@ -178,7 +214,17 @@ router.get(
         poRolls: stockPoRolls,
         openPos: openPosByStock.get(stockId) ?? [],
         openTicketFootage: openTicketFootageByStock.get(stockId) ?? 0,
+        openTicketLines: openTicketLinesByStock.get(stockId) ?? [],
         serviceLevel,
+        orderingCost,
+        carryingRatePct,
+        unitValuePerFoot,
+        discontinued: goalRow?.discontinued ?? false,
+        demandFromStockId: predecessorId,
+        ...(vendorLeadTimeDays !== undefined ? { vendorLeadTimeDays } : {}),
+        ...(goalRow?.orderQuantityRolls != null && goalRow.orderQuantityRolls > 0
+          ? { orderQuantityRollsOverride: goalRow.orderQuantityRolls }
+          : {}),
         ...(effDemandCv !== undefined ? { demandCvOverride: effDemandCv } : {}),
         ...(effLeadTimeCv !== undefined ? { leadTimeCvOverride: effLeadTimeCv } : {}),
         ...(overrides.seasonalityWeights ? { seasonalityWeightsOverride: overrides.seasonalityWeights } : {}),
@@ -321,29 +367,35 @@ function parseEmails(raw: string | null | undefined): string[] {
 router.get(
   "/demand/purchasing",
   asyncHandler(async (_req, res) => {
-    const [stockInfo, tickets, goalRows, activeStockIds, widthsByStock] = await Promise.all([
+    const [stockInfo, tickets, goalRows, activeStockIds, widthsByStock, openPos] = await Promise.all([
       fetchStockInfo(),
       fetchOpenTickets(),
       db.select().from(stockGoalTable),
       fetchActiveStockIds(),
       fetchOnHandByWidth(),
+      fetchOpenPos(),
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
 
-    // tickets now has one row per (ticket × material in the BOM). Aggregate
-    // required footage per material across every ticket that lists it, but
-    // count each distinct ticket only once in the status donut.
+    // Group open POs per stock, split by whether the supplier has confirmed a
+    // delivery date (dueDate present = "Ordered"; no dueDate = "Ordered Not
+    // Confirmed"). Footage is reconstructed later from each stock's roll size.
+    const posByStock = new Map<string, { confirmedRolls: number; unconfirmedRolls: number }>();
+    for (const po of openPos) {
+      const bucket = posByStock.get(po.stockId) ?? { confirmedRolls: 0, unconfirmedRolls: 0 };
+      if (po.dueDateIso) bucket.confirmedRolls += po.quantityRolls;
+      else bucket.unconfirmedRolls += po.quantityRolls;
+      posByStock.set(po.stockId, bucket);
+    }
+
+    // tickets has one row per (ticket × material in the BOM). Aggregate required
+    // footage per material and keep the per-material ticket lines so we can net
+    // demand against inventory → POs → shortfall below.
     const ticketAgg = new Map<
       string,
       { requiredFootage: number; ticketCount: number; tickets: typeof tickets }
     >();
-    const statusCounts: Record<string, number> = {};
-    const countedTickets = new Set<string>();
     for (const t of tickets) {
-      if (!countedTickets.has(t.ticketNumber)) {
-        countedTickets.add(t.ticketNumber);
-        statusCounts[t.stockIn] = (statusCounts[t.stockIn] ?? 0) + 1;
-      }
       let agg = ticketAgg.get(t.stockId);
       if (!agg) {
         agg = { requiredFootage: 0, ticketCount: 0, tickets: [] };
@@ -354,6 +406,79 @@ router.get(
       agg.tickets.push(t);
     }
 
+    // Computed availability status per (ticket × material) line. We ignore Label
+    // Traxx's un-run StockIn field entirely and derive status the way Batched
+    // does: net each stock's demand (earliest ship date first) against on-hand
+    // inventory, then confirmed POs, then unconfirmed POs. Whatever bucket the
+    // last covering footage comes from names the status; a shortfall is "Out".
+    const STATUS_SEVERITY: Record<string, number> = {
+      In: 0,
+      Ordered: 1,
+      "Ordered Not Confirmed": 2,
+      Out: 3,
+    };
+    // Best (lowest-severity) status seen for each ticket, across all its
+    // materials — this feeds the donut so each ticket is counted once by its
+    // worst-covered material.
+    const ticketWorstStatus = new Map<string, string>();
+    // Worst status among a stock's own ticket lines — colours its bar.
+    const stockLineStatus = new Map<string, string>();
+
+    function avgRollFootage(stockId: string): number {
+      const widths = widthsByStock.get(stockId) ?? [];
+      let ft = 0;
+      let rolls = 0;
+      for (const w of widths) {
+        ft += w.footage;
+        rolls += w.rolls;
+      }
+      return rolls > 0 ? ft / rolls : 5000;
+    }
+
+    for (const [stockId, agg] of ticketAgg) {
+      const widths = widthsByStock.get(stockId) ?? [];
+      let avail = widths.reduce((s, w) => s + w.footage, 0);
+      const roll = avgRollFootage(stockId);
+      const poBucket = posByStock.get(stockId) ?? { confirmedRolls: 0, unconfirmedRolls: 0 };
+      let confirmed = poBucket.confirmedRolls * roll;
+      let unconfirmed = poBucket.unconfirmedRolls * roll;
+      const ordered = [...agg.tickets].sort((a, b) =>
+        (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"),
+      );
+      for (const line of ordered) {
+        let need = line.estFootage;
+        const fromInv = Math.min(avail, need);
+        avail -= fromInv;
+        need -= fromInv;
+        const fromConfirmed = Math.min(confirmed, need);
+        confirmed -= fromConfirmed;
+        need -= fromConfirmed;
+        const fromUnconfirmed = Math.min(unconfirmed, need);
+        unconfirmed -= fromUnconfirmed;
+        need -= fromUnconfirmed;
+        let status: string;
+        if (need > 1) status = "Out";
+        else if (fromUnconfirmed > 0) status = "Ordered Not Confirmed";
+        else if (fromConfirmed > 0) status = "Ordered";
+        else status = "In";
+        line.computedStatus = status;
+        // roll up to the ticket (worst wins) and to the stock's bar (worst wins)
+        const prevTicket = ticketWorstStatus.get(line.ticketNumber);
+        if (prevTicket == null || STATUS_SEVERITY[status]! > STATUS_SEVERITY[prevTicket]!) {
+          ticketWorstStatus.set(line.ticketNumber, status);
+        }
+        const prevStock = stockLineStatus.get(stockId);
+        if (prevStock == null || STATUS_SEVERITY[status]! > STATUS_SEVERITY[prevStock]!) {
+          stockLineStatus.set(stockId, status);
+        }
+      }
+    }
+
+    const statusCounts: Record<string, number> = {};
+    for (const status of ticketWorstStatus.values()) {
+      statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+    }
+
     const stockIds = new Set<string>([...stockInfo.keys(), ...ticketAgg.keys()]);
     const items = [...stockIds]
       .filter((id) => activeStockIds.size === 0 || activeStockIds.has(id) || ticketAgg.has(id))
@@ -361,6 +486,16 @@ router.get(
         const info = stockInfo.get(stockId);
         const goal = goalsByStock.get(stockId);
         const agg = ticketAgg.get(stockId);
+        const widths = widthsByStock.get(stockId) ?? [];
+        // On-hand MSI = Σ (footage × 12in/ft × width) / 1000, to compare against
+        // Label Traxx's MSI-denominated min/max.
+        const onHandMsi = widths.reduce((s, w) => s + (w.footage * 12 * w.width) / 1000, 0);
+        const invMin = info?.invMsiMinimum ?? 0;
+        const invMax = info?.invMsiMaximum ?? 0;
+        // A stock with no open tickets is flagged "Without Tickets"; otherwise
+        // its bar shows the worst computed status among its ticket lines.
+        const hasTickets = (agg?.ticketCount ?? 0) > 0;
+        const computedStatus = hasTickets ? stockLineStatus.get(stockId) ?? "In" : null;
         return {
           stockId,
           classification: info?.classification ?? null,
@@ -373,10 +508,18 @@ router.get(
           freightMsi: info?.freightMsi ?? 0,
           masterWidth: info?.masterWidth ?? 0,
           ltEstimatedDeliveryTime: info?.estimatedDeliveryTime ?? null,
-          ltInvMsiMinimum: info?.invMsiMinimum ?? 0,
-          ltInvMsiMaximum: info?.invMsiMaximum ?? 0,
+          ltInvMsiMinimum: invMin,
+          ltInvMsiMaximum: invMax,
+          onHandMsi: Math.round(onHandMsi),
+          computedStatus,
+          withoutTickets: !hasTickets,
+          belowMin: invMin > 0 && onHandMsi < invMin,
+          aboveMax: invMax > 0 && onHandMsi > invMax,
           leadTimeDaysOverride: goal?.leadTimeDays ?? null,
           typicalRollFootageOverride: goal?.typicalRollFootage ?? null,
+          orderQuantityRolls: goal?.orderQuantityRolls ?? null,
+          discontinued: goal?.discontinued ?? false,
+          demandFromStockId: goal?.demandFromStockId ?? null,
           openTicketFootage: agg ? Math.round(agg.requiredFootage) : 0,
           openTicketCount: agg?.ticketCount ?? 0,
           mfgSpecNum: info?.mfgSpecNum ?? null,
@@ -385,7 +528,7 @@ router.get(
           faceColor: info?.faceColor ?? null,
           topCoat: info?.topCoat ?? null,
           areaToWeightFactor: info?.areaToWeightFactor ?? 0,
-          widthsOnHand: (widthsByStock.get(stockId) ?? []).map((w) => ({
+          widthsOnHand: widths.map((w) => ({
             width: w.width,
             footage: Math.round(w.footage),
             rolls: w.rolls,
@@ -396,7 +539,10 @@ router.get(
             .map((t) => ({
               ticketNumber: t.ticketNumber,
               estFootage: Math.round(t.estFootage),
+              grossFootage: Math.round(t.grossFootage),
+              consumedFootage: Math.round(t.consumedFootage),
               stockIn: t.stockIn,
+              computedStatus: t.computedStatus ?? "In",
               shipByDate: t.shipByDate,
               description: t.description,
             })),
@@ -421,6 +567,13 @@ router.put(
     if ("leadTimeDays" in b) patch.leadTimeDays = b["leadTimeDays"] == null ? null : Number(b["leadTimeDays"]);
     if ("typicalRollFootage" in b)
       patch.typicalRollFootage = b["typicalRollFootage"] == null ? null : Number(b["typicalRollFootage"]);
+    if ("orderQuantityRolls" in b)
+      patch.orderQuantityRolls = b["orderQuantityRolls"] == null ? null : Number(b["orderQuantityRolls"]);
+    if ("discontinued" in b) patch.discontinued = b["discontinued"] === true;
+    if ("demandFromStockId" in b) {
+      const v = b["demandFromStockId"];
+      patch.demandFromStockId = v == null || String(v).trim() === "" ? null : String(v).trim();
+    }
     if (Object.keys(patch).length === 0) {
       return void res.status(400).json({ error: "No config fields in body" });
     }

@@ -8,8 +8,14 @@
 
 export interface OpenTicket {
   ticketNumber: string;
+  /** Remaining footage required (gross − consumed). */
   estFootage: number;
+  /** Full run requirement (LT total needed). */
+  grossFootage?: number;
+  /** Footage already run (rolls consumed) against this ticket for this stock. */
+  consumedFootage?: number;
   stockIn: string;
+  computedStatus?: string;
   shipByDate?: string | null;
   description?: string | null;
 }

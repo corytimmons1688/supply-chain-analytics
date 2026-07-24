@@ -12,4 +12,10 @@ export interface DemandConfigInput {
   msiCost?: number | null;
   leadTimeDays?: number | null;
   typicalRollFootage?: number | null;
+  /** Manual order quantity (master rolls) overriding EOQ. Null clears. */
+  orderQuantityRolls?: number | null;
+  /** End-of-life: keep visible with on-hand, but never suggest a reorder. */
+  discontinued?: boolean;
+  /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
+  demandFromStockId?: string | null;
 }

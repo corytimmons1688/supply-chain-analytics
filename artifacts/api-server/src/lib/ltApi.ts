@@ -22,6 +22,11 @@ export function ltApiConfigured(): boolean {
 
 const MAX_PAGE_SIZE = 100;
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+// Hard per-request timeout. Without this a single unresponsive LT endpoint
+// blocks the fetch forever, which stalls the whole sync until the serverless
+// function is killed — leaving the mirror silently stale. (Caused a 2-day
+// ticket/PO/roll sync outage on 2026-07-22.)
+const REQUEST_TIMEOUT_MS = 30_000;
 
 async function ltRequest<T>(method: "GET" | "POST" | "PUT", path: string, opts: {
   params?: Record<string, string | number | boolean | undefined>;
@@ -35,14 +40,29 @@ async function ltRequest<T>(method: "GET" | "POST" | "PUT", path: string, opts: 
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
-    const res = await fetch(url, {
-      method,
-      headers: {
-        authorization: LT_API_KEY,
-        ...(opts.body != null ? { "content-type": "application/json" } : {}),
-      },
-      body: opts.body != null ? JSON.stringify(opts.body) : undefined,
-    });
+    let res: Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          authorization: LT_API_KEY,
+          ...(opts.body != null ? { "content-type": "application/json" } : {}),
+        },
+        body: opts.body != null ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // Timeout (abort) or network error — retry rather than hang/abort the sync.
+      lastErr =
+        err instanceof Error && err.name === "AbortError"
+          ? new Error(`LT API timeout after ${REQUEST_TIMEOUT_MS}ms on ${method} ${path}`)
+          : new Error(`LT API network error on ${method} ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
     if (RETRYABLE.has(res.status)) {
       lastErr = new Error(`LT API ${res.status} on ${method} ${path}`);
       continue;

@@ -2,7 +2,7 @@ import { runGatewaySql, pickString, pickNumber, type GatewayRow } from "./gatewa
 import { ltGet, ltMapConcurrent, ltDate } from "./ltApi";
 import { bucketRange, eachBucket, type Bucket } from "./cc";
 import { db, ltRollTable, ltStockTable, ltTicketTable, ltPoTable } from "@workspace/db";
-import { and, eq, gte, lte, isNull, isNotNull, sql as dsql } from "drizzle-orm";
+import { and, eq, gte, lte, isNull, isNotNull, inArray, sql as dsql } from "drizzle-orm";
 
 // ---------- Date helpers ----------
 
@@ -109,6 +109,44 @@ function median(xs: number[]): number {
   const sorted = [...xs].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+/**
+ * Linear-interpolated percentile (p in [0,1]). Used to read a service-level
+ * quantile straight off an empirical demand distribution — no normality
+ * assumption, which is what makes it robust for lumpy label-stock demand.
+ */
+function percentile(xs: number[], p: number): number {
+  if (xs.length === 0) return 0;
+  if (xs.length === 1) return xs[0]!;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const rank = Math.min(1, Math.max(0, p)) * (sorted.length - 1);
+  const lo = Math.floor(rank);
+  const hi = Math.ceil(rank);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (rank - lo);
+}
+
+/**
+ * Empirical distribution of "demand during one lead time" built by sliding an
+ * `leadTimeDays`-wide window (step = 1 day) across the daily-bucketed usage
+ * series. Overlapping windows are autocorrelated, so this is a practical (not
+ * statistically pristine) estimator, but for lumpy demand it beats assuming
+ * normality. Returns the window sums, or null when history is too short to
+ * form a meaningful number of windows (caller falls back to the σ model).
+ */
+function leadTimeDemandSamples(dailyFootage: number[], leadTimeDays: number): number[] | null {
+  const L = Math.max(1, Math.round(leadTimeDays));
+  // Need at least ~20 windows for a stable service-level quantile.
+  if (dailyFootage.length < L + 20) return null;
+  const samples: number[] = [];
+  let windowSum = 0;
+  for (let i = 0; i < dailyFootage.length; i++) {
+    windowSum += dailyFootage[i]!;
+    if (i >= L) windowSum -= dailyFootage[i - L]!;
+    if (i >= L - 1) samples.push(windowSum);
+  }
+  return samples;
 }
 
 /**
@@ -317,12 +355,23 @@ export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
 export interface OpenTicketRow {
   ticketNumber: string;
   stockId: string;
+  /** Remaining requirement = grossFootage − consumedFootage (what still must be produced). */
   estFootage: number;
+  /** Full run requirement (LT totalNeeded), before netting consumption. */
+  grossFootage: number;
+  /** Footage already run (rolls consumed) against this ticket for this stock. */
+  consumedFootage: number;
   stockIn: string; // Label Traxx availability status: In / Ordered / Out / ...
   shipByDate: string | null;
   description: string | null;
   /** True when this material is the ticket's primary (first BOM) stock. */
   primary: boolean;
+  /**
+   * Availability status computed by netting demand against inventory/POs in the
+   * purchasing route (In / Ordered / Ordered Not Confirmed / Out). Undefined
+   * until that netting runs.
+   */
+  computedStatus?: string;
 }
 
 /**
@@ -337,6 +386,28 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
     .select()
     .from(ltTicketTable)
     .where(and(isNull(ltTicketTable.dateDone), gte(ltTicketTable.shipByDate, since)));
+
+  // Footage already RUN (rolls consumed) against these open tickets, per
+  // (ticket × stock). A partially-produced ticket still reports its full
+  // totalNeeded, but the footage already consumed is no longer a requirement —
+  // net it off so we don't reorder to cover demand that's already been made.
+  const ticketNumbers = rows.map((r) => r.ticketNumber);
+  const consumedByTicketStock = new Map<string, number>();
+  if (ticketNumbers.length > 0) {
+    const consumedRows = await db
+      .select({
+        tik: ltRollTable.usedTikNum,
+        stockId: ltRollTable.stockId,
+        ft: dsql<number>`coalesce(sum(${ltRollTable.length}), 0)`,
+      })
+      .from(ltRollTable)
+      .where(and(eq(ltRollTable.used, true), inArray(ltRollTable.usedTikNum, ticketNumbers)))
+      .groupBy(ltRollTable.usedTikNum, ltRollTable.stockId);
+    for (const c of consumedRows) {
+      if (c.tik) consumedByTicketStock.set(`${c.tik}|${c.stockId}`, Number(c.ft) || 0);
+    }
+  }
+
   const out: OpenTicketRow[] = [];
   for (const row of rows) {
     const allocs = Array.isArray(row.stockAllocs)
@@ -354,10 +425,16 @@ export async function fetchOpenTickets(): Promise<OpenTicketRow[]> {
       const stockId = a.stockNumber?.trim() ?? "";
       if (!stockId || seen.has(stockId)) return;
       seen.add(stockId);
+      // Remaining requirement = total needed − footage already run for this
+      // material on this ticket.
+      const gross = row.totalNeeded ?? 0;
+      const consumed = consumedByTicketStock.get(`${row.ticketNumber}|${stockId}`) ?? 0;
       out.push({
         ticketNumber: row.ticketNumber,
         stockId,
-        estFootage: row.totalNeeded ?? 0,
+        estFootage: Math.max(0, gross - consumed),
+        grossFootage: gross,
+        consumedFootage: Math.round(consumed),
         stockIn,
         shipByDate: row.shipByDate,
         description: row.description,
@@ -422,6 +499,7 @@ export async function fetchPoReceipts(
 export interface PoLeadTime {
   poNumber: string;
   leadTimeDays: number;
+  supplierName: string | null;
 }
 
 /** Per-PO lead time (days between PODate placed and Received). Chunked by month to dodge gateway 1000-row cap. */
@@ -436,9 +514,26 @@ export async function fetchPoLeadTimes(sinceIso?: string): Promise<Map<string, P
     if (!row.poDate || !row.receivedDate) continue;
     const days = diffDays(row.poDate, row.receivedDate);
     if (days <= 0 || days > 365) continue; // sanity bounds
-    m.set(row.poNumber, { poNumber: row.poNumber, leadTimeDays: days });
+    m.set(row.poNumber, { poNumber: row.poNumber, leadTimeDays: days, supplierName: row.supplierName ?? null });
   }
   return m;
+}
+
+/**
+ * Median lead time per supplier, across all their received POs — the fallback
+ * tier for a stock that has too little PO history of its own to trust.
+ */
+export function vendorLeadTimeMedians(poLeadTimes: Map<string, PoLeadTime>): Map<string, number> {
+  const byVendor = new Map<string, number[]>();
+  for (const lt of poLeadTimes.values()) {
+    if (!lt.supplierName) continue;
+    let arr = byVendor.get(lt.supplierName);
+    if (!arr) { arr = []; byVendor.set(lt.supplierName, arr); }
+    arr.push(lt.leadTimeDays);
+  }
+  const out = new Map<string, number>();
+  for (const [vendor, days] of byVendor) out.set(vendor, median(days));
+  return out;
 }
 
 export interface PoRollRow {
@@ -490,6 +585,7 @@ export interface OpenPoRow {
   poNumber: string;
   stockId: string;
   poDateIso: string | null;
+  dueDateIso: string | null;
   quantityRolls: number;
   description: string | null;
   daysOpen: number | null;
@@ -526,6 +622,7 @@ export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
       poNumber: row.poNumber,
       stockId: row.stockNum,
       poDateIso: row.poDate,
+      dueDateIso: row.dueDate,
       quantityRolls,
       description: row.description,
       daysOpen: row.poDate ? diffDays(row.poDate, today) : null,
@@ -644,14 +741,34 @@ export interface StockMetricsInput {
   openPos?: OpenPoRow[]; // pre-filtered to this stock; unreceived Stock-type POs
   /** Committed footage required by open (undone) tickets that list this material. */
   openTicketFootage?: number;
+  /**
+   * Per-ticket committed lines (footage + ship-by date) for this material, used
+   * to time-phase demand: requirements due within the lead-time horizon are
+   * treated as firm and drive the reorder point directly.
+   */
+  openTicketLines?: { footage: number; shipByDate: string | null }[];
   serviceLevel: number;
   demandCvOverride?: number;
   leadTimeCvOverride?: number;
   seasonalityWeightsOverride?: [number, number, number] | null;
   /** Override the average lead time (days) used in safety-stock / reorder-point math. */
   leadTimeDaysOverride?: number;
+  /** Median lead time (days) for this stock's supplier — fallback when the stock has too little PO history of its own. */
+  vendorLeadTimeDays?: number;
   /** Override the typical roll size (footage) used to size suggested POs. */
   typicalRollFootageOverride?: number;
+  /** Manual order quantity (master rolls) — a fixed batch overriding EOQ. Acts as a floor. */
+  orderQuantityRollsOverride?: number;
+  /** End-of-life: keep the SKU visible but never suggest a reorder. */
+  discontinued?: boolean;
+  /** Predecessor stock whose usage history is merged into this SKU (echoed for display). */
+  demandFromStockId?: string | null;
+  /** Landed value per foot ($/ft = (msiCost + freightMsi) × 12 × width / 1000) — drives EOQ holding cost. */
+  unitValuePerFoot?: number;
+  /** Fixed cost to place one PO ($) — the EOQ ordering-cost term. */
+  orderingCost?: number;
+  /** Annual inventory carrying rate (fraction, e.g. 0.20 = 20%/yr) — EOQ holding-cost term. */
+  carryingRatePct?: number;
   forecastWeeks: number;
   fallbackLeadTimeDays?: number;
   customized?: boolean;
@@ -672,6 +789,10 @@ export interface StockMetrics {
   avgLeadTimeDays: number;
   autoLeadTimeDays: number;
   leadTimeDaysOverridden: boolean;
+  /** Where avgLeadTimeDays came from: this stock's own PO history, its vendor's median, a global median, or a manual override. */
+  leadTimeSource: "stock" | "vendor" | "global" | "override";
+  /** How many of this stock's own received POs backed the lead-time estimate. */
+  leadTimeObservations: number;
   leadTimeStdDev: number;
   leadTimeCv: number;
   autoLeadTimeCv: number;
@@ -686,13 +807,33 @@ export interface StockMetrics {
   safetyStockFootage: number;
   reorderPointFootage: number;
   maxFootage: number;
+  /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
+  eoqFootage: number;
+  /** Economic order quantity expressed in whole master rolls. */
+  eoqRolls: number;
+  /** How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic. */
+  orderQtySource: "manual" | "eoq" | "heuristic";
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
+  /** End-of-life: still counted for on-hand, but never suggested for reorder. */
+  discontinued: boolean;
+  /** Predecessor stock whose demand history is merged into this SKU (null = none). */
+  demandFromStockId: string | null;
   /** Committed footage required by open tickets that list this material. */
   openTicketFootage: number;
+  /** Committed footage due within the lead-time horizon (drives the ROP). */
+  committedWithinLeadFootage: number;
   /** How short the inventory position is vs committed open-ticket demand (>0 = short). */
   committedShortageFootage: number;
+  /**
+   * How the reorder point was sized: "empirical" = service-level percentile of
+   * the historical lead-time-demand distribution; "statistical" = the σ-based
+   * safety-stock fallback used when history is too short.
+   */
+  reorderMethod: "empirical" | "statistical";
+  /** Number of lead-time-demand windows behind an empirical ROP (0 = fallback). */
+  leadTimeDemandSamples: number;
   /** Why a reorder is suggested: forecast reorder point, committed orders, both, or none. */
   reorderReason: "below_rop" | "committed" | "both" | "none";
   daysOfCover: number;
@@ -735,8 +876,26 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     const lt = input.poLeadTimes.get(po);
     if (lt) ltDays.push(lt.leadTimeDays);
   }
-  const autoLtDays = ltDays.length > 0 ? mean(ltDays) : (input.fallbackLeadTimeDays ?? 0);
+  // Lead time per STOCK NUMBER, with a graceful fallback chain. A stock's own
+  // received-PO history is primary (median, to resist a single outlier PO), but
+  // only once there are enough observations to trust; below that we fall back to
+  // the stock's supplier median, then a global median.
+  const MIN_LT_OBS = 2;
+  const stockLtDays = ltDays.length >= MIN_LT_OBS ? median(ltDays) : null;
+  let autoLtDays: number;
+  let leadTimeSource: StockMetrics["leadTimeSource"];
+  if (stockLtDays != null) {
+    autoLtDays = stockLtDays;
+    leadTimeSource = "stock";
+  } else if (input.vendorLeadTimeDays != null && input.vendorLeadTimeDays > 0) {
+    autoLtDays = input.vendorLeadTimeDays;
+    leadTimeSource = "vendor";
+  } else {
+    autoLtDays = input.fallbackLeadTimeDays ?? 0;
+    leadTimeSource = "global";
+  }
   const avgLtDays = input.leadTimeDaysOverride ?? autoLtDays;
+  if (input.leadTimeDaysOverride != null) leadTimeSource = "override";
   const sdLtDays = stdDev(ltDays);
   const ltWeeks = avgLtDays / 7;
   const sdLtWeeks = sdLtDays / 7;
@@ -744,11 +903,46 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   const leadTimeCv = input.leadTimeCvOverride ?? autoLeadTimeCv;
   const sigmaLtWeeks = ltWeeks * leadTimeCv;
 
-  // Safety stock = z * sqrt( LT * sigmaD^2 + d^2 * sigmaLT^2 )
-  const safetyStock = avgLtDays > 0 && avgWeekly > 0
+  // ---- Reorder point: empirical lead-time-demand percentile (σ-model fallback) ----
+  // Build the empirical distribution of "demand during one lead time" from the
+  // daily-bucketed usage history. For lumpy label-stock demand this is far more
+  // faithful than assuming demand is normal, and it never collapses a sporadic
+  // slow mover to a zero reorder point.
+  const dailyFootage = bucketHistory(input.usage, input.windowStart, input.windowEnd, "day").map((d) => d.footage);
+  const ltdSamples = leadTimeDemandSamples(dailyFootage, avgLtDays);
+  const ltdSampleCount = ltdSamples?.length ?? 0;
+
+  // σ-model safety stock — the fallback when history is too short to be empirical.
+  const statSafetyStock = avgLtDays > 0 && avgWeekly > 0
     ? z * Math.sqrt(ltWeeks * sigmaD * sigmaD + avgWeekly * avgWeekly * sigmaLtWeeks * sigmaLtWeeks)
     : 0;
-  const reorderPoint = avgWeekly * ltWeeks + safetyStock;
+
+  let safetyStock: number;
+  let expectedLtd: number; // expected (mean) demand over one lead time
+  let reorderMethod: StockMetrics["reorderMethod"];
+  if (ltdSamples && ltdSamples.length > 0) {
+    const meanLtd = mean(ltdSamples);
+    const ropLtd = percentile(ltdSamples, input.serviceLevel); // service-level quantile
+    expectedLtd = meanLtd;
+    safetyStock = Math.max(0, ropLtd - meanLtd); // variability cushion
+    reorderMethod = "empirical";
+  } else {
+    expectedLtd = avgWeekly * ltWeeks;
+    safetyStock = statSafetyStock;
+    reorderMethod = "statistical";
+  }
+
+  // Time-phase against the order book: committed footage due to ship within the
+  // lead-time horizon is firm, known demand that must be covered before a fresh
+  // PO could arrive. Lean on it — base demand-over-lead-time is the larger of
+  // the historical expectation and what's actually booked, plus safety on top.
+  const leadHorizonEnd = addDaysIso(todayIso(), Math.max(1, Math.round(avgLtDays)));
+  const openTicketLines = input.openTicketLines ?? [];
+  const committedWithinLead = openTicketLines.reduce(
+    (s, t) => (t.shipByDate && t.shipByDate <= leadHorizonEnd ? s + t.footage : s),
+    0,
+  );
+  const reorderPoint = Math.max(expectedLtd, committedWithinLead) + safetyStock;
 
   // Typical roll size: a buyer thinks of the *original* incoming roll length
   // (e.g. 10,000 ft). Per-row FootLength is per-piece — slit children share an
@@ -771,10 +965,37 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   }
   if (typicalRoll <= 0) typicalRoll = 5000;
 
-  // Max = enough to cover lead time + 4 weeks of demand on top of safety stock,
-  // rounded up to a typical roll. Falls back to ROP + one roll if no roll history.
-  const orderUpTo = reorderPoint + Math.max(avgWeekly * 4, typicalRoll);
-  const maxFootage = orderUpTo;
+  // Order quantity: economic order quantity (EOQ) when we have the cost inputs,
+  // else the legacy heuristic. EOQ = sqrt(2·D·S / H), balancing ordering cost
+  // against holding cost, then rounded to whole master rolls.
+  //   D = annual demand (ft)         S = fixed cost to place a PO ($)
+  //   H = annual holding $/ft = landed value/ft × carrying rate
+  const annualDemand = avgWeekly * 52;
+  const holdingPerFoot = (input.unitValuePerFoot ?? 0) * (input.carryingRatePct ?? 0);
+  const orderingCost = input.orderingCost ?? 0;
+  const eoqRaw =
+    holdingPerFoot > 0 && annualDemand > 0 && orderingCost > 0
+      ? Math.sqrt((2 * annualDemand * orderingCost) / holdingPerFoot)
+      : 0;
+  let eoqRolls = 0;
+  let eoqFootage = 0;
+  let orderQtySource: StockMetrics["orderQtySource"] = "heuristic";
+  const orderQtyOverride = input.orderQuantityRollsOverride;
+  if (orderQtyOverride != null && orderQtyOverride > 0 && typicalRoll > 0) {
+    // Manual per-stock order quantity wins over the computed EOQ.
+    eoqRolls = Math.round(orderQtyOverride);
+    eoqFootage = eoqRolls * typicalRoll;
+    orderQtySource = "manual";
+  } else if (eoqRaw > 0 && typicalRoll > 0) {
+    eoqRolls = Math.max(1, Math.round(eoqRaw / typicalRoll));
+    eoqFootage = eoqRolls * typicalRoll;
+    orderQtySource = "eoq";
+  }
+
+  // Max (order-up-to) = reorder point + one order quantity. EOQ when available,
+  // otherwise cover the lead time + ~4 weeks of demand (rounded to a roll).
+  const orderCycleFootage = eoqFootage > 0 ? eoqFootage : Math.max(avgWeekly * 4, typicalRoll);
+  const maxFootage = reorderPoint + orderCycleFootage;
 
   // Open (unreceived) Stock POs for this stock. Footage estimated as
   // quantity (rolls) * effective typical roll size — the same number a buyer
@@ -791,16 +1012,19 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   // already on the way.
   const inventoryPosition = input.onHandFootage + openPoFootage;
 
-  // Two independent reorder drivers:
-  //  1. Forecast — position below the statistical reorder point (avg demand
-  //     over lead time + safety stock). Steady-state replenishment.
-  //  2. Committed — position can't cover the footage already booked on open
-  //     tickets. A demand spike beyond the historical average still surfaces
-  //     even when the forecast trigger is quiet.
+  // Two reorder drivers:
+  //  1. Forecast — position below the reorder point. The ROP already folds in
+  //     committed demand due within the lead time, so this captures both the
+  //     steady-state replenishment need and near-term booked spikes.
+  //  2. Committed (beyond lead) — position can't cover the *entire* open-ticket
+  //     book, even demand booked past the lead-time horizon. Surfaces a large
+  //     order backlog early so one PO can cover it (1 material = 1 PO).
   const openTicketFootage = input.openTicketFootage ?? 0;
-  const forecastShort = reorderPoint > 0 && inventoryPosition < reorderPoint;
+  // End-of-life SKUs still show on-hand for sell-through but never reorder.
+  const discontinued = input.discontinued ?? false;
+  const forecastShort = !discontinued && reorderPoint > 0 && inventoryPosition < reorderPoint;
   const committedShortageFootage = Math.max(0, openTicketFootage - inventoryPosition);
-  const committedShort = committedShortageFootage > 0;
+  const committedShort = !discontinued && committedShortageFootage > 0;
   const belowMin = forecastShort || committedShort;
   const reorderReason: StockMetrics["reorderReason"] = forecastShort && committedShort
     ? "both"
@@ -818,10 +1042,12 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     const targetLevel = Math.max(maxFootage, openTicketFootage);
     const rawNeed = targetLevel - inventoryPosition;
     if (typicalRoll > 0) {
-      suggestedOrderRolls = Math.ceil(rawNeed / typicalRoll);
+      // Never order below the economic batch — a (Q,r) policy places at least
+      // EOQ each time, but a big committed backlog can push the quantity higher.
+      suggestedOrderRolls = Math.max(eoqRolls, Math.ceil(rawNeed / typicalRoll));
       suggestedOrderFootage = suggestedOrderRolls * typicalRoll;
     } else {
-      suggestedOrderFootage = Math.ceil(rawNeed);
+      suggestedOrderFootage = Math.max(eoqFootage, Math.ceil(rawNeed));
     }
   }
 
@@ -870,6 +1096,8 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       avgLeadTimeDays: Math.round(avgLtDays * 10) / 10,
       autoLeadTimeDays: Math.round(autoLtDays * 10) / 10,
       leadTimeDaysOverridden: input.leadTimeDaysOverride !== undefined,
+      leadTimeSource,
+      leadTimeObservations: ltDays.length,
       leadTimeStdDev: Math.round(sdLtDays * 10) / 10,
       leadTimeCv: Math.round(leadTimeCv * 10000) / 10000,
       autoLeadTimeCv: Math.round(autoLeadTimeCv * 10000) / 10000,
@@ -889,11 +1117,19 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       safetyStockFootage: Math.round(safetyStock),
       reorderPointFootage: Math.round(reorderPoint),
       maxFootage: Math.round(maxFootage),
+      eoqFootage: Math.round(eoqFootage),
+      eoqRolls,
+      orderQtySource,
+      discontinued,
+      demandFromStockId: input.demandFromStockId ?? null,
       suggestedOrderFootage: Math.round(suggestedOrderFootage),
       suggestedOrderRolls,
       belowMin,
       openTicketFootage: Math.round(openTicketFootage),
+      committedWithinLeadFootage: Math.round(committedWithinLead),
       committedShortageFootage: Math.round(committedShortageFootage),
+      reorderMethod,
+      leadTimeDemandSamples: ltdSampleCount,
       reorderReason,
       daysOfCover: Number.isFinite(daysOfCover) ? Math.round(daysOfCover) : -1,
       forecast12wkFootage: Math.round(forecast12wkTotal),

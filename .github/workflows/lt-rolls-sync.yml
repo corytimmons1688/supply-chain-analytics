@@ -1,0 +1,33 @@
+name: LT roll refresh (frequent)
+
+# Lightweight LabelTraxx roll sync — on-hand rolls + roll dates/used-ticket
+# numbers only — so on-hand and consumption-netting stay current through the
+# day. The hourly full sync (hourly-data-sync.yml) still covers everything else.
+# Note: GitHub Actions schedules are best-effort and can run late under load.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Don't pile up runs if one is slow / delayed.
+concurrency:
+  group: lt-rolls-sync
+  cancel-in-progress: false
+
+jobs:
+  rolls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger LT roll refresh
+        run: |
+          curl --silent --show-error --fail --max-time 120 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://supply-chain-analytics-delta.vercel.app/api/cron/lt-rolls \
+            | tee rolls-result.json
+      - name: Summarize
+        run: |
+          echo "### LT roll refresh" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat rolls-result.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

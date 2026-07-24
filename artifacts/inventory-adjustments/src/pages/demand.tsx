@@ -333,6 +333,10 @@ export default function DemandPlanning() {
   const [demandCv, setDemandCv] = React.useState<string>("");
   const [leadTimeCv, setLeadTimeCv] = React.useState<string>("");
   const [forecastWeeks] = React.useState<number>(12);
+  // EOQ economics (fixed ordering cost $/PO, annual carrying rate %). Defaults
+  // mirror the server ($150 / 20%). Empty string = use the server default.
+  const [orderingCost, setOrderingCost] = React.useState<string>("");
+  const [carryingRatePct, setCarryingRatePct] = React.useState<string>("");
 
   // Hydrate local state from server-saved defaults exactly once when goals
   // first arrive. After that the user owns the values for this session.
@@ -343,6 +347,8 @@ export default function DemandPlanning() {
     if (savedDefaults.serviceLevel != null) setServiceLevel(savedDefaults.serviceLevel);
     if (savedDefaults.demandCv != null) setDemandCv(String(savedDefaults.demandCv));
     if (savedDefaults.leadTimeCv != null) setLeadTimeCv(String(savedDefaults.leadTimeCv));
+    if (savedDefaults.orderingCost != null) setOrderingCost(String(savedDefaults.orderingCost));
+    if (savedDefaults.carryingRatePct != null) setCarryingRatePct(String(savedDefaults.carryingRatePct));
     hydratedRef.current = true;
   }, [savedDefaults]);
 
@@ -353,6 +359,8 @@ export default function DemandPlanning() {
       serviceLevel?: number | null;
       demandCv?: number | null;
       leadTimeCv?: number | null;
+      orderingCost?: number | null;
+      carryingRatePct?: number | null;
     }) => {
       setGlobalGoal.mutate(
         {
@@ -392,6 +400,8 @@ export default function DemandPlanning() {
   };
   if (demandCv && Number.isFinite(Number(demandCv))) params.demandCv = Number(demandCv);
   if (leadTimeCv && Number.isFinite(Number(leadTimeCv))) params.leadTimeCv = Number(leadTimeCv);
+  if (orderingCost && Number.isFinite(Number(orderingCost))) params.orderingCost = Number(orderingCost);
+  if (carryingRatePct && Number.isFinite(Number(carryingRatePct))) params.carryingRatePct = Number(carryingRatePct);
 
   const { data, isLoading, isFetching } = useGetDemandSummary(params, {
     query: { queryKey: getGetDemandSummaryQueryKey(params), staleTime: 60_000 },
@@ -681,6 +691,38 @@ export default function DemandPlanning() {
               />
             </div>
             <div>
+              <label
+                className="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                title="Fixed cost to place one PO (admin + freight setup). Drives the economic order quantity."
+              >
+                Ordering Cost ($/PO)
+              </label>
+              <Input
+                placeholder="150"
+                value={orderingCost}
+                onChange={(e) => setOrderingCost(e.target.value)}
+                onBlur={() => persistDefaults({ orderingCost: parseCv(orderingCost) })}
+                className="mt-1.5"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
+              <label
+                className="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                title="Annual inventory carrying rate as a fraction (0.20 = 20%/yr). Drives the economic order quantity."
+              >
+                Carrying Rate (/yr)
+              </label>
+              <Input
+                placeholder="0.20"
+                value={carryingRatePct}
+                onChange={(e) => setCarryingRatePct(e.target.value)}
+                onBlur={() => persistDefaults({ carryingRatePct: parseCv(carryingRatePct) })}
+                className="mt-1.5"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Show
               </label>
@@ -873,6 +915,24 @@ export default function DemandPlanning() {
                           <div className="cursor-pointer">
                             <div className="font-medium text-foreground flex items-center gap-2 flex-wrap">
                               #{r.stockId}
+                              {r.discontinued && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-slate-500/40 text-slate-600 dark:text-slate-300 text-[10px] px-1.5 py-0"
+                                  title={`End of life — not reordered${r.demandFromStockId ? "" : "; on-hand sells through"}`}
+                                >
+                                  EOL
+                                </Badge>
+                              )}
+                              {r.demandFromStockId && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-sky-500/40 text-sky-700 dark:text-sky-400 text-[10px] px-1.5 py-0"
+                                  title={`Demand inherited from stock #${r.demandFromStockId}`}
+                                >
+                                  ← #{r.demandFromStockId}
+                                </Badge>
+                              )}
                               {r.belowMin && (
                                 <Badge
                                   variant="outline"

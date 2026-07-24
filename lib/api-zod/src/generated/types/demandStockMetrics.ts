@@ -6,6 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DemandStockMetricsActivityStatus } from "./demandStockMetricsActivityStatus";
+import type { DemandStockMetricsLeadTimeSource } from "./demandStockMetricsLeadTimeSource";
+import type { DemandStockMetricsOrderQtySource } from "./demandStockMetricsOrderQtySource";
+import type { DemandStockMetricsReorderMethod } from "./demandStockMetricsReorderMethod";
 import type { DemandStockMetricsReorderReason } from "./demandStockMetricsReorderReason";
 
 export interface DemandStockMetrics {
@@ -29,6 +32,10 @@ export interface DemandStockMetrics {
   autoLeadTimeDays: number;
   /** True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value. */
   leadTimeDaysOverridden: boolean;
+  /** Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override. */
+  leadTimeSource: DemandStockMetricsLeadTimeSource;
+  /** Count of this stock's own received POs behind the lead-time estimate. */
+  leadTimeObservations: number;
   leadTimeStdDev: number;
   /** Effective lead-time CV used in safety-stock math (override if set, else auto-derived). */
   leadTimeCv: number;
@@ -60,11 +67,27 @@ export interface DemandStockMetrics {
   safetyStockFootage: number;
   reorderPointFootage: number;
   maxFootage: number;
+  /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
+  eoqFootage: number;
+  /** Order quantity in whole master rolls (manual override, EOQ, or 0). */
+  eoqRolls: number;
+  /** How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic. */
+  orderQtySource: DemandStockMetricsOrderQtySource;
+  /** End-of-life: still counted for on-hand but never suggested for reorder. */
+  discontinued: boolean;
+  /** Predecessor stock whose demand history is merged into this SKU (null = none). */
+  demandFromStockId: string | null;
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
   openTicketFootage: number;
+  /** Committed footage due to ship within the lead-time horizon (drives the reorder point). */
+  committedWithinLeadFootage: number;
   committedShortageFootage: number;
+  /** How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback. */
+  reorderMethod: DemandStockMetricsReorderMethod;
+  /** Number of lead-time-demand windows behind an empirical reorder point (0 = statistical fallback). */
+  leadTimeDemandSamples: number;
   reorderReason: DemandStockMetricsReorderReason;
   daysOfCover: number;
   forecast12wkFootage: number;

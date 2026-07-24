@@ -3,7 +3,7 @@ import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
-import { performLtApiSync } from "../lib/lt-sync";
+import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates } from "../lib/lt-sync";
 
 const router: IRouter = Router();
 
@@ -43,6 +43,32 @@ router.get("/cron/netsuite-sync", async (req, res, next) => {
       }
     }
     logger.info({ out }, "Scheduled data sync ran");
+    res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Lightweight LabelTraxx roll refresh — on-hand rolls + roll-detail dates and
+ * used-ticket numbers only (no NetSuite/quality/ticket work). Fast (~15-30s),
+ * so it can run every ~15 min to keep on-hand and consumption-netting current
+ * through the day without the heavy full sync.
+ */
+router.get("/cron/lt-rolls", async (req, res, next) => {
+  try {
+    if (!cronAuthorized(req, res)) return;
+    // On-hand first (flags rolls that left inventory as used), then detail
+    // enrichment (fills dateRollUsed + the used-ticket number those rolls need
+    // for consumption netting).
+    const onHand = await syncLtOnHandRolls();
+    const dates = await syncLtRollDates({ limit: 2000 });
+    const out = {
+      onHandRolls: onHand.onHand,
+      newlyUsedRolls: onHand.newlyUsed,
+      rollDatesEnriched: dates.enriched,
+    };
+    logger.info({ out }, "LT roll refresh ran");
     res.json(out);
   } catch (err) {
     next(err);

@@ -19,4 +19,7 @@ export interface StockGoal {
   seasonalityWeights?: number[] | null;
   leadTimeDays?: number | null;
   typicalRollFootage?: number | null;
+  orderQuantityRolls?: number | null;
+  discontinued?: boolean;
+  demandFromStockId?: string | null;
 }

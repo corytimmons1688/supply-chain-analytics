@@ -487,8 +487,14 @@ export interface WidthOnHand {
 
 export interface OpenTicket {
   ticketNumber: string;
+  /** Remaining footage required (gross − consumed). */
   estFootage: number;
+  /** Full run requirement (LT total needed). */
+  grossFootage?: number;
+  /** Footage already run (rolls consumed) against this ticket for this stock. */
+  consumedFootage?: number;
   stockIn: string;
+  computedStatus?: string;
   shipByDate?: string | null;
   description?: string | null;
 }
@@ -506,8 +512,17 @@ export interface PurchasingItem {
   ltEstimatedDeliveryTime?: string | null;
   ltInvMsiMinimum?: number;
   ltInvMsiMaximum?: number;
+  onHandMsi?: number;
+  /** Computed availability (In / Ordered / Ordered Not Confirmed / Out); null when the stock has no open tickets */
+  computedStatus?: string | null;
+  withoutTickets?: boolean;
+  belowMin?: boolean;
+  aboveMax?: boolean;
   leadTimeDaysOverride?: number | null;
   typicalRollFootageOverride?: number | null;
+  orderQuantityRolls?: number | null;
+  discontinued?: boolean;
+  demandFromStockId?: string | null;
   openTicketFootage?: number;
   openTicketCount?: number;
   mfgSpecNum?: string | null;
@@ -534,6 +549,12 @@ export interface DemandConfigInput {
   msiCost?: number | null;
   leadTimeDays?: number | null;
   typicalRollFootage?: number | null;
+  /** Manual order quantity (master rolls) overriding EOQ. Null clears. */
+  orderQuantityRolls?: number | null;
+  /** End-of-life: keep visible with on-hand, but never suggest a reorder. */
+  discontinued?: boolean;
+  /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
+  demandFromStockId?: string | null;
 }
 
 export interface DemandConfigResult {
@@ -697,6 +718,10 @@ export interface GoalBand {
   demandCv?: number | null;
   /** Shared Demand Planning lead-time-CV override default. Null = no override. */
   leadTimeCv?: number | null;
+  /** Fixed cost to place one PO ($), for EOQ. Null = app default $150. */
+  orderingCost?: number | null;
+  /** Annual inventory carrying rate (fraction, e.g. 0.20), for EOQ. Null = app default 0.20. */
+  carryingRatePct?: number | null;
 }
 
 export interface GoalBandInput {
@@ -706,6 +731,8 @@ export interface GoalBandInput {
   leadTimeCv?: number | null;
   serviceLevel?: number | null;
   monthsBack?: number | null;
+  orderingCost?: number | null;
+  carryingRatePct?: number | null;
   /**
    * Quarterly seasonality weights for months 1, 2, 3 of each quarter. Should sum to ~1.0.
    * @minItems 3
@@ -731,6 +758,9 @@ export interface StockGoal {
   seasonalityWeights?: number[] | null;
   leadTimeDays?: number | null;
   typicalRollFootage?: number | null;
+  orderQuantityRolls?: number | null;
+  discontinued?: boolean;
+  demandFromStockId?: string | null;
 }
 
 export type RootCauseItemStatus =
@@ -936,6 +966,42 @@ export type MonthlySnapshot = MonthlySnapshotSummary & {
   rolls: SnapshotRoll[];
 };
 
+/**
+ * Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override.
+ */
+export type DemandStockMetricsLeadTimeSource =
+  (typeof DemandStockMetricsLeadTimeSource)[keyof typeof DemandStockMetricsLeadTimeSource];
+
+export const DemandStockMetricsLeadTimeSource = {
+  stock: "stock",
+  vendor: "vendor",
+  global: "global",
+  override: "override",
+} as const;
+
+/**
+ * How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic.
+ */
+export type DemandStockMetricsOrderQtySource =
+  (typeof DemandStockMetricsOrderQtySource)[keyof typeof DemandStockMetricsOrderQtySource];
+
+export const DemandStockMetricsOrderQtySource = {
+  manual: "manual",
+  eoq: "eoq",
+  heuristic: "heuristic",
+} as const;
+
+/**
+ * How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback.
+ */
+export type DemandStockMetricsReorderMethod =
+  (typeof DemandStockMetricsReorderMethod)[keyof typeof DemandStockMetricsReorderMethod];
+
+export const DemandStockMetricsReorderMethod = {
+  empirical: "empirical",
+  statistical: "statistical",
+} as const;
+
 export type DemandStockMetricsReorderReason =
   (typeof DemandStockMetricsReorderReason)[keyof typeof DemandStockMetricsReorderReason];
 
@@ -985,6 +1051,10 @@ export interface DemandStockMetrics {
   autoLeadTimeDays: number;
   /** True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value. */
   leadTimeDaysOverridden: boolean;
+  /** Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override. */
+  leadTimeSource: DemandStockMetricsLeadTimeSource;
+  /** Count of this stock's own received POs behind the lead-time estimate. */
+  leadTimeObservations: number;
   leadTimeStdDev: number;
   /** Effective lead-time CV used in safety-stock math (override if set, else auto-derived). */
   leadTimeCv: number;
@@ -1016,11 +1086,27 @@ export interface DemandStockMetrics {
   safetyStockFootage: number;
   reorderPointFootage: number;
   maxFootage: number;
+  /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
+  eoqFootage: number;
+  /** Order quantity in whole master rolls (manual override, EOQ, or 0). */
+  eoqRolls: number;
+  /** How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic. */
+  orderQtySource: DemandStockMetricsOrderQtySource;
+  /** End-of-life: still counted for on-hand but never suggested for reorder. */
+  discontinued: boolean;
+  /** Predecessor stock whose demand history is merged into this SKU (null = none). */
+  demandFromStockId: string | null;
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
   belowMin: boolean;
   openTicketFootage: number;
+  /** Committed footage due to ship within the lead-time horizon (drives the reorder point). */
+  committedWithinLeadFootage: number;
   committedShortageFootage: number;
+  /** How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback. */
+  reorderMethod: DemandStockMetricsReorderMethod;
+  /** Number of lead-time-demand windows behind an empirical reorder point (0 = statistical fallback). */
+  leadTimeDemandSamples: number;
   reorderReason: DemandStockMetricsReorderReason;
   daysOfCover: number;
   forecast12wkFootage: number;
@@ -1265,6 +1351,14 @@ export type GetDemandSummaryParams = {
   demandCv?: number;
   leadTimeCv?: number;
   forecastWeeks?: number;
+  /**
+   * Fixed cost per PO ($) for EOQ. Omit to use the saved global default (or $150).
+   */
+  orderingCost?: number;
+  /**
+   * Annual carrying rate (fraction) for EOQ. Omit to use the saved global default (or 0.20).
+   */
+  carryingRatePct?: number;
 };
 
 export type GetDemandStockDetailParams = {

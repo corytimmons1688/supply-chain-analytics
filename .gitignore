@@ -58,3 +58,8 @@ api/index.mjs
 artifacts/api-server/backfill-lt.ts
 artifacts/api-server/parity-lt.ts
 artifacts/api-server/dist-backfill/
+
+# Environment files (secrets pulled via `vercel env pull`) — never commit
+.env
+.env.*
+!.env.example

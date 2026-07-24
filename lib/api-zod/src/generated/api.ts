@@ -316,6 +316,18 @@ export const GetGoalsResponse = zod.object({
       .describe(
         "Shared Demand Planning lead-time-CV override default. Null = no override.",
       ),
+    orderingCost: zod
+      .number()
+      .nullish()
+      .describe(
+        "Fixed cost to place one PO ($), for EOQ. Null = app default $150.",
+      ),
+    carryingRatePct: zod
+      .number()
+      .nullish()
+      .describe(
+        "Annual inventory carrying rate (fraction, e.g. 0.20), for EOQ. Null = app default 0.20.",
+      ),
   }),
   perStock: zod.array(
     zod.object({
@@ -331,6 +343,9 @@ export const GetGoalsResponse = zod.object({
         .nullish(),
       leadTimeDays: zod.number().nullish(),
       typicalRollFootage: zod.number().nullish(),
+      orderQuantityRolls: zod.number().nullish(),
+      discontinued: zod.boolean().optional(),
+      demandFromStockId: zod.string().nullish(),
     }),
   ),
 });
@@ -348,6 +363,8 @@ export const SetGlobalGoalBody = zod.object({
   leadTimeCv: zod.number().nullish(),
   serviceLevel: zod.number().nullish(),
   monthsBack: zod.number().nullish(),
+  orderingCost: zod.number().nullish(),
+  carryingRatePct: zod.number().nullish(),
   seasonalityWeights: zod
     .array(zod.number())
     .min(setGlobalGoalBodySeasonalityWeightsMin)
@@ -397,6 +414,18 @@ export const SetGlobalGoalResponse = zod.object({
     .describe(
       "Shared Demand Planning lead-time-CV override default. Null = no override.",
     ),
+  orderingCost: zod
+    .number()
+    .nullish()
+    .describe(
+      "Fixed cost to place one PO ($), for EOQ. Null = app default $150.",
+    ),
+  carryingRatePct: zod
+    .number()
+    .nullish()
+    .describe(
+      "Annual inventory carrying rate (fraction, e.g. 0.20), for EOQ. Null = app default 0.20.",
+    ),
 });
 
 export const SetStockGoalParams = zod.object({
@@ -413,6 +442,8 @@ export const SetStockGoalBody = zod.object({
   leadTimeCv: zod.number().nullish(),
   serviceLevel: zod.number().nullish(),
   monthsBack: zod.number().nullish(),
+  orderingCost: zod.number().nullish(),
+  carryingRatePct: zod.number().nullish(),
   seasonalityWeights: zod
     .array(zod.number())
     .min(setStockGoalBodySeasonalityWeightsMin)
@@ -451,6 +482,9 @@ export const SetStockGoalResponse = zod.object({
     .nullish(),
   leadTimeDays: zod.number().nullish(),
   typicalRollFootage: zod.number().nullish(),
+  orderQuantityRolls: zod.number().nullish(),
+  discontinued: zod.boolean().optional(),
+  demandFromStockId: zod.string().nullish(),
 });
 
 export const DeleteStockGoalParams = zod.object({
@@ -655,8 +689,21 @@ export const GetDemandPurchasingResponse = zod.object({
       ltEstimatedDeliveryTime: zod.string().nullish(),
       ltInvMsiMinimum: zod.number().optional(),
       ltInvMsiMaximum: zod.number().optional(),
+      onHandMsi: zod.number().optional(),
+      computedStatus: zod
+        .string()
+        .nullish()
+        .describe(
+          "Computed availability (In \/ Ordered \/ Ordered Not Confirmed \/ Out); null when the stock has no open tickets",
+        ),
+      withoutTickets: zod.boolean().optional(),
+      belowMin: zod.boolean().optional(),
+      aboveMax: zod.boolean().optional(),
       leadTimeDaysOverride: zod.number().nullish(),
       typicalRollFootageOverride: zod.number().nullish(),
+      orderQuantityRolls: zod.number().nullish(),
+      discontinued: zod.boolean().optional(),
+      demandFromStockId: zod.string().nullish(),
       openTicketFootage: zod.number().optional(),
       openTicketCount: zod.number().optional(),
       mfgSpecNum: zod.string().nullish(),
@@ -678,8 +725,21 @@ export const GetDemandPurchasingResponse = zod.object({
         .array(
           zod.object({
             ticketNumber: zod.string(),
-            estFootage: zod.number(),
+            estFootage: zod
+              .number()
+              .describe("Remaining footage required (gross − consumed)."),
+            grossFootage: zod
+              .number()
+              .optional()
+              .describe("Full run requirement (LT total needed)."),
+            consumedFootage: zod
+              .number()
+              .optional()
+              .describe(
+                "Footage already run (rolls consumed) against this ticket for this stock.",
+              ),
             stockIn: zod.string(),
+            computedStatus: zod.string().optional(),
             shipByDate: zod.string().nullish(),
             description: zod.string().nullish(),
           }),
@@ -703,6 +763,24 @@ export const UpdateDemandConfigBody = zod.object({
   msiCost: zod.number().nullish(),
   leadTimeDays: zod.number().nullish(),
   typicalRollFootage: zod.number().nullish(),
+  orderQuantityRolls: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual order quantity (master rolls) overriding EOQ. Null clears.",
+    ),
+  discontinued: zod
+    .boolean()
+    .optional()
+    .describe(
+      "End-of-life: keep visible with on-hand, but never suggest a reorder.",
+    ),
+  demandFromStockId: zod
+    .string()
+    .nullish()
+    .describe(
+      "Predecessor stock number whose usage history this SKU inherits. Null clears.",
+    ),
 });
 
 export const UpdateDemandConfigResponse = zod.object({
@@ -826,6 +904,18 @@ export const GetDemandSummaryQueryParams = zod.object({
   forecastWeeks: zod.coerce
     .number()
     .default(getDemandSummaryQueryForecastWeeksDefault),
+  orderingCost: zod.coerce
+    .number()
+    .optional()
+    .describe(
+      "Fixed cost per PO ($) for EOQ. Omit to use the saved global default (or $150).",
+    ),
+  carryingRatePct: zod.coerce
+    .number()
+    .optional()
+    .describe(
+      "Annual carrying rate (fraction) for EOQ. Omit to use the saved global default (or 0.20).",
+    ),
 });
 
 export const getDemandSummaryResponseItemsItemSeasonalityWeightsMin = 3;
@@ -881,6 +971,16 @@ export const GetDemandSummaryResponse = zod.object({
         .describe(
           "True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value.",
         ),
+      leadTimeSource: zod
+        .enum(["stock", "vendor", "global", "override"])
+        .describe(
+          "Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override.",
+        ),
+      leadTimeObservations: zod
+        .number()
+        .describe(
+          "Count of this stock's own received POs behind the lead-time estimate.",
+        ),
       leadTimeStdDev: zod.number(),
       leadTimeCv: zod
         .number()
@@ -931,11 +1031,52 @@ export const GetDemandSummaryResponse = zod.object({
       safetyStockFootage: zod.number(),
       reorderPointFootage: zod.number(),
       maxFootage: zod.number(),
+      eoqFootage: zod
+        .number()
+        .describe(
+          "Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable.",
+        ),
+      eoqRolls: zod
+        .number()
+        .describe(
+          "Order quantity in whole master rolls (manual override, EOQ, or 0).",
+        ),
+      orderQtySource: zod
+        .enum(["manual", "eoq", "heuristic"])
+        .describe(
+          "How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic.",
+        ),
+      discontinued: zod
+        .boolean()
+        .describe(
+          "End-of-life: still counted for on-hand but never suggested for reorder.",
+        ),
+      demandFromStockId: zod
+        .string()
+        .nullable()
+        .describe(
+          "Predecessor stock whose demand history is merged into this SKU (null = none).",
+        ),
       suggestedOrderFootage: zod.number(),
       suggestedOrderRolls: zod.number(),
       belowMin: zod.boolean(),
       openTicketFootage: zod.number(),
+      committedWithinLeadFootage: zod
+        .number()
+        .describe(
+          "Committed footage due to ship within the lead-time horizon (drives the reorder point).",
+        ),
       committedShortageFootage: zod.number(),
+      reorderMethod: zod
+        .enum(["empirical", "statistical"])
+        .describe(
+          "How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback.",
+        ),
+      leadTimeDemandSamples: zod
+        .number()
+        .describe(
+          "Number of lead-time-demand windows behind an empirical reorder point (0 = statistical fallback).",
+        ),
       reorderReason: zod.enum(["below_rop", "committed", "both", "none"]),
       daysOfCover: zod.number(),
       forecast12wkFootage: zod.number(),
@@ -1046,6 +1187,16 @@ export const GetDemandStockDetailResponse = zod.object({
       .describe(
         "True when avgLeadTimeDays comes from a per-stock override rather than the auto-derived value.",
       ),
+    leadTimeSource: zod
+      .enum(["stock", "vendor", "global", "override"])
+      .describe(
+        "Where the lead time came from: this stock's own PO history, its vendor's median, a global median, or a manual override.",
+      ),
+    leadTimeObservations: zod
+      .number()
+      .describe(
+        "Count of this stock's own received POs behind the lead-time estimate.",
+      ),
     leadTimeStdDev: zod.number(),
     leadTimeCv: zod
       .number()
@@ -1096,11 +1247,52 @@ export const GetDemandStockDetailResponse = zod.object({
     safetyStockFootage: zod.number(),
     reorderPointFootage: zod.number(),
     maxFootage: zod.number(),
+    eoqFootage: zod
+      .number()
+      .describe(
+        "Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable.",
+      ),
+    eoqRolls: zod
+      .number()
+      .describe(
+        "Order quantity in whole master rolls (manual override, EOQ, or 0).",
+      ),
+    orderQtySource: zod
+      .enum(["manual", "eoq", "heuristic"])
+      .describe(
+        "How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic.",
+      ),
+    discontinued: zod
+      .boolean()
+      .describe(
+        "End-of-life: still counted for on-hand but never suggested for reorder.",
+      ),
+    demandFromStockId: zod
+      .string()
+      .nullable()
+      .describe(
+        "Predecessor stock whose demand history is merged into this SKU (null = none).",
+      ),
     suggestedOrderFootage: zod.number(),
     suggestedOrderRolls: zod.number(),
     belowMin: zod.boolean(),
     openTicketFootage: zod.number(),
+    committedWithinLeadFootage: zod
+      .number()
+      .describe(
+        "Committed footage due to ship within the lead-time horizon (drives the reorder point).",
+      ),
     committedShortageFootage: zod.number(),
+    reorderMethod: zod
+      .enum(["empirical", "statistical"])
+      .describe(
+        "How the reorder point was sized: empirical percentile of historical lead-time demand, or the σ-model fallback.",
+      ),
+    leadTimeDemandSamples: zod
+      .number()
+      .describe(
+        "Number of lead-time-demand windows behind an empirical reorder point (0 = statistical fallback).",
+      ),
     reorderReason: zod.enum(["below_rop", "committed", "both", "none"]),
     daysOfCover: zod.number(),
     forecast12wkFootage: zod.number(),

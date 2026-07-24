@@ -12,4 +12,12 @@ export type GetDemandSummaryParams = {
   demandCv?: number;
   leadTimeCv?: number;
   forecastWeeks?: number;
+  /**
+   * Fixed cost per PO ($) for EOQ. Omit to use the saved global default (or $150).
+   */
+  orderingCost?: number;
+  /**
+   * Annual carrying rate (fraction) for EOQ. Omit to use the saved global default (or 0.20).
+   */
+  carryingRatePct?: number;
 };

@@ -1,4 +1,4 @@
-import { pgTable, text, doublePrecision, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, doublePrecision, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 
 // Snapshot of the cycle-count plan for the active financial quarter. Stored
 // once on the global row so all per-stock weekly assignments stay stable
@@ -23,6 +23,10 @@ export const globalGoalTable = pgTable("global_goal", {
   monthsBack: integer("months_back"),
   demandCv: doublePrecision("demand_cv"),
   leadTimeCv: doublePrecision("lead_time_cv"),
+  // EOQ economics for suggested order quantities. NULL = app default
+  // (orderingCost $150/PO, carryingRatePct 0.20 = 20%/yr).
+  orderingCost: doublePrecision("ordering_cost"),
+  carryingRatePct: doublePrecision("carrying_rate_pct"),
   // Active cycle-count quarter snapshot (see CycleCountSchedule above).
   cycleCountSchedule: jsonb("cycle_count_schedule").$type<CycleCountSchedule>(),
   // Approved Supplier List onboarding target (vendors onboarded by EOY).
@@ -52,6 +56,16 @@ export const stockGoalTable = pgTable("stock_goal", {
   // Manual override for the "typical roll size" (footage). NULL = use the auto
   // value derived from received-roll history grouped by Orig_RollID.
   typicalRollFootage: doublePrecision("typical_roll_footage"),
+  // Manual order quantity (master rolls) to place per PO — a fixed batch that
+  // overrides the computed EOQ. NULL = use EOQ / heuristic. Acts as a floor:
+  // a large committed backlog can still push the suggested quantity higher.
+  orderQuantityRolls: doublePrecision("order_quantity_rolls"),
+  // End-of-life flag. When true the SKU stays visible with its on-hand
+  // inventory (to sell through) but is excluded from all reorder suggestions.
+  discontinued: boolean("discontinued").notNull().default(false),
+  // Predecessor stock number whose usage history this (successor) SKU inherits
+  // for forecasting / reorder. NULL = none. Full history is merged in.
+  demandFromStockId: text("demand_from_stock_id"),
   // Purchasing config (Demand Planning → Configuration). NULL = fall back to
   // the Label Traxx stock record (SupplierName / CostMSI).
   vendorName: text("vendor_name"),
