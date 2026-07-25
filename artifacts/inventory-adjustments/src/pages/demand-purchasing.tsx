@@ -288,6 +288,23 @@ function CompareTooltip({
   );
 }
 
+/** Hover-card payload for a width bar, positioned in viewport coordinates. */
+type WidthTip = {
+  stockId: string;
+  status: string;
+  pooled: boolean;
+  width: number;
+  footage: number;
+  rolls: number;
+  onOrder: number;
+  required: number;
+  short: number;
+  belowMin: boolean;
+  aboveMax: boolean;
+  left: number;
+  top: number;
+};
+
 /**
  * Dazpak make-and-hold panel. Two signals per program material:
  *  - Release from Held (made & waiting, ~5 business days to deliver)
@@ -417,6 +434,14 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   );
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const [summaryView, setSummaryView] = React.useState<"bars" | "grid">("bars");
+  /**
+   * Width-bar hover card. Rendered as ONE position:fixed node outside the
+   * scrolling list — an absolutely-positioned tooltip inside the
+   * `overflow-y-auto` container gets clipped on the last rows (you can't scroll
+   * far enough to see it) and its show/hide repaints inside the scroll area make
+   * the bars flicker while scrolling.
+   */
+  const [tip, setTip] = React.useState<WidthTip | null>(null);
   const { data, isLoading } = useGetDemandPurchasing({ query: { queryKey: getGetDemandPurchasingQueryKey(), staleTime: 60_000 } });
 
   const widthOptions = React.useMemo(() => {
@@ -724,7 +749,10 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
               No materials match the current filters.
             </p>
           ) : summaryView === "bars" ? (
-            <div className="max-h-[26rem] overflow-y-auto rounded-md border divide-y">
+            <div
+              className="max-h-[26rem] overflow-y-auto rounded-md border divide-y"
+              onScroll={() => tip && setTip(null)}
+            >
               {summaryRows.map((r) => {
                 const totals = totalsById.get(r.stockId);
                 return (
@@ -749,7 +777,36 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                     </div>
                     <div className="flex-1 flex items-center gap-1.5 flex-wrap py-0.5">
                       {r.segs.map((sg) => (
-                        <div key={`${r.stockId}-${sg.width}`} className="relative group">
+                        <div
+                          key={`${r.stockId}-${sg.width}`}
+                          className="relative"
+                          onMouseEnter={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const TIP_W = 256;
+                            const TIP_H = 168;
+                            // Flip above the bar when there isn't room below, so
+                            // the last rows aren't cut off by the viewport.
+                            const below = rect.bottom + TIP_H + 10 <= window.innerHeight;
+                            setTip({
+                              stockId: r.stockId,
+                              status: sg.status ?? r.status,
+                              pooled: !!sg.pooled,
+                              width: sg.width,
+                              footage: sg.footage,
+                              rolls: sg.rolls,
+                              onOrder: sg.onOrderFootage ?? 0,
+                              required: sg.requiredFootage ?? 0,
+                              short: sg.shortFootage ?? 0,
+                              belowMin: r.belowMin,
+                              aboveMax: r.aboveMax,
+                              // Clamp inside the viewport; max() last so a narrow
+                              // window can never push the card off-screen left.
+                              left: Math.max(8, Math.min(rect.left, window.innerWidth - TIP_W - 8)),
+                              top: below ? rect.bottom + 6 : Math.max(8, rect.top - TIP_H - 6),
+                            });
+                          }}
+                          onMouseLeave={() => setTip(null)}
+                        >
                           <div
                             className="relative h-6 w-24 rounded-sm flex items-center justify-center text-[11px] font-semibold text-white overflow-hidden"
                             style={{
@@ -785,48 +842,6 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                                 }}
                               />
                             )}
-                          </div>
-                          <div className="pointer-events-none absolute z-30 hidden group-hover:block top-7 left-0 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]">
-                            <div className="font-semibold">
-                              #{r.stockId} ·{" "}
-                              {sg.pooled
-                                ? `≤13" (interchangeable)`
-                                : sg.width > 0
-                                  ? `${sg.width}" wide`
-                                  : "no stock"}{" "}
-                              · {sg.status ?? r.status}
-                            </div>
-                            <div className="text-muted-foreground mb-1.5">
-                              {fmt(sg.footage)} ft on hand · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"} at this width
-                              {r.belowMin && <span className="text-blue-600 dark:text-blue-400"> · below min</span>}
-                              {r.aboveMax && <span className="text-purple-600 dark:text-purple-400"> · above max</span>}
-                            </div>
-                            {/* Per-width availability (exact width — no slitting across widths). */}
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                              <div>
-                                <span className="text-muted-foreground">On hand ({sg.width}")</span>
-                                <div className="font-semibold tabular-nums">{fmt(sg.footage)} ft</div>
-                              </div>
-                              <div>
-                                <span className="text-muted-foreground">On order ({sg.width}")</span>
-                                <div className="font-semibold tabular-nums">{fmt(sg.onOrderFootage ?? 0)} ft</div>
-                              </div>
-                              <div>
-                                <span className="text-muted-foreground">Required ({sg.width}")</span>
-                                <div className="font-semibold tabular-nums">{fmt(sg.requiredFootage ?? 0)} ft</div>
-                              </div>
-                              <div>
-                                <span className="text-muted-foreground">Short</span>
-                                <div
-                                  className={cn(
-                                    "font-semibold tabular-nums",
-                                    (sg.shortFootage ?? 0) > 0 && "text-red-600 dark:text-red-400",
-                                  )}
-                                >
-                                  {fmt(sg.shortFootage ?? 0)} ft
-                                </div>
-                              </div>
-                            </div>
                           </div>
                         </div>
                       ))}
@@ -1013,6 +1028,48 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Width-bar hover card — fixed so it escapes the list's overflow clipping
+          (bottom rows were unreachable) and doesn't repaint the scrolling area. */}
+      {tip && (
+        <div
+          className="pointer-events-none fixed z-50 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]"
+          style={{ left: tip.left, top: tip.top }}
+        >
+          <div className="font-semibold">
+            #{tip.stockId} ·{" "}
+            {tip.pooled ? `≤13" (interchangeable)` : tip.width > 0 ? `${tip.width}" wide` : "no stock"} ·{" "}
+            {tip.status}
+          </div>
+          <div className="text-muted-foreground mb-1.5">
+            {fmt(tip.footage)} ft on hand · {fmt(tip.rolls)} roll{tip.rolls === 1 ? "" : "s"} at this width
+            {tip.belowMin && <span className="text-blue-600 dark:text-blue-400"> · below min</span>}
+            {tip.aboveMax && <span className="text-purple-600 dark:text-purple-400"> · above max</span>}
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <div>
+              <span className="text-muted-foreground">On hand{tip.pooled ? " (≤13\")" : ""}</span>
+              <div className="font-semibold tabular-nums">{fmt(tip.footage)} ft</div>
+            </div>
+            <div>
+              <span className="text-muted-foreground">On order</span>
+              <div className="font-semibold tabular-nums">{fmt(tip.onOrder)} ft</div>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Required</span>
+              <div className="font-semibold tabular-nums">{fmt(tip.required)} ft</div>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Short</span>
+              <div
+                className={cn("font-semibold tabular-nums", tip.short > 0 && "text-red-600 dark:text-red-400")}
+              >
+                {fmt(tip.short)} ft
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
