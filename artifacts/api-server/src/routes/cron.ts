@@ -4,6 +4,8 @@ import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
 import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates } from "../lib/lt-sync";
+import { performDazpakSync } from "../lib/dazpak-sync";
+import { dazpakConfigured } from "../lib/dazpakApi";
 
 const router: IRouter = Router();
 
@@ -35,6 +37,8 @@ router.get("/cron/netsuite-sync", async (req, res, next) => {
       // Refresh the LT mirror BEFORE the vendor lead-time sync, which reads it.
       ["labeltraxxApi", () => performLtApiSync({ full: fullLtSync })],
       ["labeltraxx", () => performLabeltraxxSync()],
+      // Dazpak make-and-hold feed (joins to lt_po, so run after the LT sync).
+      ...(dazpakConfigured() ? ([["dazpak", () => performDazpakSync()]] as const) : []),
     ] as const) {
       try {
         out[name] = await run();

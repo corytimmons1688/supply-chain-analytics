@@ -678,6 +678,12 @@ export const GetDemandPurchasingResponse = zod.object({
   items: zod.array(
     zod.object({
       stockId: zod.string(),
+      inactive: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when Label Traxx marks the stock inactive (no stock-master entry); hidden on the Configuration tab.",
+        ),
       classification: zod.string().nullish(),
       vendorName: zod.string().nullish(),
       vendorNameSource: zod.string().optional(),
@@ -716,6 +722,12 @@ export const GetDemandPurchasingResponse = zod.object({
         .array(
           zod.object({
             width: zod.number(),
+            pooled: zod
+              .boolean()
+              .optional()
+              .describe(
+                'True = the interchangeable ≤13\" bucket (all widths ≤13\" pooled).',
+              ),
             footage: zod.number().describe("On-hand footage at this width."),
             rolls: zod.number(),
             onOrderFootage: zod
@@ -1129,6 +1141,52 @@ export const GetDemandSummaryResponse = zod.object({
       customized: zod
         .boolean()
         .describe("True if any per-stock forecast assumption override is set."),
+      dazpak: zod
+        .object({
+          heldFootage: zod
+            .number()
+            .describe(
+              "Made & waiting at Dazpak — releasable in ~5 business days.",
+            ),
+          inProductionFootage: zod
+            .number()
+            .describe("Authorised (in production), arriving by etaDate."),
+          etaDate: zod
+            .string()
+            .nullish()
+            .describe("Earliest Plan Avail date across in-production lines."),
+          demandReleaseHorizon: zod
+            .number()
+            .optional()
+            .describe(
+              "Committed footage due within the release window (~15 biz days).",
+            ),
+          demandMakeHorizon: zod
+            .number()
+            .optional()
+            .describe("Demand over the make-coverage window (10 weeks)."),
+          releaseFootage: zod
+            .number()
+            .describe("Suggested footage to release from Held now."),
+          makeFootage: zod
+            .number()
+            .describe("Suggested new make-and-hold quantity (footage)."),
+          lines: zod
+            .array(
+              zod.object({
+                poNumber: zod.string(),
+                custItemRef: zod.string().nullish(),
+                status: zod.string(),
+                outstandingFootage: zod.number(),
+                planAvailDate: zod.string().nullish(),
+              }),
+            )
+            .optional(),
+        })
+        .optional()
+        .describe(
+          "Dazpak make-and-hold supply + release\/make signals (only on program stocks).",
+        ),
     }),
   ),
 });
@@ -1345,6 +1403,52 @@ export const GetDemandStockDetailResponse = zod.object({
     customized: zod
       .boolean()
       .describe("True if any per-stock forecast assumption override is set."),
+    dazpak: zod
+      .object({
+        heldFootage: zod
+          .number()
+          .describe(
+            "Made & waiting at Dazpak — releasable in ~5 business days.",
+          ),
+        inProductionFootage: zod
+          .number()
+          .describe("Authorised (in production), arriving by etaDate."),
+        etaDate: zod
+          .string()
+          .nullish()
+          .describe("Earliest Plan Avail date across in-production lines."),
+        demandReleaseHorizon: zod
+          .number()
+          .optional()
+          .describe(
+            "Committed footage due within the release window (~15 biz days).",
+          ),
+        demandMakeHorizon: zod
+          .number()
+          .optional()
+          .describe("Demand over the make-coverage window (10 weeks)."),
+        releaseFootage: zod
+          .number()
+          .describe("Suggested footage to release from Held now."),
+        makeFootage: zod
+          .number()
+          .describe("Suggested new make-and-hold quantity (footage)."),
+        lines: zod
+          .array(
+            zod.object({
+              poNumber: zod.string(),
+              custItemRef: zod.string().nullish(),
+              status: zod.string(),
+              outstandingFootage: zod.number(),
+              planAvailDate: zod.string().nullish(),
+            }),
+          )
+          .optional(),
+      })
+      .optional()
+      .describe(
+        "Dazpak make-and-hold supply + release\/make signals (only on program stocks).",
+      ),
   }),
   history: zod.array(
     zod.object({

@@ -1629,6 +1629,7 @@ components:
       required: [stockId]
       properties:
         stockId: { type: string }
+        inactive: { type: boolean, description: "True when Label Traxx marks the stock inactive (no stock-master entry); hidden on the Configuration tab." }
         classification: { type: string, nullable: true }
         vendorName: { type: string, nullable: true }
         vendorNameSource: { type: string }
@@ -1672,6 +1673,7 @@ components:
       required: [width, footage, rolls]
       properties:
         width: { type: number }
+        pooled: { type: boolean, description: "True = the interchangeable ≤13\" bucket (all widths ≤13\" pooled)." }
         footage: { type: number, description: "On-hand footage at this width." }
         rolls: { type: number }
         onOrderFootage: { type: number, description: "Open-PO footage whose master width matches this width." }
@@ -2275,6 +2277,30 @@ components:
             - dormant: last used >180 days ago (consider inactivating)
             - never: no demand observed in window
         customized: { type: boolean, description: True if any per-stock forecast assumption override is set. }
+        dazpak: { $ref: "#/components/schemas/DazpakSignal" }
+    DazpakSignal:
+      type: object
+      description: Dazpak make-and-hold supply + release/make signals (only on program stocks).
+      required: [heldFootage, inProductionFootage, releaseFootage, makeFootage]
+      properties:
+        heldFootage: { type: number, description: "Made & waiting at Dazpak — releasable in ~5 business days." }
+        inProductionFootage: { type: number, description: "Authorised (in production), arriving by etaDate." }
+        etaDate: { type: string, nullable: true, description: "Earliest Plan Avail date across in-production lines." }
+        demandReleaseHorizon: { type: number, description: "Committed footage due within the release window (~15 biz days)." }
+        demandMakeHorizon: { type: number, description: "Demand over the make-coverage window (10 weeks)." }
+        releaseFootage: { type: number, description: "Suggested footage to release from Held now." }
+        makeFootage: { type: number, description: "Suggested new make-and-hold quantity (footage)." }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [poNumber, status, outstandingFootage]
+            properties:
+              poNumber: { type: string }
+              custItemRef: { type: string, nullable: true }
+              status: { type: string }
+              outstandingFootage: { type: number }
+              planAvailDate: { type: string, nullable: true }
     DemandSummary:
       type: object
       required: [windowFrom, windowTo, monthsBack, serviceLevel, forecastWeeks, generatedAt, items]

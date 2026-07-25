@@ -24,6 +24,8 @@ export * from "./cycleCountScheduleResponse";
 export * from "./cycleCountTask";
 export * from "./cycleCountTaskAbcClass";
 export * from "./cycleCountWeek";
+export * from "./dazpakSignal";
+export * from "./dazpakSignalLinesItem";
 export * from "./demandConfigInput";
 export * from "./demandConfigResult";
 export * from "./demandPoint";

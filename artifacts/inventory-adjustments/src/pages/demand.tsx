@@ -38,7 +38,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TicketCompareSection, SuggestedPosTab, DemandConfigTab } from "@/pages/demand-purchasing";
+import { TicketCompareSection, SuggestedPosTab, DemandConfigTab, MakeAndHoldSection } from "@/pages/demand-purchasing";
 
 function fmtFt(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -533,6 +533,8 @@ export default function DemandPlanning() {
       {tab === "demand" && (
         <>
           <TicketCompareSection rows={rows} />
+
+          <MakeAndHoldSection rows={rows} />
 
       {/* KPI strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">

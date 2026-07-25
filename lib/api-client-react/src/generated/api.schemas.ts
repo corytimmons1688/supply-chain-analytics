@@ -481,6 +481,8 @@ export interface HealthStatus {
 
 export interface WidthOnHand {
   width: number;
+  /** True = the interchangeable ≤13" bucket (all widths ≤13" pooled). */
+  pooled?: boolean;
   /** On-hand footage at this width. */
   footage: number;
   rolls: number;
@@ -512,6 +514,8 @@ export interface OpenTicket {
 
 export interface PurchasingItem {
   stockId: string;
+  /** True when Label Traxx marks the stock inactive (no stock-master entry); hidden on the Configuration tab. */
+  inactive?: boolean;
   classification?: string | null;
   vendorName?: string | null;
   vendorNameSource?: string;
@@ -1041,6 +1045,35 @@ export const DemandStockMetricsActivityStatus = {
   never: "never",
 } as const;
 
+export type DazpakSignalLinesItem = {
+  poNumber: string;
+  custItemRef?: string | null;
+  status: string;
+  outstandingFootage: number;
+  planAvailDate?: string | null;
+};
+
+/**
+ * Dazpak make-and-hold supply + release/make signals (only on program stocks).
+ */
+export interface DazpakSignal {
+  /** Made & waiting at Dazpak — releasable in ~5 business days. */
+  heldFootage: number;
+  /** Authorised (in production), arriving by etaDate. */
+  inProductionFootage: number;
+  /** Earliest Plan Avail date across in-production lines. */
+  etaDate?: string | null;
+  /** Committed footage due within the release window (~15 biz days). */
+  demandReleaseHorizon?: number;
+  /** Demand over the make-coverage window (10 weeks). */
+  demandMakeHorizon?: number;
+  /** Suggested footage to release from Held now. */
+  releaseFootage: number;
+  /** Suggested new make-and-hold quantity (footage). */
+  makeFootage: number;
+  lines?: DazpakSignalLinesItem[];
+}
+
 export interface DemandStockMetrics {
   stockId: string;
   description?: string | null;
@@ -1138,6 +1171,7 @@ export interface DemandStockMetrics {
   activityStatus: DemandStockMetricsActivityStatus;
   /** True if any per-stock forecast assumption override is set. */
   customized: boolean;
+  dazpak?: DazpakSignal;
 }
 
 export interface DemandSummary {

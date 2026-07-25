@@ -8,6 +8,8 @@
 
 export interface WidthOnHand {
   width: number;
+  /** True = the interchangeable ≤13" bucket (all widths ≤13" pooled). */
+  pooled?: boolean;
   /** On-hand footage at this width. */
   footage: number;
   rolls: number;

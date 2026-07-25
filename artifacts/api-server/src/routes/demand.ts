@@ -22,7 +22,14 @@ import {
   type OpenPoRow,
   type WidthRow,
 } from "../lib/demand";
+import { fetchDazpakByStock } from "../lib/dazpak-sync";
 import type { Bucket } from "../lib/cc";
+
+// Dazpak make-and-hold horizons (Cory's settings): release when Calyx on-hand
+// can't cover committed demand due within 15 business days (~21 calendar days);
+// keep total coverage (on-hand + Held + In-Production) above 10 weeks of demand.
+const DAZPAK_RELEASE_DAYS = 21;
+const DAZPAK_MAKE_DAYS = 70;
 
 interface StockOverrides {
   demandCv?: number;
@@ -100,7 +107,7 @@ router.get(
 
     const { from, to } = defaultDemandWindow(monthsBack);
 
-    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets, stockInfo, globalRows, onHandByWidth] = await Promise.all([
+    const [usage, onHand, poLeadTimes, poRolls, openPos, activeStockIds, stockGoalRows, openTickets, stockInfo, globalRows, onHandByWidth, dazpakByStock] = await Promise.all([
       fetchUsage({ from, to }),
       fetchOnHandByStock(),
       fetchPoLeadTimes(),
@@ -112,6 +119,7 @@ router.get(
       fetchStockInfo(),
       db.select().from(globalGoalTable).where(eq(globalGoalTable.id, "global")),
       fetchOnHandByWidth(),
+      fetchDazpakByStock(),
     ]);
 
     // EOQ economics: fixed cost to place a PO and annual carrying rate. Query
@@ -163,6 +171,10 @@ router.get(
       if (!arr) { arr = []; openPosByStock.set(p.stockId, arr); }
       arr.push(p);
     }
+
+    // Dazpak make-and-hold horizon dates (release ~15 biz days, make 10 weeks).
+    const dazpakReleaseEnd = new Date(Date.now() + DAZPAK_RELEASE_DAYS * 864e5).toISOString().slice(0, 10);
+    const dazpakMakeEnd = new Date(Date.now() + DAZPAK_MAKE_DAYS * 864e5).toISOString().slice(0, 10);
 
     // Exact-width committed shortage per stock (demand at a width covered only by
     // on-hand + on-order at that width) — drives the width-aware reorder.
@@ -268,9 +280,41 @@ router.get(
         customized: overrides.customized,
       });
 
+      // Dazpak make-and-hold signals: release from Held to cover near-term
+      // shortfall; trigger a make-and-hold when total coverage can't span the
+      // 10-week make window.
+      const dz = dazpakByStock.get(stockId);
+      if (dz) {
+        const onHandFt = stockOnHand?.footage ?? 0;
+        const lines = openTicketLinesByStock.get(stockId) ?? [];
+        const demandRelease = lines.reduce(
+          (s, l) => (l.shipByDate && l.shipByDate <= dazpakReleaseEnd ? s + l.footage : s),
+          0,
+        );
+        const committedMake = lines.reduce(
+          (s, l) => (l.shipByDate && l.shipByDate <= dazpakMakeEnd ? s + l.footage : s),
+          0,
+        );
+        const demandMake = Math.max(metrics.avgWeeklyDemand * 10, committedMake);
+        const releaseFootage = Math.min(Math.max(0, demandRelease - onHandFt), dz.heldFootage);
+        const coverage = onHandFt + dz.heldFootage + dz.inProductionFootage;
+        const makeFootage = Math.max(0, demandMake - coverage);
+        metrics.dazpak = {
+          heldFootage: dz.heldFootage,
+          inProductionFootage: dz.inProductionFootage,
+          etaDate: dz.etaDate,
+          demandReleaseHorizon: Math.round(demandRelease),
+          demandMakeHorizon: Math.round(demandMake),
+          releaseFootage: Math.round(releaseFootage),
+          makeFootage: Math.round(makeFootage),
+          lines: dz.lines,
+        };
+      }
+
       // Skip stocks with no signal at all (zero history AND zero on-hand AND
-      // no open POs AND no committed open-ticket demand)
+      // no open POs AND no committed open-ticket demand) — unless Dazpak covers it.
       if (
+        !metrics.dazpak &&
         metrics.totalDemandFootage === 0 &&
         metrics.onHandFootage === 0 &&
         metrics.openPoCount === 0 &&
@@ -524,6 +568,7 @@ router.get(
           widthRowsByStock.get(stockId) ??
           widths.map((w) => ({
             width: w.width,
+            pooled: false,
             onHandFootage: Math.round(w.footage),
             onHandRolls: w.rolls,
             onOrderFootage: 0,
@@ -533,6 +578,10 @@ router.get(
           }));
         return {
           stockId,
+          // fetchStockInfo/activeStockIds only return non-inactive stocks, so a
+          // missing stock-master entry means Label Traxx has it inactive. The
+          // Configuration tab hides these.
+          inactive: !info,
           classification: info?.classification ?? null,
           // Config values: override from stock_goal, else Label Traxx.
           vendorName: goal?.vendorName ?? info?.supplierName ?? null,
@@ -568,6 +617,7 @@ router.get(
           // back-compat); onOrder/required/short/status are per width.
           widthsOnHand: widthRows.map((w) => ({
             width: w.width,
+            pooled: w.pooled,
             footage: w.onHandFootage,
             rolls: w.onHandRolls,
             onOrderFootage: w.onOrderFootage,

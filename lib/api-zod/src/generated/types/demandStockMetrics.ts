@@ -5,6 +5,7 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { DazpakSignal } from "./dazpakSignal";
 import type { DemandStockMetricsActivityStatus } from "./demandStockMetricsActivityStatus";
 import type { DemandStockMetricsLeadTimeSource } from "./demandStockMetricsLeadTimeSource";
 import type { DemandStockMetricsOrderQtySource } from "./demandStockMetricsOrderQtySource";
@@ -108,4 +109,5 @@ export interface DemandStockMetrics {
   activityStatus: DemandStockMetricsActivityStatus;
   /** True if any per-stock forecast assumption override is set. */
   customized: boolean;
+  dazpak?: DazpakSignal;
 }

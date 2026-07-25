@@ -288,6 +288,123 @@ function CompareTooltip({
   );
 }
 
+/**
+ * Dazpak make-and-hold panel. Two signals per program material:
+ *  - Release from Held (made & waiting, ~5 business days to deliver)
+ *  - Trigger a new make-and-hold (6-week make; keep 10 weeks of coverage)
+ */
+export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
+  const [, navigate] = useLocation();
+  const program = React.useMemo(() => rows.filter((r) => r.dazpak), [rows]);
+  if (program.length === 0) return null;
+
+  const toRelease = program.filter((r) => (r.dazpak?.releaseFootage ?? 0) > 0);
+  const toMake = program.filter((r) => (r.dazpak?.makeFootage ?? 0) > 0);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <PackageCheck className="w-4 h-4 text-muted-foreground" /> Dazpak Make &amp; Hold
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Held stock delivers in ~5 business days; a new make-and-hold takes ~6 weeks. Release when
+          on-hand won&apos;t cover the next 15 business days; make when total coverage drops under 10 weeks.
+          {toRelease.length > 0 && (
+            <span className="text-amber-700 dark:text-amber-400 font-medium">
+              {" "}· {toRelease.length} to release
+            </span>
+          )}
+          {toMake.length > 0 && (
+            <span className="text-red-600 dark:text-red-400 font-medium"> · {toMake.length} to make</span>
+          )}
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-md border overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40 text-muted-foreground">
+                <th className="text-left px-2 py-1.5 font-medium">Stock</th>
+                <th className="text-right px-2 py-1.5 font-medium">On hand</th>
+                <th className="text-right px-2 py-1.5 font-medium">Held at Dazpak</th>
+                <th className="text-right px-2 py-1.5 font-medium">In production</th>
+                <th className="text-left px-2 py-1.5 font-medium">Next ETA</th>
+                <th className="text-right px-2 py-1.5 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {program.map((r) => {
+                const d = r.dazpak!;
+                return (
+                  <tr key={r.stockId} className="border-b last:border-b-0 align-top">
+                    <td className="px-2 py-1.5">
+                      <button
+                        type="button"
+                        className="font-medium text-primary hover:underline"
+                        onClick={() => navigate(`/demand/${encodeURIComponent(r.stockId)}`)}
+                      >
+                        #{r.stockId}
+                      </button>
+                      <div className="text-muted-foreground max-w-[18rem] truncate" title={r.description ?? ""}>
+                        {r.description ?? ""}
+                      </div>
+                      {(d.lines ?? []).length > 0 && (
+                        <div className="mt-1 space-y-0.5">
+                          {(d.lines ?? []).map((l, i) => (
+                            <div key={`${l.poNumber}-${i}`} className="text-[10px] text-muted-foreground">
+                              PO {l.poNumber} · {l.status} · {fmt(l.outstandingFootage)} ft
+                              {l.planAvailDate ? ` · ETA ${l.planAvailDate}` : ""}
+                              {l.custItemRef ? ` · ${l.custItemRef}` : ""}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.onHandFootage)} ft</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {d.heldFootage > 0 ? (
+                        <span className="font-medium text-green-700 dark:text-green-400">{fmt(d.heldFootage)} ft</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{fmt(d.inProductionFootage)} ft</td>
+                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{d.etaDate ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      {d.releaseFootage > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40"
+                          title={`On-hand won't cover ${fmt(d.demandReleaseHorizon)} ft due in the next 15 business days`}
+                        >
+                          Release {fmt(d.releaseFootage)} ft
+                        </Badge>
+                      )}
+                      {d.makeFootage > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="ml-1 text-[10px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40"
+                          title={`Coverage (on-hand + held + in-production) is short of ${fmt(d.demandMakeHorizon)} ft over the 10-week make window`}
+                        >
+                          Make {fmt(d.makeFootage)} ft
+                        </Badge>
+                      )}
+                      {d.releaseFootage === 0 && d.makeFootage === 0 && (
+                        <span className="text-muted-foreground">covered</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
   const [unit, setUnit] = React.useState<"ft" | "usd">("ft");
@@ -639,7 +756,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                               background: TICKET_STATUS_COLORS[sg.status ?? r.status] ?? "#94a3b8",
                             }}
                           >
-                            {sg.width > 0 ? `${sg.width}"` : "0 ft"}
+                            {sg.pooled ? `≤13"` : sg.width > 0 ? `${sg.width}"` : "0 ft"}
                             {/* Corner-flag markers, matching Batched. */}
                             {r.noTickets && (
                               <span
@@ -671,7 +788,13 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                           </div>
                           <div className="pointer-events-none absolute z-30 hidden group-hover:block top-7 left-0 w-64 rounded-md border bg-background shadow-lg p-2.5 text-[11px]">
                             <div className="font-semibold">
-                              #{r.stockId} · {sg.width > 0 ? `${sg.width}" wide` : "no stock"} · {sg.status ?? r.status}
+                              #{r.stockId} ·{" "}
+                              {sg.pooled
+                                ? `≤13" (interchangeable)`
+                                : sg.width > 0
+                                  ? `${sg.width}" wide`
+                                  : "no stock"}{" "}
+                              · {sg.status ?? r.status}
                             </div>
                             <div className="text-muted-foreground mb-1.5">
                               {fmt(sg.footage)} ft on hand · {fmt(sg.rolls)} roll{sg.rolls === 1 ? "" : "s"} at this width
@@ -1386,6 +1509,8 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
   };
 
   const items = (purch?.items ?? []).filter((it) => {
+    // Never show stocks Label Traxx marks inactive — there's nothing to configure.
+    if (it.inactive) return false;
     if (!q.trim()) return metricsByStock.has(it.stockId);
     const needle = q.trim().toLowerCase();
     const m = metricsByStock.get(it.stockId);

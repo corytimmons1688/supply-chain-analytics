@@ -113,3 +113,35 @@ export type LtRollRow = typeof ltRollTable.$inferSelect;
 export type LtStockRow = typeof ltStockTable.$inferSelect;
 export type LtTicketRow = typeof ltTicketTable.$inferSelect;
 export type LtPoRow = typeof ltPoTable.$inferSelect;
+
+// =====================================================================
+// DAZPAK MAKE-AND-HOLD MIRROR
+// Calyx's make-and-hold job lines at Dazpak (https://api.dazpak.com), refreshed
+// on the sync cadence. custPo matches lt_po.po_number (supplier "Dazpak").
+// Quantities are in FEET for roll stock. orderStatus: Authorised (in production,
+// planAvailDate = ETA), Held (made, ~5-biz-day release), Complete (delivered).
+// =====================================================================
+export const dazpakJobTable = pgTable(
+  "dazpak_job",
+  {
+    rowId: text("row_id").primaryKey(),
+    custPo: text("cust_po"),
+    custItemRef: text("cust_item_ref"),
+    itemDesc: text("item_desc"),
+    itemCode: text("item_code"),
+    orderStatus: text("order_status"),
+    unit: text("unit"),
+    jobOrdQty: doublePrecision("job_ord_qty"),
+    jobOutstQty: doublePrecision("job_outst_qty"),
+    jobRecdQty: doublePrecision("job_recd_qty"),
+    planAvailDate: text("plan_avail_date"), // ISO; null = none
+    salesOrderNum: text("sales_order_num"),
+    plant: text("plant"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    custPoIx: index("dazpak_job_cust_po_ix").on(t.custPo),
+  }),
+);
+
+export type DazpakJobRow = typeof dazpakJobTable.$inferSelect;

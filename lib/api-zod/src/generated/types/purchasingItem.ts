@@ -10,6 +10,8 @@ import type { WidthOnHand } from "./widthOnHand";
 
 export interface PurchasingItem {
   stockId: string;
+  /** True when Label Traxx marks the stock inactive (no stock-master entry); hidden on the Configuration tab. */
+  inactive?: boolean;
   classification?: string | null;
   vendorName?: string | null;
   vendorNameSource?: string;

@@ -563,9 +563,14 @@ export function vendorLeadTimeMedians(poLeadTimes: Map<string, PoLeadTime>): Map
 
 // ---------- Width-aware availability ----------
 
-/** Round a width to a stable 2-decimal bucket key so demand/supply match. */
-function widthKey(w: number): number {
-  return Math.round((w || 0) * 100) / 100;
+/**
+ * All widths ≤13" are one interchangeable pool (per Calyx: a 12.5/12.75/13"
+ * requirement can be met by any ≤13" stock). Widths >13" each net exactly.
+ */
+const POOL_MAX_WIDTH = 13;
+function widthGroupKey(w: number): string {
+  const r = Math.round((w || 0) * 100) / 100;
+  return r > 0 && r <= POOL_MAX_WIDTH ? "le13" : String(r);
 }
 
 export interface WidthAvailLine {
@@ -575,7 +580,8 @@ export interface WidthAvailLine {
   shipByDate: string | null;
 }
 export interface WidthRow {
-  width: number;
+  width: number; // representative width (max in the group)
+  pooled: boolean; // true = the "≤13\"" interchangeable bucket
   onHandFootage: number;
   onHandRolls: number;
   onOrderFootage: number;
@@ -597,51 +603,60 @@ export interface WidthAvailResult {
 }
 
 /**
- * Exact-width availability: demand at a width is covered ONLY by on-hand +
- * on-order (PO master width) at that same width — no slitting across widths.
- * Per-line status is netted earliest-ship-first within each width bucket
- * (on-hand → confirmed PO → unconfirmed PO); per-width rows and the total
- * committed shortage are aggregates for the reorder engine and the UI.
+ * Width-aware availability. Widths ≤13" are pooled into one interchangeable
+ * bucket; widths >13" net exactly (no slitting across those). Per-line status is
+ * netted earliest-ship-first within each bucket (on-hand → confirmed PO →
+ * unconfirmed PO); per-bucket rows and total committed shortage are aggregates
+ * for the reorder engine and the UI.
  */
 export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResult {
-  const fallback = widthKey(input.masterWidthFallback);
+  const fallbackKey = widthGroupKey(input.masterWidthFallback);
   const bucketFor = (w: number) => {
-    const k = widthKey(w);
-    return k > 0 ? k : fallback; // unspecified width → the stock's master width
+    const r = Math.round((w || 0) * 100) / 100;
+    return r > 0 ? widthGroupKey(r) : fallbackKey; // unspecified → stock master width's group
+  };
+  // Representative (largest actual) width seen per bucket, for display.
+  const repWidth = new Map<string, number>();
+  const noteWidth = (k: string, w: number) => {
+    const r = Math.round((w || 0) * 100) / 100;
+    if (r > 0 && r > (repWidth.get(k) ?? 0)) repWidth.set(k, r);
   };
 
-  // Supply pools per width (consumed during netting).
-  const avail = new Map<number, number>();
-  const onHandRolls = new Map<number, number>();
+  // Supply pools per bucket (consumed during netting).
+  const avail = new Map<string, number>();
+  const onHandRolls = new Map<string, number>();
   for (const w of input.onHand) {
-    const k = widthKey(w.width);
+    const k = widthGroupKey(w.width);
     avail.set(k, (avail.get(k) ?? 0) + w.footage);
     onHandRolls.set(k, (onHandRolls.get(k) ?? 0) + w.rolls);
+    noteWidth(k, w.width);
   }
-  const confirmed = new Map<number, number>();
-  const unconfirmed = new Map<number, number>();
+  const confirmed = new Map<string, number>();
+  const unconfirmed = new Map<string, number>();
   for (const po of input.openPos) {
     const k = bucketFor(po.masterWidth ?? 0);
     const ft = po.quantityRolls * input.avgRollFootage;
     if (po.dueDateIso) confirmed.set(k, (confirmed.get(k) ?? 0) + ft);
     else unconfirmed.set(k, (unconfirmed.get(k) ?? 0) + ft);
+    noteWidth(k, po.masterWidth ?? 0);
   }
   // Snapshot original supply totals (netting mutates the pools).
   const onHand0 = new Map(avail);
   const conf0 = new Map(confirmed);
   const unconf0 = new Map(unconfirmed);
-  const onOrder0 = new Map<number, number>();
+  const onOrder0 = new Map<string, number>();
   for (const [k, v] of conf0) onOrder0.set(k, (onOrder0.get(k) ?? 0) + v);
   for (const [k, v] of unconf0) onOrder0.set(k, (onOrder0.get(k) ?? 0) + v);
 
-  // Demand per width + per-line netting (earliest ship first).
-  const requiredByW = new Map<number, number>();
+  // Demand per bucket + per-line netting (earliest ship first).
+  const requiredByW = new Map<string, number>();
   const lineStatus = new Map<string, string>();
   const ordered = [...input.lines].sort((a, b) =>
     (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"),
   );
   for (const line of ordered) {
     const k = bucketFor(line.requiredWidth);
+    noteWidth(k, line.requiredWidth);
     requiredByW.set(k, (requiredByW.get(k) ?? 0) + line.footage);
     let need = line.footage;
     const a = Math.min(avail.get(k) ?? 0, need);
@@ -659,8 +674,8 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
     );
   }
 
-  // Per-width rows over the union of supply + demand widths.
-  const allW = new Set<number>([...onHand0.keys(), ...onOrder0.keys(), ...requiredByW.keys()]);
+  // Per-bucket rows over the union of supply + demand buckets.
+  const allW = new Set<string>([...onHand0.keys(), ...onOrder0.keys(), ...requiredByW.keys()]);
   const widthRows: WidthRow[] = [];
   let committedShortageFootage = 0;
   for (const k of allW) {
@@ -676,7 +691,8 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
     else if (short <= 0) status = "Ordered Not Confirmed";
     else status = "Out";
     widthRows.push({
-      width: k,
+      width: repWidth.get(k) ?? (k === "le13" ? POOL_MAX_WIDTH : Number(k)),
+      pooled: k === "le13",
       onHandFootage: Math.round(oh),
       onHandRolls: onHandRolls.get(k) ?? 0,
       onOrderFootage: Math.round(oo),
@@ -1006,6 +1022,26 @@ export interface StockMetrics {
   daysSinceLastUse: number | null;
   activityStatus: "active" | "slowing" | "dormant" | "never";
   customized: boolean;
+  /** Dazpak make-and-hold signals (only for stocks on the Dazpak program). */
+  dazpak?: DazpakSignal;
+}
+
+/** Dazpak make-and-hold supply + release/make signals for one stock. */
+export interface DazpakSignal {
+  heldFootage: number; // made & waiting, releasable ~5 biz days
+  inProductionFootage: number; // Authorised, arriving by etaDate
+  etaDate: string | null;
+  demandReleaseHorizon: number; // committed footage due within the release window
+  demandMakeHorizon: number; // demand over the make-coverage window
+  releaseFootage: number; // suggested release from Held now
+  makeFootage: number; // suggested new make-and-hold quantity
+  lines: {
+    poNumber: string;
+    custItemRef: string | null;
+    status: string;
+    outstandingFootage: number;
+    planAvailDate: string | null;
+  }[];
 }
 
 /** Bucket recent-activity into a flag for the UI. Thresholds in days. */
