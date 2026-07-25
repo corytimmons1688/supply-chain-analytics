@@ -36,6 +36,7 @@ import {
 } from "recharts";
 import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { parseNoteTracking } from "@/lib/carrier-tracking";
 
 function fmt(n: number | null | undefined, digits = 0): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -285,6 +286,37 @@ function CompareTooltip({
       {d.vendorName && <div className="mt-2 text-muted-foreground">Vendor: {d.vendorName}</div>}
       <div className="mt-1 text-[10px] text-muted-foreground">Click to see the tickets driving this demand</div>
     </div>
+  );
+}
+
+/**
+ * PO notes with carrier PRO / tracking references turned into deep links to the
+ * carrier's tracking page. stopPropagation so clicking a link inside a clickable
+ * row doesn't also toggle the row.
+ */
+function NoteWithTracking({ text }: { text: string | null | undefined }) {
+  const segments = React.useMemo(() => parseNoteTracking(text), [text]);
+  if (segments.length === 0) return <>—</>;
+  return (
+    <>
+      {segments.map((s, i) =>
+        s.kind === "track" ? (
+          <a
+            key={i}
+            href={s.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-primary underline decoration-dotted hover:decoration-solid"
+            title={`Track ${s.number} on ${s.carrier}`}
+          >
+            {s.text}
+          </a>
+        ) : (
+          <React.Fragment key={i}>{s.text}</React.Fragment>
+        ),
+      )}
+    </>
   );
 }
 
@@ -1043,7 +1075,7 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                                 {p.promisedDeliveryDate ?? "—"}
                               </td>
                               <td className="px-3 py-1 text-muted-foreground max-w-[18rem] whitespace-pre-line">
-                                {(p.notes ?? "").trim() || "—"}
+                                <NoteWithTracking text={p.notes} />
                               </td>
                             </tr>
                           );
