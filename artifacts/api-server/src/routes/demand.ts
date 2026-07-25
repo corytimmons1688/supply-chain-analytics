@@ -37,6 +37,8 @@ interface StockOverrides {
   seasonalityWeights?: [number, number, number] | null;
   leadTimeDays?: number;
   typicalRollFootage?: number;
+  reorderPointFootage?: number;
+  maxFootage?: number;
   customized: boolean;
 }
 
@@ -61,6 +63,14 @@ function rowToOverrides(row: StockGoalRow | undefined): StockOverrides {
   }
   if (row.typicalRollFootage != null && row.typicalRollFootage > 0) {
     out.typicalRollFootage = row.typicalRollFootage;
+    out.customized = true;
+  }
+  if (row.reorderPointFootage != null && row.reorderPointFootage > 0) {
+    out.reorderPointFootage = row.reorderPointFootage;
+    out.customized = true;
+  }
+  if (row.maxFootage != null && row.maxFootage > 0) {
+    out.maxFootage = row.maxFootage;
     out.customized = true;
   }
   return out;
@@ -282,6 +292,8 @@ router.get(
         ...(overrides.seasonalityWeights ? { seasonalityWeightsOverride: overrides.seasonalityWeights } : {}),
         ...(overrides.leadTimeDays !== undefined ? { leadTimeDaysOverride: overrides.leadTimeDays } : {}),
         ...(overrides.typicalRollFootage !== undefined ? { typicalRollFootageOverride: overrides.typicalRollFootage } : {}),
+        ...(overrides.reorderPointFootage !== undefined ? { reorderPointOverride: overrides.reorderPointFootage } : {}),
+        ...(overrides.maxFootage !== undefined ? { maxFootageOverride: overrides.maxFootage } : {}),
         forecastWeeks,
         fallbackLeadTimeDays,
         customized: overrides.customized,
@@ -406,6 +418,8 @@ router.get(
       ...(overrides.seasonalityWeights ? { seasonalityWeightsOverride: overrides.seasonalityWeights } : {}),
       ...(overrides.leadTimeDays !== undefined ? { leadTimeDaysOverride: overrides.leadTimeDays } : {}),
       ...(overrides.typicalRollFootage !== undefined ? { typicalRollFootageOverride: overrides.typicalRollFootage } : {}),
+        ...(overrides.reorderPointFootage !== undefined ? { reorderPointOverride: overrides.reorderPointFootage } : {}),
+        ...(overrides.maxFootage !== undefined ? { maxFootageOverride: overrides.maxFootage } : {}),
       forecastWeeks,
       fallbackLeadTimeDays,
       customized: overrides.customized,

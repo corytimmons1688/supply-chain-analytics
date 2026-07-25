@@ -965,6 +965,10 @@ export interface StockMetricsInput {
   vendorLeadTimeDays?: number;
   /** Override the typical roll size (footage) used to size suggested POs. */
   typicalRollFootageOverride?: number;
+  /** Override the reorder point (min), in footage. Drives belowMin + suggested qty. */
+  reorderPointOverride?: number;
+  /** Override the order-up-to level (max), in footage. */
+  maxFootageOverride?: number;
   /** Manual order quantity (master rolls) — a fixed batch overriding EOQ. Acts as a floor. */
   orderQuantityRollsOverride?: number;
   /** End-of-life: keep the SKU visible but never suggest a reorder. */
@@ -1016,7 +1020,13 @@ export interface StockMetrics {
   typicalRollFootageOverridden: boolean;
   safetyStockFootage: number;
   reorderPointFootage: number;
+  /** Calculated reorder point, ignoring any manual override (for "auto N" hints). */
+  autoReorderPointFootage: number;
+  reorderPointOverridden: boolean;
   maxFootage: number;
+  /** Calculated max, ignoring any manual override. */
+  autoMaxFootage: number;
+  maxFootageOverridden: boolean;
   /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
   eoqFootage: number;
   /** Economic order quantity expressed in whole master rolls. */
@@ -1174,7 +1184,12 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     (s, t) => (t.shipByDate && t.shipByDate <= leadHorizonEnd ? s + t.footage : s),
     0,
   );
-  const reorderPoint = Math.max(expectedLtd, committedWithinLead) + safetyStock;
+  const autoReorderPoint = Math.max(expectedLtd, committedWithinLead) + safetyStock;
+  // A manual reorder point wins over the calculation and drives everything
+  // downstream (belowMin, suggested quantity, and the default max).
+  const reorderPointOverridden =
+    input.reorderPointOverride != null && input.reorderPointOverride > 0;
+  const reorderPoint = reorderPointOverridden ? input.reorderPointOverride! : autoReorderPoint;
 
   // Typical roll size: a buyer thinks of the *original* incoming roll length
   // (e.g. 10,000 ft). Per-row FootLength is per-piece — slit children share an
@@ -1227,7 +1242,9 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   // Max (order-up-to) = reorder point + one order quantity. EOQ when available,
   // otherwise cover the lead time + ~4 weeks of demand (rounded to a roll).
   const orderCycleFootage = eoqFootage > 0 ? eoqFootage : Math.max(avgWeekly * 4, typicalRoll);
-  const maxFootage = reorderPoint + orderCycleFootage;
+  const autoMaxFootage = reorderPoint + orderCycleFootage;
+  const maxFootageOverridden = input.maxFootageOverride != null && input.maxFootageOverride > 0;
+  const maxFootage = maxFootageOverridden ? input.maxFootageOverride! : autoMaxFootage;
 
   // Open (unreceived) Stock POs for this stock. Footage estimated as
   // quantity (rolls) * effective typical roll size — the same number a buyer
@@ -1354,7 +1371,11 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
         input.typicalRollFootageOverride != null && input.typicalRollFootageOverride > 0,
       safetyStockFootage: Math.round(safetyStock),
       reorderPointFootage: Math.round(reorderPoint),
+      autoReorderPointFootage: Math.round(autoReorderPoint),
+      reorderPointOverridden,
       maxFootage: Math.round(maxFootage),
+      autoMaxFootage: Math.round(autoMaxFootage),
+      maxFootageOverridden,
       eoqFootage: Math.round(eoqFootage),
       eoqRolls,
       orderQtySource,

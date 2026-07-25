@@ -1953,6 +1953,14 @@ components:
           type: number
           nullable: true
           description: Manual override for the typical incoming roll size (footage). Null = use observed roll history.
+        reorderPointFootage:
+          type: number
+          nullable: true
+          description: Manual override for the reorder point (min), in footage. Null clears it and restores the calculated value.
+        maxFootage:
+          type: number
+          nullable: true
+          description: Manual override for the order-up-to level (max), in footage. Null clears it and restores the calculated value.
     StockGoal:
       type: object
       required: [stockId, min, max]
@@ -1970,6 +1978,8 @@ components:
           items: { type: number }
         leadTimeDays: { type: number, nullable: true }
         typicalRollFootage: { type: number, nullable: true }
+        reorderPointFootage: { type: number, nullable: true }
+        maxFootage: { type: number, nullable: true }
         orderQuantityRolls: { type: number, nullable: true }
         discontinued: { type: boolean }
         demandFromStockId: { type: string, nullable: true }
@@ -2262,7 +2272,11 @@ components:
         typicalRollFootageOverridden: { type: boolean, description: "True when typicalRollFootage comes from a per-stock override rather than the auto-derived value." }
         safetyStockFootage: { type: number }
         reorderPointFootage: { type: number }
+        autoReorderPointFootage: { type: number, description: "Calculated reorder point, ignoring any manual override." }
+        reorderPointOverridden: { type: boolean, description: "True when the reorder point comes from a manual per-stock override." }
         maxFootage: { type: number }
+        autoMaxFootage: { type: number, description: "Calculated max, ignoring any manual override." }
+        maxFootageOverridden: { type: boolean, description: "True when max comes from a manual per-stock override." }
         eoqFootage: { type: number, description: "Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable." }
         eoqRolls: { type: integer, description: "Order quantity in whole master rolls (manual override, EOQ, or 0)." }
         orderQtySource: { type: string, enum: [manual, eoq, heuristic], description: "How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic." }

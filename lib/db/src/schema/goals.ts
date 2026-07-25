@@ -56,6 +56,12 @@ export const stockGoalTable = pgTable("stock_goal", {
   // Manual override for the "typical roll size" (footage). NULL = use the auto
   // value derived from received-roll history grouped by Orig_RollID.
   typicalRollFootage: doublePrecision("typical_roll_footage"),
+  // Manual overrides for the reorder point (min) and order-up-to level (max), in
+  // FOOTAGE. NULL = use the computed value. (Distinct from min/max above, which
+  // are the dollar budget band on the Goals page.) Clearing one restores the
+  // calculated value.
+  reorderPointFootage: doublePrecision("reorder_point_footage"),
+  maxFootage: doublePrecision("max_footage"),
   // Manual order quantity (master rolls) to place per PO — a fixed batch that
   // overrides the computed EOQ. NULL = use EOQ / heuristic. Acts as a floor:
   // a large committed backlog can still push the suggested quantity higher.

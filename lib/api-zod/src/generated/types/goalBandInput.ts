@@ -25,4 +25,8 @@ export interface GoalBandInput {
   leadTimeDays?: number | null;
   /** Manual override for the typical incoming roll size (footage). Null = use observed roll history. */
   typicalRollFootage?: number | null;
+  /** Manual override for the reorder point (min), in footage. Null clears it and restores the calculated value. */
+  reorderPointFootage?: number | null;
+  /** Manual override for the order-up-to level (max), in footage. Null clears it and restores the calculated value. */
+  maxFootage?: number | null;
 }

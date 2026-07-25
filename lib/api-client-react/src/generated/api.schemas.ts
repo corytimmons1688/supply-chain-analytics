@@ -778,6 +778,10 @@ export interface GoalBandInput {
   leadTimeDays?: number | null;
   /** Manual override for the typical incoming roll size (footage). Null = use observed roll history. */
   typicalRollFootage?: number | null;
+  /** Manual override for the reorder point (min), in footage. Null clears it and restores the calculated value. */
+  reorderPointFootage?: number | null;
+  /** Manual override for the order-up-to level (max), in footage. Null clears it and restores the calculated value. */
+  maxFootage?: number | null;
 }
 
 export interface StockGoal {
@@ -793,6 +797,8 @@ export interface StockGoal {
   seasonalityWeights?: number[] | null;
   leadTimeDays?: number | null;
   typicalRollFootage?: number | null;
+  reorderPointFootage?: number | null;
+  maxFootage?: number | null;
   orderQuantityRolls?: number | null;
   discontinued?: boolean;
   demandFromStockId?: string | null;
@@ -1149,7 +1155,15 @@ export interface DemandStockMetrics {
   typicalRollFootageOverridden: boolean;
   safetyStockFootage: number;
   reorderPointFootage: number;
+  /** Calculated reorder point, ignoring any manual override. */
+  autoReorderPointFootage?: number;
+  /** True when the reorder point comes from a manual per-stock override. */
+  reorderPointOverridden?: boolean;
   maxFootage: number;
+  /** Calculated max, ignoring any manual override. */
+  autoMaxFootage?: number;
+  /** True when max comes from a manual per-stock override. */
+  maxFootageOverridden?: boolean;
   /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
   eoqFootage: number;
   /** Order quantity in whole master rolls (manual override, EOQ, or 0). */

@@ -26,6 +26,8 @@ function rowToStockGoal(r: StockGoalRow) {
     seasonalityWeights: weights,
     leadTimeDays: r.leadTimeDays,
     typicalRollFootage: r.typicalRollFootage,
+    reorderPointFootage: r.reorderPointFootage,
+    maxFootage: r.maxFootage,
     orderQuantityRolls: r.orderQuantityRolls,
     discontinued: r.discontinued,
     demandFromStockId: r.demandFromStockId,
@@ -140,6 +142,11 @@ router.put(
       body.typicalRollFootage != null && body.typicalRollFootage > 0
         ? body.typicalRollFootage
         : null;
+    // Reorder point / max overrides (footage). Null or <=0 clears the override,
+    // which restores the calculated value.
+    const reorderPointFootage =
+      body.reorderPointFootage != null && body.reorderPointFootage > 0 ? body.reorderPointFootage : null;
+    const maxFootage = body.maxFootage != null && body.maxFootage > 0 ? body.maxFootage : null;
     await db
       .insert(stockGoalTable)
       .values({
@@ -153,6 +160,8 @@ router.put(
         seasonalityW3,
         leadTimeDays,
         typicalRollFootage,
+        reorderPointFootage,
+        maxFootage,
       })
       .onConflictDoUpdate({
         target: stockGoalTable.stockId,
@@ -166,6 +175,8 @@ router.put(
           seasonalityW3,
           leadTimeDays,
           typicalRollFootage,
+          reorderPointFootage,
+          maxFootage,
           updatedAt: new Date(),
         },
       });
@@ -178,6 +189,8 @@ router.put(
       seasonalityWeights: w ?? null,
       leadTimeDays,
       typicalRollFootage,
+      reorderPointFootage,
+      maxFootage,
     });
   }),
 );

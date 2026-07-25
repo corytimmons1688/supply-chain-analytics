@@ -67,7 +67,15 @@ export interface DemandStockMetrics {
   typicalRollFootageOverridden: boolean;
   safetyStockFootage: number;
   reorderPointFootage: number;
+  /** Calculated reorder point, ignoring any manual override. */
+  autoReorderPointFootage?: number;
+  /** True when the reorder point comes from a manual per-stock override. */
+  reorderPointOverridden?: boolean;
   maxFootage: number;
+  /** Calculated max, ignoring any manual override. */
+  autoMaxFootage?: number;
+  /** True when max comes from a manual per-stock override. */
+  maxFootageOverridden?: boolean;
   /** Economic order quantity (footage), rounded to whole rolls; 0 when cost inputs are unavailable. */
   eoqFootage: number;
   /** Order quantity in whole master rolls (manual override, EOQ, or 0). */

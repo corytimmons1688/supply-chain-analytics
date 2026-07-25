@@ -112,6 +112,8 @@ export default function DemandDetail() {
   const [seasW3Draft, setSeasW3Draft] = React.useState<string>("");
   const [leadTimeDaysDraft, setLeadTimeDaysDraft] = React.useState<string>("");
   const [typicalRollFootageDraft, setTypicalRollFootageDraft] = React.useState<string>("");
+  const [reorderPointDraft, setReorderPointDraft] = React.useState<string>("");
+  const [maxFootageDraft, setMaxFootageDraft] = React.useState<string>("");
 
   // Reset draft fields whenever the loaded override changes (e.g. switching stocks).
   React.useEffect(() => {
@@ -125,6 +127,10 @@ export default function DemandDetail() {
     setTypicalRollFootageDraft(
       existing?.typicalRollFootage != null ? String(existing.typicalRollFootage) : "",
     );
+    setReorderPointDraft(
+      existing?.reorderPointFootage != null ? String(existing.reorderPointFootage) : "",
+    );
+    setMaxFootageDraft(existing?.maxFootage != null ? String(existing.maxFootage) : "");
   }, [existing]);
 
   const handleSaveOverrides = async () => {
@@ -138,6 +144,24 @@ export default function DemandDetail() {
     const leadTimeCv = parseOpt(leadTimeCvDraft);
     const leadTimeDays = parseOpt(leadTimeDaysDraft);
     const typicalRollFootage = parseOpt(typicalRollFootageDraft);
+    const reorderPointFootage = parseOpt(reorderPointDraft);
+    const maxFootage = parseOpt(maxFootageDraft);
+    if (Number.isNaN(reorderPointFootage) || Number.isNaN(maxFootage)) {
+      toast.error("Reorder point and max must be numbers (footage)");
+      return;
+    }
+    if (reorderPointFootage != null && reorderPointFootage <= 0) {
+      toast.error("Reorder point must be > 0 — clear the field to go back to calculated");
+      return;
+    }
+    if (maxFootage != null && maxFootage <= 0) {
+      toast.error("Max must be > 0 — clear the field to go back to calculated");
+      return;
+    }
+    if (reorderPointFootage != null && maxFootage != null && maxFootage < reorderPointFootage) {
+      toast.error("Max must be ≥ the reorder point");
+      return;
+    }
     if (Number.isNaN(demandCv) || Number.isNaN(leadTimeCv)) {
       toast.error("CV values must be numbers (e.g. 0.25)");
       return;
@@ -192,7 +216,9 @@ export default function DemandDetail() {
       leadTimeCv == null &&
       seasonalityWeights == null &&
       leadTimeDays == null &&
-      typicalRollFootage == null;
+      typicalRollFootage == null &&
+      reorderPointFootage == null &&
+      maxFootage == null;
 
     try {
       // Preserve existing min/max bands, only modify forecast assumptions.
@@ -206,6 +232,8 @@ export default function DemandDetail() {
           seasonalityWeights,
           leadTimeDays,
           typicalRollFootage,
+          reorderPointFootage,
+          maxFootage,
         },
       });
       queryClient.invalidateQueries({ queryKey: getGetGoalsQueryKey() });
@@ -226,6 +254,54 @@ export default function DemandDetail() {
     setSeasW3Draft("");
     setLeadTimeDaysDraft("");
     setTypicalRollFootageDraft("");
+    setReorderPointDraft("");
+    setMaxFootageDraft("");
+  };
+
+  /**
+   * "Reset to calculated" for a single field: clear the draft and save straight
+   * away, so one click restores the calculated value without hunting for Save.
+   */
+  const resetFieldToCalculated = async (
+    field: "reorderPointFootage" | "maxFootage" | "leadTimeDays" | "typicalRollFootage",
+  ) => {
+    const setDraft = {
+      reorderPointFootage: setReorderPointDraft,
+      maxFootage: setMaxFootageDraft,
+      leadTimeDays: setLeadTimeDaysDraft,
+      typicalRollFootage: setTypicalRollFootageDraft,
+    }[field];
+    setDraft("");
+    const num = (s: string): number | null => {
+      const t = s.trim();
+      if (t === "") return null;
+      const n = Number(t);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const w = existing?.seasonalityWeights;
+    try {
+      await setStockGoalMutation.mutateAsync({
+        stockId,
+        data: {
+          min: existing?.min ?? null,
+          max: existing?.max ?? null,
+          demandCv: existing?.demandCv ?? null,
+          leadTimeCv: existing?.leadTimeCv ?? null,
+          seasonalityWeights: w && w.length === 3 ? [w[0]!, w[1]!, w[2]!] : null,
+          // Keep the other overrides as-is; null out just this one.
+          leadTimeDays: field === "leadTimeDays" ? null : num(leadTimeDaysDraft),
+          typicalRollFootage: field === "typicalRollFootage" ? null : num(typicalRollFootageDraft),
+          reorderPointFootage: field === "reorderPointFootage" ? null : num(reorderPointDraft),
+          maxFootage: field === "maxFootage" ? null : num(maxFootageDraft),
+        },
+      });
+      queryClient.invalidateQueries({ queryKey: getGetGoalsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["/api/demand/stock-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/demand/summary"] });
+      toast.success("Reset to calculated");
+    } catch {
+      toast.error("Failed to reset");
+    }
   };
 
   const sumDraftWeights = (() => {
@@ -418,9 +494,80 @@ export default function DemandDetail() {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end mb-4">
             <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Lead time (days)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Reorder point / min (ft)
+                </label>
+                {m?.reorderPointOverridden && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-primary hover:underline"
+                    onClick={() => resetFieldToCalculated("reorderPointFootage")}
+                  >
+                    Reset to calculated
+                  </button>
+                )}
+              </div>
+              <Input
+                type="number"
+                inputMode="decimal"
+                step="100"
+                min="0"
+                placeholder={m ? String(m.autoReorderPointFootage) : "auto"}
+                value={reorderPointDraft}
+                onChange={(e) => setReorderPointDraft(e.target.value)}
+                className="mt-1.5 font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Triggers reorder when the position drops below it. Blank = calculated
+                {m ? ` (${fmtFt(m.autoReorderPointFootage)})` : ""}.
+              </p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Max / order-up-to (ft)
+                </label>
+                {m?.maxFootageOverridden && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-primary hover:underline"
+                    onClick={() => resetFieldToCalculated("maxFootage")}
+                  >
+                    Reset to calculated
+                  </button>
+                )}
+              </div>
+              <Input
+                type="number"
+                inputMode="decimal"
+                step="100"
+                min="0"
+                placeholder={m ? String(m.autoMaxFootage) : "auto"}
+                value={maxFootageDraft}
+                onChange={(e) => setMaxFootageDraft(e.target.value)}
+                className="mt-1.5 font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Suggested POs order up to this level. Blank = calculated
+                {m ? ` (${fmtFt(m.autoMaxFootage)})` : ""}.
+              </p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Lead time (days)
+                </label>
+                {m?.leadTimeDaysOverridden && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-primary hover:underline"
+                    onClick={() => resetFieldToCalculated("leadTimeDays")}
+                  >
+                    Reset to calculated
+                  </button>
+                )}
+              </div>
               <Input
                 type="number"
                 inputMode="decimal"
@@ -436,9 +583,20 @@ export default function DemandDetail() {
               </p>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Typical roll size (ft)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Typical roll size (ft)
+                </label>
+                {m?.typicalRollFootageOverridden && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-primary hover:underline"
+                    onClick={() => resetFieldToCalculated("typicalRollFootage")}
+                  >
+                    Reset to calculated
+                  </button>
+                )}
+              </div>
               <Input
                 type="number"
                 inputMode="decimal"
@@ -638,20 +796,31 @@ export default function DemandDetail() {
         <MetricCard
           label="Reorder point"
           primary={fmtFt(m?.reorderPointFootage)}
-          secondary={`safety stock ${fmtFt(m?.safetyStockFootage)}`}
+          secondary={
+            m?.reorderPointOverridden
+              ? `manual override (calculated ${fmtFt(m?.autoReorderPointFootage)})`
+              : `safety stock ${fmtFt(m?.safetyStockFootage)}`
+          }
           overridden={
+            m?.reorderPointOverridden ||
             m?.demandCvOverridden ||
             m?.leadTimeCvOverridden ||
             m?.leadTimeDaysOverridden
           }
-          overrideLabel="Affected by override"
+          overrideLabel={m?.reorderPointOverridden ? "override" : "Affected by override"}
         />
         <MetricCard
           label="Max"
           primary={fmtFt(m?.maxFootage)}
-          secondary="cover lead time + 4 wk demand"
-          overridden={m?.leadTimeDaysOverridden || m?.typicalRollFootageOverridden}
-          overrideLabel="Affected by override"
+          secondary={
+            m?.maxFootageOverridden
+              ? `manual override (calculated ${fmtFt(m?.autoMaxFootage)})`
+              : "cover lead time + 4 wk demand"
+          }
+          overridden={
+            m?.maxFootageOverridden || m?.leadTimeDaysOverridden || m?.typicalRollFootageOverridden
+          }
+          overrideLabel={m?.maxFootageOverridden ? "override" : "Affected by override"}
         />
         <MetricCard
           label="Typical roll size"

@@ -343,6 +343,8 @@ export const GetGoalsResponse = zod.object({
         .nullish(),
       leadTimeDays: zod.number().nullish(),
       typicalRollFootage: zod.number().nullish(),
+      reorderPointFootage: zod.number().nullish(),
+      maxFootage: zod.number().nullish(),
       orderQuantityRolls: zod.number().nullish(),
       discontinued: zod.boolean().optional(),
       demandFromStockId: zod.string().nullish(),
@@ -384,6 +386,18 @@ export const SetGlobalGoalBody = zod.object({
     .nullish()
     .describe(
       "Manual override for the typical incoming roll size (footage). Null = use observed roll history.",
+    ),
+  reorderPointFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual override for the reorder point (min), in footage. Null clears it and restores the calculated value.",
+    ),
+  maxFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual override for the order-up-to level (max), in footage. Null clears it and restores the calculated value.",
     ),
 });
 
@@ -464,6 +478,18 @@ export const SetStockGoalBody = zod.object({
     .describe(
       "Manual override for the typical incoming roll size (footage). Null = use observed roll history.",
     ),
+  reorderPointFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual override for the reorder point (min), in footage. Null clears it and restores the calculated value.",
+    ),
+  maxFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual override for the order-up-to level (max), in footage. Null clears it and restores the calculated value.",
+    ),
 });
 
 export const setStockGoalResponseSeasonalityWeightsMin = 3;
@@ -482,6 +508,8 @@ export const SetStockGoalResponse = zod.object({
     .nullish(),
   leadTimeDays: zod.number().nullish(),
   typicalRollFootage: zod.number().nullish(),
+  reorderPointFootage: zod.number().nullish(),
+  maxFootage: zod.number().nullish(),
   orderQuantityRolls: zod.number().nullish(),
   discontinued: zod.boolean().optional(),
   demandFromStockId: zod.string().nullish(),
@@ -1099,7 +1127,25 @@ export const GetDemandSummaryResponse = zod.object({
         ),
       safetyStockFootage: zod.number(),
       reorderPointFootage: zod.number(),
+      autoReorderPointFootage: zod
+        .number()
+        .optional()
+        .describe("Calculated reorder point, ignoring any manual override."),
+      reorderPointOverridden: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when the reorder point comes from a manual per-stock override.",
+        ),
       maxFootage: zod.number(),
+      autoMaxFootage: zod
+        .number()
+        .optional()
+        .describe("Calculated max, ignoring any manual override."),
+      maxFootageOverridden: zod
+        .boolean()
+        .optional()
+        .describe("True when max comes from a manual per-stock override."),
       eoqFootage: zod
         .number()
         .describe(
@@ -1367,7 +1413,25 @@ export const GetDemandStockDetailResponse = zod.object({
       ),
     safetyStockFootage: zod.number(),
     reorderPointFootage: zod.number(),
+    autoReorderPointFootage: zod
+      .number()
+      .optional()
+      .describe("Calculated reorder point, ignoring any manual override."),
+    reorderPointOverridden: zod
+      .boolean()
+      .optional()
+      .describe(
+        "True when the reorder point comes from a manual per-stock override.",
+      ),
     maxFootage: zod.number(),
+    autoMaxFootage: zod
+      .number()
+      .optional()
+      .describe("Calculated max, ignoring any manual override."),
+    maxFootageOverridden: zod
+      .boolean()
+      .optional()
+      .describe("True when max comes from a manual per-stock override."),
     eoqFootage: zod
       .number()
       .describe(
