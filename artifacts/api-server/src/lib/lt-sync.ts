@@ -118,6 +118,52 @@ export async function syncLtStocks(): Promise<{ stocks: number }> {
 // ---------------------------------------------------------------------
 type TicketListRow = { number: string; modifiedDate?: string };
 
+/**
+ * Reconcile mirror tickets that still look OPEN but are absent from Label Traxx's
+ * live open list. The mirror upserts and never deletes, so two things go stale and
+ * keep driving phantom demand:
+ *   - deleted/voided tickets (details endpoint replies `... was not found`)
+ *   - tickets completed since the last detail fetch (dateDone set in LT, still
+ *     null here because the incremental pass only re-fetches changed tickets)
+ * We re-fetch details for each suspect: gone → delete the row; still there →
+ * upsert so dateDone/status land. Bounded by the demand window, so it's cheap.
+ */
+async function reconcileMissingTickets(liveOpen: Set<string>): Promise<{ deleted: number; refreshed: number }> {
+  const suspects = await db
+    .select({ n: ltTicketTable.ticketNumber })
+    .from(ltTicketTable)
+    .where(
+      sql`${ltTicketTable.dateDone} IS NULL
+          AND ${ltTicketTable.shipByDate} >= (current_date - interval '30 days')::text
+          AND ${ltTicketTable.shipByDate} <= (current_date + interval '180 days')::text`,
+    );
+  const missing = suspects.map((s) => s.n).filter((n) => !liveOpen.has(n));
+  if (missing.length === 0) return { deleted: 0, refreshed: 0 };
+
+  // `null` here means the ticket no longer exists in LT (details 4xx / "not found").
+  const probes = await ltMapConcurrent(missing, 4, async (n) => {
+    try {
+      const d = await ltGet<Record<string, unknown>>("/custom-ticket-details", { TicketNumber: n });
+      const o = Array.isArray(d) ? (d[0] as Record<string, unknown> | undefined) : d;
+      return { ticket: n, detail: o && str(o["number"]) ? o : null };
+    } catch {
+      return { ticket: n, detail: null };
+    }
+  });
+
+  const gone = probes.filter((p) => p.detail == null).map((p) => p.ticket);
+  const stillThere = probes.filter((p) => p.detail != null).map((p) => p.ticket);
+  for (const batch of chunkArray(gone, 200)) {
+    await db.delete(ltTicketTable).where(inArray(ltTicketTable.ticketNumber, batch));
+  }
+  let refreshed = 0;
+  if (stillThere.length > 0) refreshed = await upsertTicketDetails(stillThere);
+  if (gone.length > 0 || refreshed > 0) {
+    logger.info({ deleted: gone.length, refreshed, tickets: gone.slice(0, 20) }, "Reconciled stale LT tickets");
+  }
+  return { deleted: gone.length, refreshed };
+}
+
 async function upsertTicketDetails(numbers: string[]): Promise<number> {
   const details = await ltMapConcurrent(numbers, 4, (n) =>
     ltGet<Record<string, unknown>>("/custom-ticket-details", { TicketNumber: n }).catch((err) => {
@@ -167,7 +213,9 @@ async function upsertTicketDetails(numbers: string[]): Promise<number> {
   return values.length;
 }
 
-export async function syncLtTickets(opts: { sinceDays?: number; full?: boolean } = {}): Promise<{ tickets: number }> {
+export async function syncLtTickets(
+  opts: { sinceDays?: number; full?: boolean } = {},
+): Promise<{ tickets: number; deleted: number; refreshed: number }> {
   const since = new Date();
   since.setDate(since.getDate() - (opts.sinceDays ?? 3));
   // Query params take ISO dates (responses use MM/DD/YYYY).
@@ -202,7 +250,10 @@ export async function syncLtTickets(opts: { sinceDays?: number; full?: boolean }
     numbers = [...new Set([...openNums, ...changed].filter((n) => changed.has(n) || !existing.has(n)))];
   }
   const upserted = await upsertTicketDetails(numbers);
-  return { tickets: upserted };
+  // Prune/refresh mirror rows that still look open but LT no longer lists as open
+  // (deleted tickets, or ones completed since our last detail fetch).
+  const { deleted, refreshed } = await reconcileMissingTickets(new Set(openNums));
+  return { tickets: upserted, deleted, refreshed };
 }
 
 // ---------------------------------------------------------------------
@@ -468,7 +519,10 @@ export async function performLtApiSync(opts: { full?: boolean } = {}): Promise<R
   if (!ltApiConfigured()) throw new Error("LT_API_KEY is not configured");
   const out: Record<string, unknown> = {};
   out["stocks"] = (await syncLtStocks()).stocks;
-  out["tickets"] = (await syncLtTickets({ full: opts.full })).tickets;
+  const tix = await syncLtTickets({ full: opts.full });
+  out["tickets"] = tix.tickets;
+  out["ticketsDeleted"] = tix.deleted;
+  out["ticketsRefreshed"] = tix.refreshed;
   out["pos"] = (await syncLtPos({ full: opts.full })).pos;
   const onHand = await syncLtOnHandRolls();
   out["onHandRolls"] = onHand.onHand;
