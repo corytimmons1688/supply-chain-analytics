@@ -917,7 +917,16 @@ export default function DemandPlanning() {
                           <div className="cursor-pointer">
                             <div className="font-medium text-foreground flex items-center gap-2 flex-wrap">
                               #{r.stockId}
-                              {r.discontinued && (
+                              {r.inactive && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-zinc-500/40 text-zinc-600 dark:text-zinc-300 text-[10px] px-1.5 py-0"
+                                  title="Label Traxx marks this stock inactive — shown because it still holds on-hand inventory; never reordered"
+                                >
+                                  Inactive
+                                </Badge>
+                              )}
+                              {r.discontinued && !r.inactive && (
                                 <Badge
                                   variant="outline"
                                   className="border-slate-500/40 text-slate-600 dark:text-slate-300 text-[10px] px-1.5 py-0"

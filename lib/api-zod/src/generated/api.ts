@@ -1120,6 +1120,12 @@ export const GetDemandSummaryResponse = zod.object({
         .describe(
           "End-of-life: still counted for on-hand but never suggested for reorder.",
         ),
+      inactive: zod
+        .boolean()
+        .optional()
+        .describe(
+          "Label Traxx marks the stock inactive — shown for sell-through, never reordered.",
+        ),
       demandFromStockId: zod
         .string()
         .nullable()
@@ -1381,6 +1387,12 @@ export const GetDemandStockDetailResponse = zod.object({
       .boolean()
       .describe(
         "End-of-life: still counted for on-hand but never suggested for reorder.",
+      ),
+    inactive: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Label Traxx marks the stock inactive — shown for sell-through, never reordered.",
       ),
     demandFromStockId: zod
       .string()

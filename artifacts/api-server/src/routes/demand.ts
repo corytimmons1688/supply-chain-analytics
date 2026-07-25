@@ -212,6 +212,11 @@ router.get(
     // Likewise, a material needed by open tickets must surface even with no
     // recent usage history (committed demand is a reorder driver on its own).
     for (const k of openTicketFootageByStock.keys()) if (activeStockIds.has(k)) allStockIds.add(k);
+    // Stocks Label Traxx marks INACTIVE are excluded above, but many still hold
+    // real footage on the floor (~54 stocks / 428k ft today). Keep those visible
+    // for sell-through — flagged `inactive`, and never suggested for reorder —
+    // rather than silently hiding physical inventory.
+    for (const [k, v] of onHand) if (!activeStockIds.has(k) && (v.footage ?? 0) > 0) allStockIds.add(k);
 
     // Global fallback lead time: median across all observed POs (else 14 days)
     const allLts = Array.from(poLeadTimes.values()).map((p) => p.leadTimeDays);
@@ -266,6 +271,7 @@ router.get(
         carryingRatePct,
         unitValuePerFoot,
         discontinued: goalRow?.discontinued ?? false,
+        inactive: info ? info.inactive : true,
         demandFromStockId: predecessorId,
         ...(vendorLeadTimeDays !== undefined ? { vendorLeadTimeDays } : {}),
         ...(goalRow?.orderQuantityRolls != null && goalRow.orderQuantityRolls > 0
@@ -549,7 +555,16 @@ router.get(
 
     const stockIds = new Set<string>([...stockInfo.keys(), ...ticketAgg.keys()]);
     const items = [...stockIds]
-      .filter((id) => activeStockIds.size === 0 || activeStockIds.has(id) || ticketAgg.has(id))
+      // Active stocks, anything with committed demand, plus inactive stocks that
+      // still hold footage (visible for sell-through; the Configuration tab hides
+      // them via `inactive`).
+      .filter(
+        (id) =>
+          activeStockIds.size === 0 ||
+          activeStockIds.has(id) ||
+          ticketAgg.has(id) ||
+          (widthsByStock.get(id)?.length ?? 0) > 0,
+      )
       .map((stockId) => {
         const info = stockInfo.get(stockId);
         const goal = goalsByStock.get(stockId);
@@ -580,10 +595,11 @@ router.get(
           }));
         return {
           stockId,
-          // fetchStockInfo/activeStockIds only return non-inactive stocks, so a
-          // missing stock-master entry means Label Traxx has it inactive. The
-          // Configuration tab hides these.
-          inactive: !info,
+          // Real Label Traxx inactive flag. NOTE: fetchStockInfo returns ALL
+          // stocks (it does not filter inactive), so this must come from the
+          // column — no stock-master row at all also counts as inactive.
+          // The Configuration tab hides these.
+          inactive: info ? info.inactive : true,
           classification: info?.classification ?? null,
           // Config values: override from stock_goal, else Label Traxx.
           vendorName: goal?.vendorName ?? info?.supplierName ?? null,

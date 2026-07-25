@@ -76,6 +76,8 @@ export interface DemandStockMetrics {
   orderQtySource: DemandStockMetricsOrderQtySource;
   /** End-of-life: still counted for on-hand but never suggested for reorder. */
   discontinued: boolean;
+  /** Label Traxx marks the stock inactive — shown for sell-through, never reordered. */
+  inactive?: boolean;
   /** Predecessor stock whose demand history is merged into this SKU (null = none). */
   demandFromStockId: string | null;
   suggestedOrderFootage: number;

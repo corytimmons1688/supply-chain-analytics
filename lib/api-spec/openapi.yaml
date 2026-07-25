@@ -2267,6 +2267,7 @@ components:
         eoqRolls: { type: integer, description: "Order quantity in whole master rolls (manual override, EOQ, or 0)." }
         orderQtySource: { type: string, enum: [manual, eoq, heuristic], description: "How the order quantity was sized: manual override, EOQ (economic), or the lead-time+4-week heuristic." }
         discontinued: { type: boolean, description: "End-of-life: still counted for on-hand but never suggested for reorder." }
+        inactive: { type: boolean, description: "Label Traxx marks the stock inactive — shown for sell-through, never reordered." }
         demandFromStockId: { type: string, nullable: true, description: "Predecessor stock whose demand history is merged into this SKU (null = none)." }
         suggestedOrderFootage: { type: number }
         suggestedOrderRolls: { type: integer }

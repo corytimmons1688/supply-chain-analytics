@@ -310,6 +310,8 @@ export async function fetchActiveStockIds(): Promise<Set<string>> {
 
 export interface StockInfoRow {
   stockId: string;
+  /** Label Traxx "inactive" flag — fetchStockInfo returns ALL stocks, so callers must check this. */
+  inactive: boolean;
   supplierName: string | null;
   costMsi: number;
   freightMsi: number;
@@ -333,6 +335,7 @@ export async function fetchStockInfo(): Promise<Map<string, StockInfoRow>> {
   for (const r of rows) {
     out.set(r.stockId, {
       stockId: r.stockId,
+      inactive: r.inactive ?? false,
       supplierName: r.supplierName,
       costMsi: r.costMsi ?? 0,
       freightMsi: r.freightMsi ?? 0,
@@ -966,6 +969,8 @@ export interface StockMetricsInput {
   orderQuantityRollsOverride?: number;
   /** End-of-life: keep the SKU visible but never suggest a reorder. */
   discontinued?: boolean;
+  /** Label Traxx marks the stock inactive — visible for sell-through, never reordered. */
+  inactive?: boolean;
   /** Predecessor stock whose usage history is merged into this SKU (echoed for display). */
   demandFromStockId?: string | null;
   /** Landed value per foot ($/ft = (msiCost + freightMsi) × 12 × width / 1000) — drives EOQ holding cost. */
@@ -1023,6 +1028,8 @@ export interface StockMetrics {
   belowMin: boolean;
   /** End-of-life: still counted for on-hand, but never suggested for reorder. */
   discontinued: boolean;
+  /** Label Traxx has the stock inactive (shown for sell-through; never reordered). */
+  inactive: boolean;
   /** Predecessor stock whose demand history is merged into this SKU (null = none). */
   demandFromStockId: string | null;
   /** Committed footage required by open tickets that list this material. */
@@ -1245,8 +1252,10 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   //     book, even demand booked past the lead-time horizon. Surfaces a large
   //     order backlog early so one PO can cover it (1 material = 1 PO).
   const openTicketFootage = input.openTicketFootage ?? 0;
-  // End-of-life SKUs still show on-hand for sell-through but never reorder.
-  const discontinued = input.discontinued ?? false;
+  // End-of-life SKUs — and anything Label Traxx marks inactive — still show
+  // on-hand for sell-through but never reorder.
+  const ltInactive = input.inactive ?? false;
+  const discontinued = (input.discontinued ?? false) || ltInactive;
   const forecastShort = !discontinued && reorderPoint > 0 && inventoryPosition < reorderPoint;
   // Width-aware committed shortage when supplied (demand at a width covered only
   // by supply at that width); else the pooled fallback.
@@ -1350,6 +1359,7 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       eoqRolls,
       orderQtySource,
       discontinued,
+      inactive: ltInactive,
       demandFromStockId: input.demandFromStockId ?? null,
       suggestedOrderFootage: Math.round(suggestedOrderFootage),
       suggestedOrderRolls,

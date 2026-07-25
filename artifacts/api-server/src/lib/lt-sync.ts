@@ -79,7 +79,9 @@ export async function syncLtStocks(): Promise<{ stocks: number }> {
       areaToWeightFactor: num(d["areaToWeightFactor"]),
       inventoryCost: num(d["inventoryCost"]),
       totalInventoryMsi: num(d["totalInventoryMSI"]),
-      inactive: d["inactive"] === true,
+      // LT exposes `isActive` (there is no `inactive` field — reading one meant
+      // every stock looked active). Missing/unknown → treat as active.
+      inactive: d["isActive"] === false,
       syncedAt: new Date(),
     }));
   for (const batch of chunkArray(values, 200)) {
