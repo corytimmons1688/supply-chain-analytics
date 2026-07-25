@@ -1197,6 +1197,12 @@ type SuggestionLine = {
   openTicketFootage: number;
   reorderReason: DemandStockMetrics["reorderReason"];
   committedShortageFootage: number;
+  /** Current position + band, so the buyer can judge the suggestion in place. */
+  onHandFootage: number;
+  onOrderFootage: number;
+  openPoCount: number;
+  minFootage: number;
+  maxFootage: number;
 };
 
 function lineEstCost(l: SuggestionLine): number | null {
@@ -1272,6 +1278,11 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           openTicketFootage: p?.openTicketFootage ?? 0,
           reorderReason: r.reorderReason,
           committedShortageFootage: r.committedShortageFootage,
+          onHandFootage: r.onHandFootage,
+          onOrderFootage: r.openPoFootage,
+          openPoCount: r.openPoCount,
+          minFootage: r.reorderPointFootage,
+          maxFootage: r.maxFootage,
         };
       })
       .sort((a, b) => Number(b.belowMin) - Number(a.belowMin) || a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
@@ -1419,6 +1430,21 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                         <th className="w-8 px-2 py-1.5" />
                         <th className="text-left px-2 py-1.5 font-medium">Stock</th>
                         <th className="text-left px-2 py-1.5 font-medium">Why</th>
+                        <th className="text-right px-2 py-1.5 font-medium" title="On-hand footage in inventory now">
+                          On hand (ft)
+                        </th>
+                        <th
+                          className="text-right px-2 py-1.5 font-medium"
+                          title="Footage already on order across open POs (not yet received)"
+                        >
+                          On order (ft)
+                        </th>
+                        <th className="text-right px-2 py-1.5 font-medium" title="Reorder point — demand over the lead time + safety stock">
+                          Min (ft)
+                        </th>
+                        <th className="text-right px-2 py-1.5 font-medium" title="Order-up-to level (reorder point + order quantity)">
+                          Max (ft)
+                        </th>
                         <th className="text-right px-2 py-1.5 font-medium">Rolls</th>
                         <th className="text-right px-2 py-1.5 font-medium">Footage</th>
                         <th className="text-right px-2 py-1.5 font-medium">Est. cost</th>
@@ -1440,7 +1466,12 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                               <Badge
                                 variant="outline"
                                 className="text-[10px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40"
-                                title="Open tickets require more than on-hand + on-order"
+                                title={
+                                  "Open tickets need more than on-hand + on-order AT THE REQUIRED WIDTH. " +
+                                  "The On hand / On order columns are stock totals across all widths, so they can " +
+                                  "look sufficient while one width is short (widths ≤13\" pool together; wider widths net separately). " +
+                                  "Click the stock in Stock Inventory Summary for the per-width breakdown."
+                                }
                               >
                                 short for orders · {fmt(l.committedShortageFootage)} ft
                               </Badge>
@@ -1453,6 +1484,40 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                             {l.openTicketFootage > 0 && (
                               <span className="text-muted-foreground"> · {fmt(l.openTicketFootage)} ft on open tickets</span>
                             )}
+                          </td>
+                          {/* Position vs band, so the suggestion can be judged in place. */}
+                          <td
+                            className={cn(
+                              "px-2 py-1.5 text-right tabular-nums",
+                              l.minFootage > 0 &&
+                                l.onHandFootage < l.minFootage &&
+                                "text-amber-700 dark:text-amber-400 font-medium",
+                            )}
+                            title={
+                              l.minFootage > 0 && l.onHandFootage < l.minFootage
+                                ? "On hand is below the reorder point"
+                                : undefined
+                            }
+                          >
+                            {fmt(l.onHandFootage)}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums">
+                            {l.onOrderFootage > 0 ? (
+                              <>
+                                {fmt(l.onOrderFootage)}
+                                <div className="text-[9px] text-muted-foreground">
+                                  {l.openPoCount} PO{l.openPoCount === 1 ? "" : "s"}
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                            {l.minFootage > 0 ? fmt(l.minFootage) : "—"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                            {l.maxFootage > 0 ? fmt(l.maxFootage) : "—"}
                           </td>
                           <td className="px-2 py-1.5 text-right">
                             <Input
