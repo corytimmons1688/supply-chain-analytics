@@ -591,7 +591,13 @@ export interface WidthRow {
 }
 export interface WidthAvailInput {
   onHand: { width: number; footage: number; rolls: number }[];
-  openPos: { masterWidth: number | null; quantityRolls: number; dueDateIso: string | null }[];
+  /** `orderedFootage` (exact, from ordered MSI) is preferred over rolls × avg roll size. */
+  openPos: {
+    masterWidth: number | null;
+    quantityRolls: number;
+    dueDateIso: string | null;
+    orderedFootage?: number;
+  }[];
   lines: WidthAvailLine[];
   avgRollFootage: number;
   masterWidthFallback: number;
@@ -635,7 +641,10 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
   const unconfirmed = new Map<string, number>();
   for (const po of input.openPos) {
     const k = bucketFor(po.masterWidth ?? 0);
-    const ft = po.quantityRolls * input.avgRollFootage;
+    // Exact ordered footage when the PO provides it; else estimate from rolls.
+    const ft = po.orderedFootage && po.orderedFootage > 0
+      ? po.orderedFootage
+      : po.quantityRolls * input.avgRollFootage;
     if (po.dueDateIso) confirmed.set(k, (confirmed.get(k) ?? 0) + ft);
     else unconfirmed.set(k, (unconfirmed.get(k) ?? 0) + ft);
     noteWidth(k, po.masterWidth ?? 0);
@@ -754,12 +763,28 @@ export interface OpenPoRow {
   poNumber: string;
   stockId: string;
   poDateIso: string | null;
+  /** Vendor-promised delivery (LT `dueDate`). */
   dueDateIso: string | null;
+  /** What Calyx asked for (ODBC RequestedDeliveryDate) — usually earlier than promised. */
+  requestedDeliveryIso: string | null;
   quantityRolls: number;
   /** Master roll width this PO supplies (for width-aware availability). */
   masterWidth: number | null;
+  /**
+   * Ordered footage. Exact when the PO carries ordered MSI + a master width
+   * (msi × 1000 / (12 × width)); 0 when neither is known, so callers fall back
+   * to rolls × typical roll size.
+   */
+  orderedFootage: number;
+  notes: string | null;
   description: string | null;
   daysOpen: number | null;
+}
+
+/** Ordered MSI + master width → exact footage. Returns 0 when not derivable. */
+export function poFootageFromMsi(orderedMsi: number | null, masterWidth: number | null): number {
+  if (!orderedMsi || !masterWidth || orderedMsi <= 0 || masterWidth <= 0) return 0;
+  return (orderedMsi * 1000) / (12 * masterWidth);
 }
 
 /**
@@ -794,8 +819,11 @@ export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
       stockId: row.stockNum,
       poDateIso: row.poDate,
       dueDateIso: row.dueDate,
+      requestedDeliveryIso: row.requestedDeliveryDate ?? null,
       quantityRolls,
       masterWidth: row.masterWidth ?? null,
+      orderedFootage: Math.round(poFootageFromMsi(row.orderedMsi ?? null, row.masterWidth ?? null)),
+      notes: row.notes ?? null,
       description: row.description,
       daysOpen: row.poDate ? diffDays(row.poDate, today) : null,
     });

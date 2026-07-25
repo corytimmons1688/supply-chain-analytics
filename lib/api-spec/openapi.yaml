@@ -1665,6 +1665,9 @@ components:
         widthsOnHand:
           type: array
           items: { $ref: "#/components/schemas/WidthOnHand" }
+        openPos:
+          type: array
+          items: { $ref: "#/components/schemas/StockOpenPo" }
         tickets:
           type: array
           items: { $ref: "#/components/schemas/OpenTicket" }
@@ -1680,6 +1683,20 @@ components:
         requiredFootage: { type: number, description: "Open-ticket footage requiring this exact width." }
         shortFootage: { type: number, description: "max(0, required − onHand − onOrder) at this width." }
         status: { type: string, description: "Computed availability for this width (In / Ordered / Ordered Not Confirmed / Out / Without Tickets)." }
+    StockOpenPo:
+      type: object
+      description: An open (unreceived) Stock PO for this material.
+      required: [poNumber, rolls, totalFootage]
+      properties:
+        poNumber: { type: string }
+        poDate: { type: string, nullable: true }
+        requestedDeliveryDate: { type: string, nullable: true, description: "Delivery Calyx asked for (ODBC RequestedDeliveryDate)." }
+        promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised (LT dueDate); usually later than requested." }
+        masterWidth: { type: number }
+        rolls: { type: number, description: "Master rolls ordered." }
+        totalFootage: { type: number, description: "Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable." }
+        notes: { type: string, nullable: true }
+        daysOpen: { type: number, nullable: true }
     OpenTicket:
       type: object
       required: [ticketNumber, estFootage, stockIn]

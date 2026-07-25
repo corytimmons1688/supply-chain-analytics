@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, sql, inArray } from "drizzle-orm";
 import { ltGet, ltGetAllPages, ltMapConcurrent, ltDate, ltApiConfigured } from "./ltApi";
+import { runGatewaySql, pickString } from "./gateway";
 import { logger } from "./logger";
 
 /**
@@ -291,6 +292,10 @@ async function upsertPoDetails(numbers: string[], supplierNames: Map<string, str
       // roll). Matches ODBC purchaseorder.Quantity exactly; NOT the sum of
       // orderedLineQty (a per-line measure in different units).
       const quantity = items.length;
+      // Ordered area in MSI across all lines; exact footage is derived from this
+      // plus masterWidth (see lt_po.orderedMsi).
+      let orderedMsi = 0;
+      for (const it of items) orderedMsi += num(it?.["orderedLineQty"]) ?? 0;
       return {
         poNumber: str(d["poNumber"])!,
         poType: str(d["poType"]),
@@ -303,6 +308,8 @@ async function upsertPoDetails(numbers: string[], supplierNames: Map<string, str
         stockNum: str(firstItem["partNum"]) ?? null,
         quantity: quantity > 0 ? quantity : null,
         masterWidth: num(d["masterWidth"]),
+        notes: str(d["notes"]),
+        orderedMsi,
         subTotal: num(d["subTotal"]),
         description: str(firstItem["description"]),
         items: items,
@@ -327,6 +334,8 @@ async function upsertPoDetails(numbers: string[], supplierNames: Map<string, str
           stockNum: sql`excluded.stock_num`,
           quantity: sql`excluded.quantity`,
           masterWidth: sql`excluded.master_width`,
+          notes: sql`excluded.notes`,
+          orderedMsi: sql`excluded.ordered_msi`,
           subTotal: sql`excluded.sub_total`,
           description: sql`excluded.description`,
           items: sql`excluded.items`,
@@ -355,6 +364,40 @@ export async function syncLtPos(opts: { sinceDays?: number; full?: boolean } = {
   }
   const upserted = await upsertPoDetails(numbers, supplierNames);
   return { pos: upserted };
+}
+
+/**
+ * Requested-delivery dates for open Stock POs. The LT Cloud API only exposes the
+ * vendor-PROMISED date (`dueDate`); what Calyx actually asked for lives in ODBC
+ * as purchaseorder.RequestedDeliveryDate (verified distinct — promised is
+ * typically later). Hybrid read, same rationale as per-roll cost.
+ */
+export async function syncLtPoRequestedDates(): Promise<{ requestedDates: number }> {
+  const rows = await runGatewaySql(
+    "SELECT PONumber, RequestedDeliveryDate FROM purchaseorder " +
+      `WHERE POType = 'Stock' AND Received < {d '1900-01-01'}`,
+  );
+  let updated = 0;
+  for (const row of rows) {
+    const poNumber = pickString(row, "PONumber");
+    const raw = pickString(row, "RequestedDeliveryDate");
+    if (!poNumber) continue;
+    // Gateway returns "M/D/YYYY HH:mm"; pre-1900 is LT's blank sentinel.
+    const iso = (() => {
+      if (!raw) return null;
+      const [datePart] = raw.split(" ");
+      const [m, d, y] = (datePart ?? "").split("/");
+      if (!m || !d || !y || Number(y) < 1900) return null;
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    })();
+    try {
+      await db.update(ltPoTable).set({ requestedDeliveryDate: iso }).where(eq(ltPoTable.poNumber, poNumber));
+      updated++;
+    } catch (err) {
+      logger.warn({ err, poNumber }, "lt_po requested-date update failed");
+    }
+  }
+  return { requestedDates: updated };
 }
 
 // ---------------------------------------------------------------------
@@ -524,6 +567,13 @@ export async function performLtApiSync(opts: { full?: boolean } = {}): Promise<R
   out["ticketsDeleted"] = tix.deleted;
   out["ticketsRefreshed"] = tix.refreshed;
   out["pos"] = (await syncLtPos({ full: opts.full })).pos;
+  // Requested-delivery dates come from ODBC; never let a gateway blip stall the
+  // rest of the LT sync.
+  try {
+    out["poRequestedDates"] = (await syncLtPoRequestedDates()).requestedDates;
+  } catch (err) {
+    out["poRequestedDates"] = { error: err instanceof Error ? err.message : String(err) };
+  }
   const onHand = await syncLtOnHandRolls();
   out["onHandRolls"] = onHand.onHand;
   out["newlyUsedRolls"] = onHand.newlyUsed;

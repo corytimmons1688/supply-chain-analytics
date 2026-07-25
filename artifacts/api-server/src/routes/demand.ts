@@ -189,6 +189,7 @@ router.get(
           masterWidth: p.masterWidth,
           quantityRolls: p.quantityRolls,
           dueDateIso: p.dueDateIso,
+          orderedFootage: p.orderedFootage,
         })),
         lines: lines.map((l) => ({
           key: l.ticketNumber,
@@ -515,6 +516,7 @@ router.get(
           masterWidth: p.masterWidth,
           quantityRolls: p.quantityRolls,
           dueDateIso: p.dueDateIso,
+          orderedFootage: p.orderedFootage,
         })),
         lines: agg.tickets.map((t) => ({
           key: t.ticketNumber,
@@ -625,6 +627,26 @@ router.get(
             shortFootage: w.shortFootage,
             status: w.status,
           })),
+          // Open POs for this stock, so the drill-down can show what's inbound
+          // (requested vs promised delivery, buyer notes, ordered footage).
+          openPos: (posListByStock.get(stockId) ?? [])
+            .slice()
+            .sort((a, b) =>
+              (a.requestedDeliveryIso ?? a.dueDateIso ?? "9999").localeCompare(
+                b.requestedDeliveryIso ?? b.dueDateIso ?? "9999",
+              ),
+            )
+            .map((p) => ({
+              poNumber: p.poNumber,
+              poDate: p.poDateIso,
+              requestedDeliveryDate: p.requestedDeliveryIso,
+              promisedDeliveryDate: p.dueDateIso,
+              masterWidth: p.masterWidth ?? 0,
+              rolls: p.quantityRolls,
+              totalFootage: p.orderedFootage,
+              notes: p.notes,
+              daysOpen: p.daysOpen,
+            })),
           tickets: (agg?.tickets ?? [])
             .sort((a, b) => (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"))
             .slice(0, 40)

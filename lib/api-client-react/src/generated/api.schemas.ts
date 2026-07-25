@@ -496,6 +496,25 @@ export interface WidthOnHand {
   status?: string;
 }
 
+/**
+ * An open (unreceived) Stock PO for this material.
+ */
+export interface StockOpenPo {
+  poNumber: string;
+  poDate?: string | null;
+  /** Delivery Calyx asked for (ODBC RequestedDeliveryDate). */
+  requestedDeliveryDate?: string | null;
+  /** Delivery the vendor promised (LT dueDate); usually later than requested. */
+  promisedDeliveryDate?: string | null;
+  masterWidth?: number;
+  /** Master rolls ordered. */
+  rolls: number;
+  /** Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable. */
+  totalFootage: number;
+  notes?: string | null;
+  daysOpen?: number | null;
+}
+
 export interface OpenTicket {
   ticketNumber: string;
   /** Remaining footage required (gross − consumed). */
@@ -547,6 +566,7 @@ export interface PurchasingItem {
   topCoat?: string | null;
   areaToWeightFactor?: number;
   widthsOnHand?: WidthOnHand[];
+  openPos?: StockOpenPo[];
   tickets?: OpenTicket[];
 }
 

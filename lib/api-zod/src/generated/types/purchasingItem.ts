@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { OpenTicket } from "./openTicket";
+import type { StockOpenPo } from "./stockOpenPo";
 import type { WidthOnHand } from "./widthOnHand";
 
 export interface PurchasingItem {
@@ -43,5 +44,6 @@ export interface PurchasingItem {
   topCoat?: string | null;
   areaToWeightFactor?: number;
   widthsOnHand?: WidthOnHand[];
+  openPos?: StockOpenPo[];
   tickets?: OpenTicket[];
 }

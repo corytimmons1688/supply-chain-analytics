@@ -753,6 +753,37 @@ export const GetDemandPurchasingResponse = zod.object({
           }),
         )
         .optional(),
+      openPos: zod
+        .array(
+          zod
+            .object({
+              poNumber: zod.string(),
+              poDate: zod.string().nullish(),
+              requestedDeliveryDate: zod
+                .string()
+                .nullish()
+                .describe(
+                  "Delivery Calyx asked for (ODBC RequestedDeliveryDate).",
+                ),
+              promisedDeliveryDate: zod
+                .string()
+                .nullish()
+                .describe(
+                  "Delivery the vendor promised (LT dueDate); usually later than requested.",
+                ),
+              masterWidth: zod.number().optional(),
+              rolls: zod.number().describe("Master rolls ordered."),
+              totalFootage: zod
+                .number()
+                .describe(
+                  "Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable.",
+                ),
+              notes: zod.string().nullish(),
+              daysOpen: zod.number().nullish(),
+            })
+            .describe("An open (unreceived) Stock PO for this material."),
+        )
+        .optional(),
       tickets: zod
         .array(
           zod.object({

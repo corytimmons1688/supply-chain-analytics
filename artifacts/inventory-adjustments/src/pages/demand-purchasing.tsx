@@ -987,6 +987,72 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   </div>
                 );
               })()}
+              {/* Inbound: open POs for this material (requested vs promised
+                  delivery, buyer notes, ordered footage). */}
+              {(selectedItem.openPos ?? []).length > 0 && (
+                <div className="border-b">
+                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/20">
+                    Open POs ({(selectedItem.openPos ?? []).length}) ·{" "}
+                    {fmt((selectedItem.openPos ?? []).reduce((s, p) => s + (p.totalFootage ?? 0), 0))} ft inbound
+                  </div>
+                  <div className="max-h-44 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b text-muted-foreground">
+                          <th className="text-left px-3 py-1 font-medium">PO</th>
+                          <th className="text-right px-3 py-1 font-medium">Width</th>
+                          <th className="text-right px-3 py-1 font-medium">Rolls</th>
+                          <th className="text-right px-3 py-1 font-medium">Total footage</th>
+                          <th className="text-right px-3 py-1 font-medium">Requested</th>
+                          <th className="text-right px-3 py-1 font-medium">Promised</th>
+                          <th className="text-left px-3 py-1 font-medium">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(selectedItem.openPos ?? []).map((p) => {
+                          // Promised later than requested = the vendor pushed the date out.
+                          const late =
+                            !!p.requestedDeliveryDate &&
+                            !!p.promisedDeliveryDate &&
+                            p.promisedDeliveryDate > p.requestedDeliveryDate;
+                          return (
+                            <tr key={p.poNumber} className="border-b last:border-b-0 align-top">
+                              <td className="px-3 py-1 font-medium whitespace-nowrap">
+                                PO {p.poNumber}
+                                {p.daysOpen != null && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground">{p.daysOpen}d open</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-1 text-right tabular-nums text-muted-foreground">
+                                {p.masterWidth ? `${p.masterWidth}"` : "—"}
+                              </td>
+                              <td className="px-3 py-1 text-right tabular-nums">{fmt(p.rolls)}</td>
+                              <td className="px-3 py-1 text-right tabular-nums">
+                                {p.totalFootage > 0 ? `${fmt(p.totalFootage)} ft` : "—"}
+                              </td>
+                              <td className="px-3 py-1 text-right tabular-nums whitespace-nowrap">
+                                {p.requestedDeliveryDate ?? "—"}
+                              </td>
+                              <td
+                                className={cn(
+                                  "px-3 py-1 text-right tabular-nums whitespace-nowrap",
+                                  late && "text-amber-700 dark:text-amber-400 font-medium",
+                                )}
+                                title={late ? "Vendor promised later than requested" : undefined}
+                              >
+                                {p.promisedDeliveryDate ?? "—"}
+                              </td>
+                              <td className="px-3 py-1 text-muted-foreground max-w-[18rem] whitespace-pre-line">
+                                {(p.notes ?? "").trim() || "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
               <div className="max-h-56 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead>

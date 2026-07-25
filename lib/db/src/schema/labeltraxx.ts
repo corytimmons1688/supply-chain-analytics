@@ -97,6 +97,15 @@ export const ltPoTable = pgTable(
     // Master roll width ordered on this PO — the width its rolls supply (used
     // for width-aware availability; on-order at this width covers demand at it).
     masterWidth: doublePrecision("master_width"),
+    // Vendor-promised delivery (LT API `dueDate`) vs what Calyx asked for
+    // (ODBC purchaseorder.RequestedDeliveryDate — not exposed by the Cloud API).
+    // These genuinely differ: promised is typically later than requested.
+    requestedDeliveryDate: text("requested_delivery_date"), // ISO
+    // Buyer notes from the PO ("Confirmed. ETA 5/11/26", "MAKE AND HOLD ...").
+    notes: text("notes"),
+    // Σ poItems.orderedLineQty, in MSI. Exact ordered footage =
+    // orderedMsi × 1000 / (12 × masterWidth) — beats estimating rolls × roll size.
+    orderedMsi: doublePrecision("ordered_msi"),
     subTotal: doublePrecision("sub_total"),
     description: text("description"),
     items: jsonb("items"),
