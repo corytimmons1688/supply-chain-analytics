@@ -1,4 +1,5 @@
 import { runGatewaySql, pickString, pickNumber, type GatewayRow } from "./gateway";
+import { logger } from "./logger";
 import { ltGet, ltMapConcurrent, ltDate } from "./ltApi";
 import { bucketRange, eachBucket, type Bucket } from "./cc";
 import { db, ltRollTable, ltStockTable, ltTicketTable, ltPoTable } from "@workspace/db";
@@ -266,30 +267,58 @@ export interface OnHandRow {
 }
 
 /** Sum of FootLength and dollar value per stock for rolls still on-hand (DateRollUsed blank). */
+/**
+ * On-hand per stock. Footage / roll count / description come from the Postgres
+ * mirror (lt_roll), which makes this agree with `fetchOnHandByWidth` — the
+ * width bars and the drill-down stats used to disagree because one read the
+ * mirror and the other read ODBC — and keeps Demand Planning working when the
+ * ODBC gateway is down.
+ *
+ * ODBC is consulted only to add the $ value (the LT Cloud API does not expose
+ * per-roll CostOfRoll). That call is best-effort: a gateway outage costs the
+ * valuation, not the whole page, which previously 500'd the demand summary and
+ * blanked the stock plan.
+ */
 export async function fetchOnHandByStock(): Promise<Map<string, OnHandRow>> {
-  const sql =
-    "SELECT StockNum, FootLength, CostOfRoll * 10 AS Tenths, Description FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
-  const rows = await runGatewaySql(sql);
+  const rollRows = await db
+    .select({
+      stockId: ltRollTable.stockId,
+      length: ltRollTable.length,
+      description: ltRollTable.description,
+    })
+    .from(ltRollTable)
+    .where(eq(ltRollTable.used, false));
+
   const m = new Map<string, OnHandRow>();
-  const tenthsByStock = new Map<string, number>();
-  for (const row of rows) {
-    const stockId = pickString(row, "StockNum") ?? "";
+  for (const r of rollRows) {
+    const stockId = (r.stockId ?? "").trim();
     if (!stockId) continue;
-    const footage = pickNumber(row, "FootLength");
-    const tenths = pickNumber(row, "Tenths");
     let entry = m.get(stockId);
     if (!entry) {
-      entry = { stockId, footage: 0, rollCount: 0, value: 0, description: pickString(row, "Description") };
+      entry = { stockId, footage: 0, rollCount: 0, value: 0, description: r.description };
       m.set(stockId, entry);
     }
-    entry.footage += footage;
+    entry.footage += r.length ?? 0;
     entry.rollCount += 1;
-    tenthsByStock.set(stockId, (tenthsByStock.get(stockId) ?? 0) + tenths);
-    if (!entry.description) entry.description = pickString(row, "Description");
+    if (!entry.description) entry.description = r.description;
   }
-  for (const [stockId, tenths] of tenthsByStock.entries()) {
-    const entry = m.get(stockId);
-    if (entry) entry.value = Math.round((tenths / 10) * 100) / 100;
+
+  try {
+    const sql =
+      "SELECT StockNum, CostOfRoll * 10 AS Tenths FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
+    const rows = await runGatewaySql(sql);
+    const tenthsByStock = new Map<string, number>();
+    for (const row of rows) {
+      const stockId = pickString(row, "StockNum") ?? "";
+      if (!stockId) continue;
+      tenthsByStock.set(stockId, (tenthsByStock.get(stockId) ?? 0) + pickNumber(row, "Tenths"));
+    }
+    for (const [stockId, tenths] of tenthsByStock.entries()) {
+      const entry = m.get(stockId);
+      if (entry) entry.value = Math.round((tenths / 10) * 100) / 100;
+    }
+  } catch (err) {
+    logger.warn({ err }, "ODBC on-hand value unavailable — footage from mirror, $ value omitted");
   }
   return m;
 }
