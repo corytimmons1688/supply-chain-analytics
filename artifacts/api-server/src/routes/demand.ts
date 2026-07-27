@@ -1051,11 +1051,20 @@ router.post(
           const footagePerRoll =
             l.footage != null && l.rolls > 0 ? Math.round(l.footage / l.rolls) : 0;
           const rollCount = Math.min(Math.max(1, l.rolls), 200);
+          // The draft's own notes ride along, so anything the buyer typed (e.g.
+          // "TEST — please void") is visible on the PO inside Label Traxx rather
+          // than only in this dashboard.
+          const ltNotes = [
+            po.notes?.trim() || null,
+            `Created by Supply Chain Dashboard (PO ${po.id.slice(0, 8)})`,
+          ]
+            .filter(Boolean)
+            .join(" — ");
           const body: Record<string, unknown> = {
             stockNo: l.stockId,
             poDate: today,
             requestedDelivery: dateReq,
-            notes: `Created by Supply Chain Dashboard (PO ${po.id.slice(0, 8)})`,
+            notes: ltNotes,
             slittingSpec: Array.from({ length: rollCount }, () => ({
               ordered: footagePerRoll,
               exact: true,
