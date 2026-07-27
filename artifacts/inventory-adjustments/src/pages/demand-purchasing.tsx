@@ -1368,7 +1368,12 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       const r = await submitPo.mutateAsync({ id: po.id });
       await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
       toast({
-        title: r.status === "submitted_lt" ? "PO created in Label Traxx" : "PO submitted",
+        title:
+          r.status === "submitted_lt"
+            ? "PO created in Label Traxx"
+            : r.ltError
+              ? "Label Traxx rejected this PO — still a draft"
+              : "PO submitted",
         description:
           r.status === "submitted_lt"
             ? `LT PO #${(r.ltPoNumbers ?? []).join(", ")}`

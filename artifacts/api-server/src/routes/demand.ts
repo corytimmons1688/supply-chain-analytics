@@ -1032,10 +1032,15 @@ router.post(
     const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
 
     let ltPoNumbers: string[] = [];
-    let status = "submitted";
     let ltError: string | null = null;
     const { ltApiConfigured, ltPost } = await import("../lib/ltApi");
-    if (ltApiConfigured()) {
+    const ltEnabled = ltApiConfigured();
+    // When LT writes are enabled the PO is only "submitted" once Label Traxx has
+    // actually created it. A failed write must leave the record as-is (draft) so
+    // Submit stays retryable and Delete still works — previously a rejected write
+    // still flipped the status to "submitted", stranding it in both directions.
+    let status = ltEnabled ? po.status : "submitted";
+    if (ltEnabled) {
       // Official LT Cloud API: POST /stock-purchase-order-create goes through
       // Label Traxx's own app layer (PO numbering, supplier, costing). One PO
       // per line; slittingSpec carries one row per master roll at the stock's
@@ -1080,9 +1085,10 @@ router.post(
             (created?.["poNumber"] != null ? String(created["poNumber"]) : null);
           if (assigned) ltPoNumbers.push(String(assigned));
         }
-        status = ltPoNumbers.length > 0 ? "submitted_lt" : "submitted";
+        status = ltPoNumbers.length > 0 ? "submitted_lt" : po.status;
       } catch (e) {
         ltError = e instanceof Error ? e.message : String(e);
+        status = po.status; // stay draft; the caller sees ltError and can retry
       }
     }
 
