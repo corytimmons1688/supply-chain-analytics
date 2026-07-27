@@ -399,6 +399,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MaterialPoUpdateResult" }
+    delete:
+      operationId: deleteMaterialPo
+      tags: [demand]
+      summary: Delete an unsent draft PO (submitted POs must be voided in Label Traxx)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, deleted]
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean }
+        "409":
+          description: Not a draft — already submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  status: { type: string }
+                  ltPoNumbers: { type: string, nullable: true }
   /demand/pos/{id}/submit:
     post:
       operationId: submitMaterialPo

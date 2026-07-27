@@ -9,6 +9,7 @@ import {
   useCreateMaterialPo,
   useSubmitMaterialPo,
   useUpdateMaterialPo,
+  useDeleteMaterialPo,
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
@@ -34,7 +35,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -1219,6 +1220,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
   const createPo = useCreateMaterialPo();
   const submitPo = useSubmitMaterialPo();
   const updatePo = useUpdateMaterialPo();
+  const deletePo = useDeleteMaterialPo();
 
   const printPo = (po: MaterialPo) => {
     // Open the window synchronously (popup-blocker safe), then fill it from
@@ -1240,6 +1242,25 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       toast({ title: "Failed", description: String(e), variant: "destructive" });
     }
   };
+
+  /** Delete an unsent draft. Confirmed first — removes the PO and its lines. */
+  const handleDelete = async (po: MaterialPo) => {
+    const lineCount = po.lines?.length ?? 0;
+    const ok = window.confirm(
+      `Delete this draft PO for ${po.vendorName}?\n\n` +
+        `${lineCount} line${lineCount === 1 ? "" : "s"} will be removed. This can't be undone.\n` +
+        `Nothing has been sent to the vendor or Label Traxx.`,
+    );
+    if (!ok) return;
+    try {
+      await deletePo.mutateAsync({ id: po.id });
+      await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
+      toast({ title: "Draft deleted", description: `${po.vendorName} draft removed` });
+    } catch (e) {
+      toast({ title: "Could not delete", description: String(e), variant: "destructive" });
+    }
+  };
+
   const [lines, setLines] = React.useState<SuggestionLine[]>([]);
 
   React.useEffect(() => {
@@ -1632,6 +1653,19 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       onClick={() => handleSubmit(po)}
                     >
                       <Send className="w-3.5 h-3.5" /> {purch?.ltWriteEnabled ? "Submit to LT" : "Submit"}
+                    </button>
+                  )}
+                  {/* Drafts only — a submitted PO exists upstream in Label Traxx
+                      and must be voided there, not erased from our history. */}
+                  {po.status === "draft" && (
+                    <button
+                      type="button"
+                      disabled={deletePo.isPending}
+                      title="Delete this unsent draft"
+                      className="inline-flex items-center gap-1 text-xs text-destructive hover:underline p-1 disabled:opacity-50"
+                      onClick={() => handleDelete(po)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Delete
                     </button>
                   )}
                   <Badge

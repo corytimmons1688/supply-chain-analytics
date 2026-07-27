@@ -1426,6 +1426,17 @@ export type ListMonthlySnapshots200 = {
   items: MonthlySnapshotSummary[];
 };
 
+export type DeleteMaterialPo200 = {
+  id: string;
+  deleted: boolean;
+};
+
+export type DeleteMaterialPo409 = {
+  error?: string;
+  status?: string;
+  ltPoNumbers?: string | null;
+};
+
 export type GetDemandSummaryParams = {
   monthsBack?: number;
   serviceLevel?: number;

@@ -26,6 +26,8 @@ import type {
   CycleCountCompletion,
   CycleCountKpi,
   CycleCountScheduleResponse,
+  DeleteMaterialPo200,
+  DeleteMaterialPo409,
   DemandConfigInput,
   DemandConfigResult,
   DemandStockDetail,
@@ -2148,6 +2150,90 @@ export const useUpdateMaterialPo = <
   TContext
 > => {
   return useMutation(getUpdateMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Delete an unsent draft PO (submitted POs must be voided in Label Traxx)
+ */
+export const getDeleteMaterialPoUrl = (id: string) => {
+  return `/api/demand/pos/${id}`;
+};
+
+export const deleteMaterialPo = async (
+  id: string,
+  options?: RequestInit,
+): Promise<DeleteMaterialPo200> => {
+  return customFetch<DeleteMaterialPo200>(getDeleteMaterialPoUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteMaterialPoMutationOptions = <
+  TError = ErrorType<DeleteMaterialPo409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["deleteMaterialPo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteMaterialPo>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteMaterialPo(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteMaterialPoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteMaterialPo>>
+>;
+
+export type DeleteMaterialPoMutationError = ErrorType<DeleteMaterialPo409>;
+
+/**
+ * @summary Delete an unsent draft PO (submitted POs must be voided in Label Traxx)
+ */
+export const useDeleteMaterialPo = <
+  TError = ErrorType<DeleteMaterialPo409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDeleteMaterialPoMutationOptions(options));
 };
 
 /**

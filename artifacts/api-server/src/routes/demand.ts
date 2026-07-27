@@ -991,6 +991,35 @@ router.put(
 );
 
 /**
+ * Delete a draft PO that never got sent (lines cascade).
+ *
+ * Only `draft` status is deletable: once a PO is submitted — especially to Label
+ * Traxx, where a real purchaseorder now exists — removing our record would hide
+ * an order that still exists upstream. Those must be voided in LT instead.
+ */
+router.delete(
+  "/demand/pos/:id",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
+    if (po.status !== "draft") {
+      return void res.status(409).json({
+        error:
+          po.ltPoNumbers
+            ? `Already submitted to Label Traxx as PO ${po.ltPoNumbers}. Void it in Label Traxx instead of deleting the record.`
+            : "Only unsent drafts can be deleted — this PO has already been submitted.",
+        status: po.status,
+        ltPoNumbers: po.ltPoNumbers ?? null,
+      });
+    }
+    await db.delete(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
+    await db.delete(materialPoTable).where(eq(materialPoTable.id, id));
+    res.json({ id, deleted: true });
+  }),
+);
+
+/**
  * Submit a PO: marks it submitted here and (when LT writes are enabled)
  * creates one Label Traxx purchaseorder row per line through the gateway.
  */

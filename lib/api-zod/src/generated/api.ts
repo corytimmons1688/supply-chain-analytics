@@ -963,6 +963,18 @@ export const UpdateMaterialPoResponse = zod.object({
 });
 
 /**
+ * @summary Delete an unsent draft PO (submitted POs must be voided in Label Traxx)
+ */
+export const DeleteMaterialPoParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteMaterialPoResponse = zod.object({
+  id: zod.string(),
+  deleted: zod.boolean(),
+});
+
+/**
  * @summary Submit a material PO (records it, emails vendor, creates LT PO when enabled)
  */
 export const SubmitMaterialPoParams = zod.object({

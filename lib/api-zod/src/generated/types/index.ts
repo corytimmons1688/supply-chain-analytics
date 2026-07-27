@@ -26,6 +26,8 @@ export * from "./cycleCountTaskAbcClass";
 export * from "./cycleCountWeek";
 export * from "./dazpakSignal";
 export * from "./dazpakSignalLinesItem";
+export * from "./deleteMaterialPo200";
+export * from "./deleteMaterialPo409";
 export * from "./demandConfigInput";
 export * from "./demandConfigResult";
 export * from "./demandPoint";
