@@ -3,7 +3,7 @@ import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
-import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates } from "../lib/lt-sync";
+import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates, syncLtPos } from "../lib/lt-sync";
 import { performDazpakSync } from "../lib/dazpak-sync";
 import { dazpakConfigured } from "../lib/dazpakApi";
 
@@ -54,10 +54,11 @@ router.get("/cron/netsuite-sync", async (req, res, next) => {
 });
 
 /**
- * Lightweight LabelTraxx roll refresh — on-hand rolls + roll-detail dates and
- * used-ticket numbers only (no NetSuite/quality/ticket work). Fast (~15-30s),
- * so it can run every ~15 min to keep on-hand and consumption-netting current
- * through the day without the heavy full sync.
+ * Lightweight LabelTraxx refresh — on-hand rolls, roll-detail dates/used-ticket
+ * numbers, and changed POs (notes, tracking references, promised dates). No
+ * NetSuite/quality/ticket work, so it stays fast (~20-40s) and can run every
+ * ~15 min to keep on-hand, consumption-netting and PO notes current through the
+ * day without waiting on the hourly full sync.
  */
 router.get("/cron/lt-rolls", async (req, res, next) => {
   try {
@@ -67,12 +68,20 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
     // for consumption netting).
     const onHand = await syncLtOnHandRolls();
     const dates = await syncLtRollDates({ limit: 2000 });
-    const out = {
+    const out: Record<string, unknown> = {
       onHandRolls: onHand.onHand,
       newlyUsedRolls: onHand.newlyUsed,
       rollDatesEnriched: dates.enriched,
     };
-    logger.info({ out }, "LT roll refresh ran");
+    // Changed POs: buyers add tracking/ETA notes through the day and expect to
+    // see them promptly. Incremental (ChangedSinceDate), so it's a handful of
+    // detail fetches. Isolated so a PO hiccup can't cost us the roll refresh.
+    try {
+      out["pos"] = (await syncLtPos({})).pos;
+    } catch (err) {
+      out["pos"] = { error: err instanceof Error ? err.message : String(err) };
+    }
+    logger.info({ out }, "LT frequent refresh ran");
     res.json(out);
   } catch (err) {
     next(err);

@@ -67,7 +67,8 @@ export const CARRIERS: CarrierDef[] = [
   {
     key: "rl",
     label: "R+L Carriers",
-    re: /\b(R\s*\+\s*L|RL\s+CARRIERS)\b/i,
+    // Written as "R&L Carriers", "R+L", "RL Carriers" — accept & or + or neither.
+    re: /\bR\s*[&+]?\s*L(?:\s+CARRIERS)?\b/i,
     trackUrl: (n) => `https://www2.rlcarriers.com/freight/shipping/shipment-tracing?pro=${encodeURIComponent(n)}&docType=PRO`,
   },
 ];
@@ -79,11 +80,19 @@ export type NoteSegment =
 /** A UPS 1Z barcode is unambiguous, so it links even without the carrier word. */
 const UPS_1Z = /\b1Z[0-9A-Z]{16}\b/i;
 /**
- * Tracking number following a carrier name: optional PRO/TRACKING/# label, then
- * the digits. LTL PROs run 8-12 digits; parcel numbers can be longer.
+ * Tracking number following a carrier name. Between the two we tolerate only
+ * punctuation and known filler words — carrier suffixes ("Carriers", "Freight",
+ * "Logistics") and reference labels ("PRO", "PRO#", "Tracking", "BOL"). Keeping
+ * the gap to a known vocabulary avoids grabbing an unrelated number later in the
+ * note (e.g. a date or quantity). LTL PROs run 8-12 digits; parcel can be longer.
  */
-const NUM_AFTER_CARRIER =
-  /^[\s:#-]*(?:PRO(?:\s*#|\s*NO\.?|\s*NUM(?:BER)?)?|TRACK(?:ING)?(?:\s*#)?|BOL|#)?[\s:#-]*((?:1Z[0-9A-Z]{16})|\d{8,22})\b/i;
+const NUM_AFTER_CARRIER = new RegExp(
+  "^(?:[\\s:#,.\\-]|" +
+    "CARRIERS?\\b|FREIGHT\\b|LOGISTICS\\b|EXPRESS\\b|LINES?\\b|" +
+    "PRO\\b|TRACKING\\b|TRACK\\b|BOL\\b|NO\\.?\\b|NUMBERS?\\b|NUM\\b" +
+    ")*((?:1Z[0-9A-Z]{16})|\\d{8,22})\\b",
+  "i",
+);
 
 /**
  * Split a note into plain text and linkable carrier-tracking segments.
