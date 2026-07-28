@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, vendorContactTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
@@ -743,6 +743,32 @@ interface PoLineInput {
   estCost?: number | null;
 }
 
+/** ` (MFG Spec PTS9592-2)`, or nothing when the stock has no spec number. */
+function specSuffix(mfgSpecNum?: string | null): string {
+  const spec = mfgSpecNum?.trim();
+  return spec ? ` (MFG Spec ${spec})` : "";
+}
+
+/**
+ * MFG spec numbers for the stocks on a PO, straight from the Label Traxx stock
+ * mirror. About a quarter of active stocks have no spec number, so callers must
+ * treat a miss as normal rather than an error.
+ */
+async function mfgSpecsFor(stockIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(stockIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ stockId: ltStockTable.stockId, mfgSpecNum: ltStockTable.mfgSpecNum })
+    .from(ltStockTable)
+    .where(inArray(ltStockTable.stockId, ids));
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    const spec = r.mfgSpecNum?.trim();
+    if (spec) out.set(r.stockId, spec);
+  }
+  return out;
+}
+
 function poEmail(po: {
   vendorName: string;
   vendorEmails: string | null;
@@ -750,7 +776,15 @@ function poEmail(po: {
   /** Label Traxx PO number(s) once assigned, so the vendor can quote them. */
   ltPoNumbers?: string | null;
   requestedDeliveryDate: string | null;
-  lines: { stockId: string; description: string | null; rolls: number; footage: number | null; estCost: number | null }[];
+  lines: {
+    stockId: string;
+    description: string | null;
+    rolls: number;
+    footage: number | null;
+    estCost: number | null;
+    /** The vendor's own spec number for the material, when Label Traxx has one. */
+    mfgSpecNum?: string | null;
+  }[];
 }): { to: string; cc: string; subject: string; body: string } {
   const lines = po.lines
     .map(
@@ -771,12 +805,13 @@ function poEmail(po: {
   return {
     to: parseEmails(po.vendorEmails).join(","),
     cc: parseEmails(po.vendorCcEmails ?? null).join(","),
-    // POs are 1 material : 1 PO, so name the stock in the subject; fall back to
-    // a list if a legacy multi-line draft ever shows up.
+    // POs are 1 material : 1 PO, so name the stock in the subject — with the MFG
+    // spec number when we have one, since that's how the vendor identifies the
+    // material on their end. Falls back to a list for a legacy multi-line draft.
     subject:
       `Calyx Containers PO${poRef} — ${po.vendorName} — ` +
       (po.lines.length === 1
-        ? `Stock #${po.lines[0]!.stockId}`
+        ? `Stock #${po.lines[0]!.stockId}${specSuffix(po.lines[0]!.mfgSpecNum)}`
         : po.lines.length <= 3
           ? po.lines.map((l) => `#${l.stockId}`).join(", ")
           : `${po.lines.length} items`),
@@ -908,12 +943,13 @@ router.post(
     }));
     await db.insert(materialPoLineTable).values(lineValues);
     const contacts = await vendorEmailsFor(vendorName, b.vendorEmails ?? null);
+    const specs = await mfgSpecsFor(lineValues.map((l) => l.stockId));
     const email = poEmail({
       vendorName,
       vendorEmails: contacts.to,
       vendorCcEmails: contacts.cc,
       requestedDeliveryDate: b.requestedDeliveryDate ?? null,
-      lines: lineValues,
+      lines: lineValues.map((l) => ({ ...l, mfgSpecNum: specs.get(l.stockId) ?? null })),
     });
     res.json({ id: po!.id, status: "draft", email });
   }),
@@ -1282,6 +1318,7 @@ router.post(
       .where(eq(materialPoTable.id, id));
 
     const submitContacts = await vendorEmailsFor(po.vendorName, po.vendorEmails);
+    const submitSpecs = await mfgSpecsFor(lines.map((l) => l.stockId));
     const email = poEmail({
       vendorName: po.vendorName,
       vendorEmails: submitContacts.to,
@@ -1294,6 +1331,7 @@ router.post(
         rolls: l.rolls,
         footage: l.footage,
         estCost: l.estCost,
+        mfgSpecNum: submitSpecs.get(l.stockId) ?? null,
       })),
     });
     res.json({ id, status, ltPoNumbers, ltWriteEnabled: true, ltError, email });

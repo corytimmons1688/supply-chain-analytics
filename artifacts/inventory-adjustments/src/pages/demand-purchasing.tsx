@@ -1388,6 +1388,15 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     }
   };
 
+  const specByStock = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const i of purch?.items ?? []) {
+      const spec = i.mfgSpecNum?.trim();
+      if (spec) m.set(i.stockId, spec);
+    }
+    return m;
+  }, [purch]);
+
   // Vendor PO email built client-side from the PO's single material line.
   const poMailto = (po: MaterialPo): string => {
     const l = po.lines[0];
@@ -1402,7 +1411,12 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       (po.requestedDeliveryDate ? `Requested delivery: ${po.requestedDeliveryDate}\n` : "") +
       `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
       `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
-    const subject = `Calyx Containers PO${poRef} — ${po.vendorName} — Stock #${l?.stockId ?? ""}`;
+    // The MFG spec number is how the vendor identifies the material on their
+    // end, so put it in the subject when Label Traxx has one.
+    const spec = l ? (specByStock.get(l.stockId) ?? "") : "";
+    const subject =
+      `Calyx Containers PO${poRef} — ${po.vendorName} — Stock #${l?.stockId ?? ""}` +
+      (spec ? ` (MFG Spec ${spec})` : "");
     const cc = po.vendorCcEmails ? `&cc=${encodeURIComponent(po.vendorCcEmails)}` : "";
     return `mailto:${encodeURIComponent(po.vendorEmails ?? "")}?subject=${encodeURIComponent(subject)}${cc}&body=${encodeURIComponent(body)}`;
   };
