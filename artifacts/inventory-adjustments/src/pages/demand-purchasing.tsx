@@ -2418,9 +2418,11 @@ function VendorContactsCard() {
   ) => {
     const current = (data?.items ?? []).find((v) => v.vendorName === vendorName);
     try {
+      // Vendor name rides in the body — names like "Derprosa/Taghleef" contain
+      // a slash and cannot be a URL path segment.
       await setContact.mutateAsync({
-        vendorName,
         data: {
+          vendorName,
           toEmails: patch.toEmails !== undefined ? patch.toEmails : (current?.toEmails ?? null),
           ccEmails: patch.ccEmails !== undefined ? patch.ccEmails : (current?.ccEmails ?? null),
           agentEnabled: patch.agentEnabled !== undefined ? patch.agentEnabled : (current?.agentEnabled ?? false),

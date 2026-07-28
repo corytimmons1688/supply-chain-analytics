@@ -1133,12 +1133,20 @@ router.get(
 );
 
 /** Save a vendor's To/CC PO addresses (blank clears). */
+// Vendor name travels in the BODY, not the path — names like
+// "Derprosa/Taghleef" contain a slash, which a path segment can't carry
+// reliably (Express saw a different route and 404'd).
 router.put(
-  "/demand/vendor-contacts/:vendorName",
+  "/demand/vendor-contacts/save",
   asyncHandler(async (req, res) => {
-    const vendorName = String(req.params["vendorName"] ?? "").trim();
+    const b = (req.body ?? {}) as {
+      vendorName?: string;
+      toEmails?: string | null;
+      ccEmails?: string | null;
+      agentEnabled?: boolean;
+    };
+    const vendorName = String(b.vendorName ?? "").trim();
     if (!vendorName) return void res.status(400).json({ error: "vendorName required" });
-    const b = (req.body ?? {}) as { toEmails?: string | null; ccEmails?: string | null; agentEnabled?: boolean };
     // Keep only well-formed addresses so a stray word can't end up as a recipient.
     const clean = (raw: string | null | undefined): string | null => {
       const list = parseEmails(raw ?? null);

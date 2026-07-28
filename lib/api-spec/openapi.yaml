@@ -395,16 +395,11 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/VendorContact" }
-  /demand/vendor-contacts/{vendorName}:
+  /demand/vendor-contacts/save:
     put:
       operationId: setVendorContact
       tags: [demand]
-      summary: Save a vendor's PO To/CC addresses
-      parameters:
-        - name: vendorName
-          in: path
-          required: true
-          schema: { type: string }
+      summary: Save a vendor's PO To/CC addresses (vendor name in the body — names may contain slashes)
       requestBody:
         required: true
         content:
@@ -1930,7 +1925,9 @@ components:
         status: { type: string, description: "Computed availability for this width (In / Ordered / Ordered Not Confirmed / Out / Without Tickets)." }
     VendorContactInput:
       type: object
+      required: [vendorName]
       properties:
+        vendorName: { type: string, description: "In the body, not the path — vendor names may contain slashes (Derprosa/Taghleef)." }
         toEmails: { type: string, nullable: true }
         ccEmails: { type: string, nullable: true }
         agentEnabled: { type: boolean, description: "Opt this vendor into the PO follow-up agent." }

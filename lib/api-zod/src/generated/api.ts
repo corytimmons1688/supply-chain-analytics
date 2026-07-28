@@ -1010,13 +1010,14 @@ export const GetVendorContactsResponse = zod.object({
 });
 
 /**
- * @summary Save a vendor's PO To/CC addresses
+ * @summary Save a vendor's PO To/CC addresses (vendor name in the body — names may contain slashes)
  */
-export const SetVendorContactParams = zod.object({
-  vendorName: zod.coerce.string(),
-});
-
 export const SetVendorContactBody = zod.object({
+  vendorName: zod
+    .string()
+    .describe(
+      "In the body, not the path — vendor names may contain slashes (Derprosa\/Taghleef).",
+    ),
   toEmails: zod.string().nullish(),
   ccEmails: zod.string().nullish(),
   agentEnabled: zod

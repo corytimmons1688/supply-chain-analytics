@@ -7,6 +7,8 @@
  */
 
 export interface VendorContactInput {
+  /** In the body, not the path — vendor names may contain slashes (Derprosa/Taghleef). */
+  vendorName: string;
   toEmails?: string | null;
   ccEmails?: string | null;
   /** Opt this vendor into the PO follow-up agent. */

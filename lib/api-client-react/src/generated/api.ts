@@ -2155,18 +2155,17 @@ export function useGetVendorContacts<
 }
 
 /**
- * @summary Save a vendor's PO To/CC addresses
+ * @summary Save a vendor's PO To/CC addresses (vendor name in the body — names may contain slashes)
  */
-export const getSetVendorContactUrl = (vendorName: string) => {
-  return `/api/demand/vendor-contacts/${vendorName}`;
+export const getSetVendorContactUrl = () => {
+  return `/api/demand/vendor-contacts/save`;
 };
 
 export const setVendorContact = async (
-  vendorName: string,
   vendorContactInput: VendorContactInput,
   options?: RequestInit,
 ): Promise<VendorContactSaved> => {
-  return customFetch<VendorContactSaved>(getSetVendorContactUrl(vendorName), {
+  return customFetch<VendorContactSaved>(getSetVendorContactUrl(), {
     ...options,
     method: "PUT",
     headers: { "Content-Type": "application/json", ...options?.headers },
@@ -2181,14 +2180,14 @@ export const getSetVendorContactMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof setVendorContact>>,
     TError,
-    { vendorName: string; data: BodyType<VendorContactInput> },
+    { data: BodyType<VendorContactInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof setVendorContact>>,
   TError,
-  { vendorName: string; data: BodyType<VendorContactInput> },
+  { data: BodyType<VendorContactInput> },
   TContext
 > => {
   const mutationKey = ["setVendorContact"];
@@ -2202,11 +2201,11 @@ export const getSetVendorContactMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof setVendorContact>>,
-    { vendorName: string; data: BodyType<VendorContactInput> }
+    { data: BodyType<VendorContactInput> }
   > = (props) => {
-    const { vendorName, data } = props ?? {};
+    const { data } = props ?? {};
 
-    return setVendorContact(vendorName, data, requestOptions);
+    return setVendorContact(data, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -2219,7 +2218,7 @@ export type SetVendorContactMutationBody = BodyType<VendorContactInput>;
 export type SetVendorContactMutationError = ErrorType<unknown>;
 
 /**
- * @summary Save a vendor's PO To/CC addresses
+ * @summary Save a vendor's PO To/CC addresses (vendor name in the body — names may contain slashes)
  */
 export const useSetVendorContact = <
   TError = ErrorType<unknown>,
@@ -2228,14 +2227,14 @@ export const useSetVendorContact = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof setVendorContact>>,
     TError,
-    { vendorName: string; data: BodyType<VendorContactInput> },
+    { data: BodyType<VendorContactInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof setVendorContact>>,
   TError,
-  { vendorName: string; data: BodyType<VendorContactInput> },
+  { data: BodyType<VendorContactInput> },
   TContext
 > => {
   return useMutation(getSetVendorContactMutationOptions(options));
