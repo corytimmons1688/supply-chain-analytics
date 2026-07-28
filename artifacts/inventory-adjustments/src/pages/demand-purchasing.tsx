@@ -1433,6 +1433,12 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     try {
       const r = await submitPo.mutateAsync({ id: po.id });
       await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
+      // A submitted PO counts as on-order immediately (the summary route folds
+      // in dashboard POs the LT mirror hasn't caught up to) — refetch so the
+      // suggestion it satisfies disappears right away.
+      await queryClient.invalidateQueries({
+        predicate: (q) => String(q.queryKey[0] ?? "").includes("/demand/summary"),
+      });
       toast({
         title:
           r.status === "submitted_lt"

@@ -522,7 +522,10 @@ export default function DemandPlanning() {
             type="button"
             onClick={() => setTab(key)}
             className={cn(
-              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              // focus-visible ring instead of the browser's default focus
+              // rectangle, which lingered around the tab after every click.
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors outline-none",
+              "focus-visible:ring-2 focus-visible:ring-ring rounded-t-sm",
               tab === key
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground",

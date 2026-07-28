@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, ltPoTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -182,6 +182,50 @@ router.get(
       let arr = openPosByStock.get(p.stockId);
       if (!arr) { arr = []; openPosByStock.set(p.stockId, arr); }
       arr.push(p);
+    }
+
+    // Dashboard POs already submitted (recorded here and/or created in Label
+    // Traxx) but not yet visible in the LT mirror — the mirror syncs every
+    // ~15 min, and until it catches up a just-submitted PO must still count as
+    // on-order, or the stock keeps suggesting the reorder the buyer just made.
+    // Once any of the PO's LT numbers appears in the mirror, the mirror row is
+    // authoritative and the dashboard record no longer adds supply.
+    {
+      const mirrored = new Set((await db.select({ n: ltPoTable.poNumber }).from(ltPoTable)).map((r) => r.n));
+      const dashPos = (
+        await db
+          .select()
+          .from(materialPoTable)
+          .where(inArray(materialPoTable.status, ["submitted", "submitted_lt"]))
+      ).filter((p) => {
+        const nums = (p.ltPoNumbers ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+        return nums.every((n) => !mirrored.has(n));
+      });
+      if (dashPos.length) {
+        const dashLines = await db
+          .select()
+          .from(materialPoLineTable)
+          .where(inArray(materialPoLineTable.poId, dashPos.map((p) => p.id)));
+        const poById = new Map(dashPos.map((p) => [p.id, p]));
+        for (const l of dashLines) {
+          const po = poById.get(l.poId)!;
+          const arr = openPosByStock.get(l.stockId) ?? [];
+          arr.push({
+            poNumber: (po.ltPoNumbers ?? "").split(",")[0]?.trim() || `DASH-${po.id.slice(0, 6).toUpperCase()}`,
+            stockId: l.stockId,
+            poDateIso: po.createdAt.toISOString().slice(0, 10),
+            dueDateIso: null, // nothing promised yet → unconfirmed supply
+            requestedDeliveryIso: po.requestedDeliveryDate,
+            quantityRolls: l.rolls,
+            masterWidth: l.width ?? stockInfo.get(l.stockId)?.masterWidth ?? null,
+            orderedFootage: l.footage ?? 0,
+            notes: po.notes,
+            description: l.description,
+            daysOpen: null,
+          });
+          openPosByStock.set(l.stockId, arr);
+        }
+      }
     }
 
     // Dazpak make-and-hold horizon dates (release ~15 biz days, make 10 weeks).
