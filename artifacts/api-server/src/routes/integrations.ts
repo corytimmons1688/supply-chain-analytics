@@ -57,9 +57,9 @@ router.get(
 router.get(
   "/integrations/gmail/callback",
   asyncHandler(async (req, res) => {
-    // Land back on Demand Planning → Configuration, where the connect card lives.
+    // Land back on Demand Planning → Email, where the connect card lives.
     const back = (params: Record<string, string>) =>
-      res.redirect(`/demand?tab=config&${new URLSearchParams(params).toString()}`);
+      res.redirect(`/demand?tab=email&${new URLSearchParams(params).toString()}`);
 
     const error = typeof req.query["error"] === "string" ? req.query["error"] : null;
     if (error) return void back({ gmail: "error", reason: error });

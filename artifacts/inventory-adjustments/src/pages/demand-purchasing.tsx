@@ -1875,6 +1875,21 @@ function EditableCell({
   );
 }
 
+/**
+ * Email tab — everything about PO email in one place: the Gmail connection the
+ * mail goes out through, the follow-up agent's approval queue, and the
+ * per-vendor To/CC addresses + agent opt-in.
+ */
+export function EmailTab() {
+  return (
+    <div className="space-y-4">
+      <GmailCard />
+      <PoAgentQueueCard />
+      <VendorContactsCard />
+    </div>
+  );
+}
+
 export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1914,8 +1929,6 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
 
   return (
     <div className="space-y-4">
-    <GmailCard />
-    <VendorContactsCard />
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
