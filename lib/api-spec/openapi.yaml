@@ -523,6 +523,30 @@ paths:
                 type: object
                 properties:
                   error: { type: string }
+  /demand/pos/{id}/send-test:
+    post:
+      operationId: sendMaterialPoTest
+      tags: [demand]
+      summary: Send the PO email to the connected mailbox only, as a dry run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Test sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoSendResult" }
+        "409":
+          description: Gmail is not set up or not connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
   /integrations/gmail:
     get:
       operationId: getGmailStatus

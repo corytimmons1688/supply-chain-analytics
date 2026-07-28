@@ -94,6 +94,7 @@ import type {
   SeedCurrentAsl200,
   SeedVendors200,
   SendMaterialPo409,
+  SendMaterialPoTest409,
   StockGoal,
   SyncLabeltraxxLeadTimesParams,
   VarianceInvestigation,
@@ -2659,6 +2660,90 @@ export const useSendMaterialPo = <
   TContext
 > => {
   return useMutation(getSendMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Send the PO email to the connected mailbox only, as a dry run
+ */
+export const getSendMaterialPoTestUrl = (id: string) => {
+  return `/api/demand/pos/${id}/send-test`;
+};
+
+export const sendMaterialPoTest = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PoSendResult> => {
+  return customFetch<PoSendResult>(getSendMaterialPoTestUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getSendMaterialPoTestMutationOptions = <
+  TError = ErrorType<SendMaterialPoTest409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendMaterialPoTest>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendMaterialPoTest>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["sendMaterialPoTest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendMaterialPoTest>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return sendMaterialPoTest(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendMaterialPoTestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendMaterialPoTest>>
+>;
+
+export type SendMaterialPoTestMutationError = ErrorType<SendMaterialPoTest409>;
+
+/**
+ * @summary Send the PO email to the connected mailbox only, as a dry run
+ */
+export const useSendMaterialPoTest = <
+  TError = ErrorType<SendMaterialPoTest409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendMaterialPoTest>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendMaterialPoTest>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getSendMaterialPoTestMutationOptions(options));
 };
 
 /**

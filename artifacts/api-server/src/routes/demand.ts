@@ -1377,6 +1377,86 @@ router.get(
 );
 
 /**
+ * Send the PO to the connected mailbox instead of the vendor — a dry run to see
+ * exactly what a vendor would receive, attachment included.
+ *
+ * The recipient is deliberately not a parameter: it's always the connected
+ * account, so a test can never misfire to a vendor. It also leaves emailedAt
+ * alone, because nothing was sent to the vendor.
+ */
+router.post(
+  "/demand/pos/:id/send-test",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    try {
+      const gmail = await import("../lib/gmail");
+      if (!gmail.gmailConfigured()) {
+        return void res.status(409).json({
+          error: "Gmail is not set up on this deployment — GOOGLE_OAUTH_CLIENT_ID/SECRET are missing.",
+        });
+      }
+      const connection = await gmail.gmailConnection();
+      if (!connection) {
+        return void res
+          .status(409)
+          .json({ error: "Gmail is not connected — connect it in Demand Planning → Configuration." });
+      }
+      if (!connection.accountEmail) {
+        return void res
+          .status(409)
+          .json({ error: "The connected mailbox address is unknown — reconnect Gmail to capture it." });
+      }
+
+      const { po, email } = await poMailPayload(id);
+      const realTo = parseEmails(email.to);
+      const realCc = parseEmails(email.cc);
+      const doc = await assemblePoDocument(id);
+      const { renderPoPdf, poPdfFilename } = await import("../lib/po-pdf");
+      const pdf = await renderPoPdf(doc);
+
+      // Make it unmistakable that this is a test, in case it ever gets forwarded.
+      const banner =
+        `[TEST — this copy went only to you, not to ${po.vendorName}]\n` +
+        `A real send would go to: ${realTo.join(", ") || "(no To address set)"}` +
+        (realCc.length ? `\nand CC: ${realCc.join(", ")}` : "") +
+        `\n\n----------------------------------------\n\n`;
+
+      const sent = await gmail.sendMail({
+        to: [connection.accountEmail],
+        subject: `[TEST] ${email.subject}`,
+        text: banner + email.body,
+        html:
+          `<div style="font-family:Helvetica,Arial,sans-serif;font-size:13px;background:#fff8e1;border:1px solid #ffe082;` +
+          `padding:10px 12px;margin-bottom:16px;border-radius:4px">` +
+          `<strong>TEST — this copy went only to you, not to ${po.vendorName}.</strong><br>` +
+          `A real send would go to: ${realTo.join(", ") || "(no To address set)"}` +
+          (realCc.length ? `<br>and CC: ${realCc.join(", ")}` : "") +
+          `</div>` +
+          email.html,
+        attachments: [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }],
+      });
+
+      logger.info({ poId: id, to: connection.accountEmail, messageId: sent.id }, "Test PO email sent to self");
+      res.json({
+        sent: true,
+        test: true,
+        to: [connection.accountEmail],
+        cc: [],
+        subject: `[TEST] ${email.subject}`,
+        attachmentName: poPdfFilename(doc),
+        messageId: sent.id,
+        threadId: sent.threadId,
+      });
+    } catch (e) {
+      if (e instanceof PoDocumentError) return void res.status(e.status).json({ error: e.message });
+      const message = e instanceof Error ? e.message : String(e);
+      logger.error({ poId: id, err: message }, "Test PO send failed");
+      res.status(502).json({ error: message });
+    }
+  }),
+);
+
+/**
  * Email the PO to the vendor through Gmail, with the PO PDF attached. Sends as
  * the connected mailbox, so it lands in that account's Sent folder and vendor
  * replies come straight back. Only ever called from an explicit confirmation.

@@ -1088,6 +1088,25 @@ export const SendMaterialPoResponse = zod.object({
 });
 
 /**
+ * @summary Send the PO email to the connected mailbox only, as a dry run
+ */
+export const SendMaterialPoTestParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const SendMaterialPoTestResponse = zod.object({
+  sent: zod.boolean(),
+  to: zod.array(zod.string()),
+  cc: zod.array(zod.string()),
+  subject: zod.string(),
+  attachmentName: zod.string(),
+  messageId: zod.string().optional(),
+  threadId: zod.string().optional(),
+  emailedAt: zod.string().optional(),
+  from: zod.string().nullish(),
+});
+
+/**
  * @summary Whether PO email can be sent, and from which mailbox
  */
 export const GetGmailStatusResponse = zod.object({

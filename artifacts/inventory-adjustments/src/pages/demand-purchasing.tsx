@@ -17,6 +17,7 @@ import {
   getGetGmailStatusQueryKey,
   useDisconnectGmail,
   useSendMaterialPo,
+  useSendMaterialPoTest,
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
@@ -2011,6 +2012,7 @@ function SendPoDialog({
 }) {
   const { toast } = useToast();
   const send = useSendMaterialPo();
+  const sendTest = useSendMaterialPoTest();
   const [preview, setPreview] = React.useState<EmailPreview | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -2115,14 +2117,37 @@ function SendPoDialog({
           </div>
         )}
 
-        <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>
-            Cancel
+        <DialogFooter className="sm:justify-between gap-2">
+          {/* Dry run to your own inbox — never reaches the vendor. */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!preview?.gmailAccount || sendTest.isPending}
+            title={
+              preview?.gmailAccount
+                ? `Send a copy to ${preview.gmailAccount} only — the vendor gets nothing`
+                : "Connect Gmail first"
+            }
+            onClick={async () => {
+              try {
+                const r = await sendTest.mutateAsync({ id: po.id });
+                toast({ title: "Test sent to you", description: `${(r.to ?? []).join(", ")} — vendor not contacted` });
+              } catch (e) {
+                toast({ title: "Test send failed", description: String(e), variant: "destructive" });
+              }
+            }}
+          >
+            {sendTest.isPending ? "Sending test…" : "Send test to myself"}
           </Button>
-          <Button size="sm" disabled={blocked || send.isPending} onClick={doSend}>
-            <Send className="w-3.5 h-3.5 mr-1" />
-            {send.isPending ? "Sending…" : preview?.emailedAt ? "Send again" : "Send PO"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={blocked || send.isPending} onClick={doSend}>
+              <Send className="w-3.5 h-3.5 mr-1" />
+              {send.isPending ? "Sending…" : preview?.emailedAt ? "Send again" : `Send to ${po.vendorName}`}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1514,6 +1514,10 @@ export type SendMaterialPo409 = {
   error?: string;
 };
 
+export type SendMaterialPoTest409 = {
+  error?: string;
+};
+
 export type GetDemandSummaryParams = {
   monthsBack?: number;
   serviceLevel?: number;
