@@ -18,6 +18,13 @@ import {
   useDisconnectGmail,
   useSendMaterialPo,
   useSendMaterialPoTest,
+  useGetPoAgentQueue,
+  getGetPoAgentQueueQueryKey,
+  useApprovePoAgentDraft,
+  useDismissPoAgentDraft,
+  useResolvePoAttention,
+  useGetPoTimeline,
+  getGetPoTimelineQueryKey,
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
@@ -1240,6 +1247,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     query: { queryKey: getGetGmailStatusQueryKey(), staleTime: 60_000 },
   });
   const [sendingPo, setSendingPo] = React.useState<MaterialPo | null>(null);
+  const [activityPo, setActivityPo] = React.useState<MaterialPo | null>(null);
 
   // PO addresses live at the vendor level now, so the per-vendor "no PO email"
   // warning has to read vendor_contact — not the legacy per-stock field, which
@@ -1657,6 +1665,9 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
         })
       )}
 
+      <PoAgentQueueCard />
+      {activityPo && <PoActivityDialog po={activityPo} onClose={() => setActivityPo(null)} />}
+
       {(poList?.items.length ?? 0) > 0 && (
         <Card>
           <CardHeader className="pb-2">
@@ -1682,6 +1693,11 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     <div className="mt-0.5 text-muted-foreground inline-flex items-center gap-1">
                       <Mail className="w-3.5 h-3.5" /> Emailed {new Date(po.emailedAt).toLocaleDateString()} to{" "}
                       {po.emailedTo}
+                    </div>
+                  )}
+                  {po.needsAttention && po.attentionReason && (
+                    <div className="mt-0.5 text-amber-700 dark:text-amber-400 inline-flex items-center gap-1">
+                      ⚠ {po.attentionReason}
                     </div>
                   )}
                 </div>
@@ -1755,6 +1771,36 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       onClick={() => handleDelete(po)}
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Delete
+                    </button>
+                  )}
+                  {po.agentState && (
+                    <button
+                      type="button"
+                      title="View email activity timeline"
+                      onClick={() => setActivityPo(po)}
+                      className="focus:outline-none"
+                    >
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "cursor-pointer",
+                          po.needsAttention
+                            ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40"
+                            : po.agentState === "acknowledged" || po.agentState === "shipped"
+                              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40"
+                              : "text-muted-foreground",
+                        )}
+                      >
+                        {po.needsAttention
+                          ? "needs attention"
+                          : po.agentState === "awaiting_ack"
+                            ? "awaiting ack"
+                            : po.agentState === "acknowledged"
+                              ? `ack'd${po.promisedDate ? ` · promised ${po.promisedDate}` : ""}`
+                              : po.agentState === "shipped"
+                                ? "shipped"
+                                : po.agentState}
+                      </Badge>
                     </button>
                   )}
                   <Badge
@@ -2204,9 +2250,15 @@ function GmailCard() {
             <CardTitle className="text-base flex items-center gap-2">
               <Send className="w-4 h-4 text-muted-foreground" /> Send PO Email
               {connected ? (
-                <Badge variant="outline" className="text-emerald-700 border-emerald-300 dark:text-emerald-400">
-                  Connected
-                </Badge>
+                data?.needsReconnect ? (
+                  <Badge variant="outline" className="text-amber-700 border-amber-300 dark:text-amber-400">
+                    Reconnect needed
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-emerald-700 border-emerald-300 dark:text-emerald-400">
+                    Connected
+                  </Badge>
+                )
               ) : (
                 <Badge variant="outline" className="text-amber-700 border-amber-300 dark:text-amber-400">
                   Not connected
@@ -2215,11 +2267,19 @@ function GmailCard() {
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
               {connected ? (
-                <>
-                  POs are sent from <span className="font-medium text-foreground">{data?.accountEmail}</span> with the
-                  PO PDF attached, so they land in that account's Sent folder and vendor replies come back to it.
-                  Send-only access — the dashboard cannot read your mail.
-                </>
+                data?.needsReconnect ? (
+                  <>
+                    Sending works, but the PO follow-up agent needs permission to read vendor replies. Click
+                    Reconnect and approve the added "read" permission — the agent only ever reads PO threads and
+                    PO-number searches.
+                  </>
+                ) : (
+                  <>
+                    POs are sent from <span className="font-medium text-foreground">{data?.accountEmail}</span> with
+                    the PO PDF attached, so they land in that account's Sent folder and vendor replies come back to
+                    it. The follow-up agent watches those replies for the vendors you enable below.
+                  </>
+                )
               ) : configured ? (
                 <>
                   Connect a Google account to send POs straight from the dashboard, PDF attached. You'll be asked only
@@ -2294,7 +2354,10 @@ function VendorContactsCard() {
   const setContact = useSetVendorContact();
   const [q, setQ] = React.useState("");
 
-  const save = async (vendorName: string, patch: { toEmails?: string | null; ccEmails?: string | null }) => {
+  const save = async (
+    vendorName: string,
+    patch: { toEmails?: string | null; ccEmails?: string | null; agentEnabled?: boolean },
+  ) => {
     const current = (data?.items ?? []).find((v) => v.vendorName === vendorName);
     try {
       await setContact.mutateAsync({
@@ -2302,6 +2365,7 @@ function VendorContactsCard() {
         data: {
           toEmails: patch.toEmails !== undefined ? patch.toEmails : (current?.toEmails ?? null),
           ccEmails: patch.ccEmails !== undefined ? patch.ccEmails : (current?.ccEmails ?? null),
+          agentEnabled: patch.agentEnabled !== undefined ? patch.agentEnabled : (current?.agentEnabled ?? false),
         },
       });
       await queryClient.invalidateQueries({ queryKey: getGetVendorContactsQueryKey() });
@@ -2350,6 +2414,7 @@ function VendorContactsCard() {
                 <th className="text-left px-2 py-1.5 font-medium min-w-[12rem]">Vendor</th>
                 <th className="text-left px-2 py-1.5 font-medium min-w-[18rem]">To</th>
                 <th className="text-left px-2 py-1.5 font-medium min-w-[18rem]">CC</th>
+                <th className="text-center px-2 py-1.5 font-medium" title="Follow-up agent: watch for acknowledgements and queue nudges for this vendor's POs">Agent</th>
                 <th className="text-right px-2 py-1.5 font-medium">Materials</th>
               </tr>
             </thead>
@@ -2376,6 +2441,13 @@ function VendorContactsCard() {
                       onSave={(val) => save(v.vendorName, { ccEmails: val })}
                     />
                   </td>
+                  <td className="px-2 py-1.5 text-center">
+                    <Checkbox
+                      checked={v.agentEnabled ?? false}
+                      onCheckedChange={(c) => save(v.vendorName, { agentEnabled: c === true })}
+                      title="Watch this vendor's PO email for acknowledgements and queue follow-up drafts"
+                    />
+                  </td>
                   <td
                     className="px-2 py-1.5 text-right text-muted-foreground tabular-nums"
                     title={(v.stockIds ?? []).map((s) => `#${s}`).join(", ")}
@@ -2389,5 +2461,207 @@ function VendorContactsCard() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------
+// PO follow-up agent: approval queue + per-PO activity timeline.
+// ---------------------------------------------------------------------
+
+/**
+ * The agent's work queue. Drafts are follow-ups the agent WANTS to send —
+ * nothing goes out until approved here. Needs-attention rows are where the
+ * agent stopped and wants a human decision.
+ */
+function PoAgentQueueCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data } = useGetPoAgentQueue({
+    query: { queryKey: getGetPoAgentQueueQueryKey(), staleTime: 30_000 },
+  });
+  const approve = useApprovePoAgentDraft();
+  const dismiss = useDismissPoAgentDraft();
+  const resolve = useResolvePoAttention();
+  const [expanded, setExpanded] = React.useState<string | null>(null);
+
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: getGetPoAgentQueueQueryKey() }),
+      queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() }),
+    ]);
+
+  const drafts = data?.drafts ?? [];
+  const attention = data?.needsAttention ?? [];
+  if (drafts.length === 0 && attention.length === 0) return null;
+
+  return (
+    <Card className="border-amber-300/60 dark:border-amber-700/60">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Send className="w-4 h-4 text-muted-foreground" /> PO Agent — waiting on you
+          <Badge variant="secondary">{drafts.length + attention.length}</Badge>
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Follow-ups the agent drafted (nothing sends without your approval) and POs it flagged for review.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-2 text-xs">
+        {drafts.map((d) => (
+          <div key={d.id} className="rounded-md border px-3 py-2 space-y-1">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="min-w-0">
+                <span className="font-medium">{d.vendorName}</span>
+                {d.stockId && <span className="text-muted-foreground"> · Stock #{d.stockId}</span>}
+                <span className="text-muted-foreground"> · {d.kind === "ack_nudge" ? "acknowledgement nudge" : d.kind}</span>
+                <div className="text-muted-foreground truncate">To: {d.toEmails}</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setExpanded(expanded === d.id ? null : d.id)}
+                >
+                  {expanded === d.id ? "Hide" : "Review"}
+                </button>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={approve.isPending}
+                  onClick={async () => {
+                    try {
+                      await approve.mutateAsync({ id: d.id });
+                      toast({ title: "Follow-up sent", description: `${d.vendorName} — ${d.subject}` });
+                      await refresh();
+                    } catch (e) {
+                      toast({ title: "Send failed", description: String(e), variant: "destructive" });
+                    }
+                  }}
+                >
+                  Approve & send
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-muted-foreground"
+                  disabled={dismiss.isPending}
+                  onClick={async () => {
+                    await dismiss.mutateAsync({ id: d.id }).catch(() => {});
+                    await refresh();
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+            {expanded === d.id && (
+              <pre className="whitespace-pre-wrap rounded bg-muted/40 p-2 font-sans leading-relaxed">
+                {`Subject: ${d.subject}\n\n${d.body}`}
+              </pre>
+            )}
+          </div>
+        ))}
+        {attention.map((a) => (
+          <div key={a.poId} className="rounded-md border border-amber-300/60 px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+            <div className="min-w-0">
+              <span className="font-medium">{a.vendorName}</span>
+              {a.stockId && <span className="text-muted-foreground"> · Stock #{a.stockId}</span>}
+              {a.ltPoNumbers && <span className="text-muted-foreground"> · LT PO {a.ltPoNumbers}</span>}
+              <div className="text-amber-700 dark:text-amber-400">⚠ {a.reason ?? "Needs review"}</div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs shrink-0"
+              disabled={resolve.isPending}
+              onClick={async () => {
+                await resolve.mutateAsync({ id: a.poId }).catch(() => {});
+                await refresh();
+              }}
+            >
+              Mark handled
+            </Button>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Everything that happened around a PO's email conversation, plus captured vendor documents. */
+function PoActivityDialog({ po, onClose }: { po: MaterialPo; onClose: () => void }) {
+  const { data, isLoading } = useGetPoTimeline(po.id, {
+    query: { queryKey: getGetPoTimelineQueryKey(po.id) },
+  });
+  const kindLabel: Record<string, string> = {
+    sent: "Sent",
+    follow_up: "Follow-up",
+    ack: "Acknowledged",
+    ship_notice: "Ship notice",
+    delay: "Delay",
+    question: "Question",
+    ooo_or_auto: "Auto-reply",
+    other: "Email",
+    state_change: "Status",
+    note: "Note",
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-base">
+            Activity — {po.vendorName}
+            {po.ltPoNumbers ? ` · PO ${po.ltPoNumbers}` : ""}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Email conversation and agent updates for this purchase order.
+          </DialogDescription>
+        </DialogHeader>
+        {isLoading && <Skeleton className="h-40 rounded-md" />}
+        {data && (
+          <div className="space-y-3 text-xs max-h-[24rem] overflow-y-auto pr-1">
+            {(data.attachments?.length ?? 0) > 0 && (
+              <div className="rounded-md border px-3 py-2 space-y-1">
+                <div className="font-medium">Vendor documents</div>
+                {data.attachments!.map((a) => (
+                  <div key={a.id} className="flex items-center gap-2">
+                    <Printer className="w-3 h-3 text-muted-foreground" />
+                    <a
+                      href={`/api/demand/pos/${po.id}/attachments/${a.id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {a.filename}
+                    </a>
+                    <span className="text-muted-foreground">
+                      {(a.sizeBytes / 1024).toFixed(0)} KB · {new Date(a.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="space-y-1.5">
+              {(data.events ?? []).map((e) => (
+                <div key={e.id} className="flex items-start gap-2">
+                  <span className="text-muted-foreground whitespace-nowrap tabular-nums">
+                    {new Date(e.at).toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                  </span>
+                  <Badge variant="outline" className="shrink-0">
+                    {kindLabel[e.kind] ?? e.kind}
+                  </Badge>
+                  <div className="min-w-0">
+                    <div>{e.summary}</div>
+                    {e.fromAddr && e.direction === "inbound" && (
+                      <div className="text-muted-foreground truncate">{e.fromAddr}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {(data.events?.length ?? 0) === 0 && (
+                <div className="text-muted-foreground">No activity recorded yet.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

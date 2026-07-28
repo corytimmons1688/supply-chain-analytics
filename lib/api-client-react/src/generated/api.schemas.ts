@@ -573,12 +573,15 @@ export interface PurchasingItem {
 export interface VendorContactInput {
   toEmails?: string | null;
   ccEmails?: string | null;
+  /** Opt this vendor into the PO follow-up agent. */
+  agentEnabled?: boolean;
 }
 
 export interface VendorContactSaved {
   vendorName: string;
   toEmails?: string | null;
   ccEmails?: string | null;
+  agentEnabled?: boolean;
   saved: boolean;
 }
 
@@ -586,6 +589,7 @@ export interface VendorContact {
   vendorName: string;
   toEmails?: string | null;
   ccEmails?: string | null;
+  agentEnabled?: boolean;
   /** Address found on the old per-stock field, as a starting point. */
   legacyStockEmails?: string | null;
   stockCount: number;
@@ -645,6 +649,13 @@ export interface MaterialPo {
   emailedAt?: string | null;
   /** Recipients of that send (To + CC). */
   emailedTo?: string | null;
+  /** Follow-up agent state: awaiting_ack | acknowledged | shipped | closed. Null = not tracked. */
+  agentState?: string | null;
+  /** Delivery date the vendor committed to in their acknowledgement. */
+  promisedDate?: string | null;
+  /** Agent stopped and wants a human decision. */
+  needsAttention?: boolean;
+  attentionReason?: string | null;
   lines: MaterialPoLine[];
 }
 
@@ -674,6 +685,8 @@ export interface GmailStatus {
   /** Mailbox PO email is sent from. */
   accountEmail?: string | null;
   connectedAt?: string | null;
+  /** Grant predates the read scope the PO agent needs — reconnect once. */
+  needsReconnect?: boolean;
   /** Must be registered on the Google OAuth client verbatim. */
   redirectUri?: string;
 }
@@ -694,6 +707,60 @@ export interface PoEmailPreview {
   emailedTo?: string | null;
   gmailConfigured: boolean;
   gmailAccount?: string | null;
+}
+
+export interface PoAgentDraft {
+  id: string;
+  poId: string;
+  /** ack_nudge | checkin | tracking_request */
+  kind: string;
+  vendorName?: string;
+  stockId?: string | null;
+  toEmails: string;
+  ccEmails?: string | null;
+  subject: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface PoAttentionItem {
+  poId: string;
+  vendorName: string;
+  stockId?: string | null;
+  ltPoNumbers?: string | null;
+  agentState?: string | null;
+  reason?: string | null;
+}
+
+export interface PoAgentQueue {
+  drafts: PoAgentDraft[];
+  needsAttention: PoAttentionItem[];
+  /** POs the agent is actively tracking. */
+  trackedCount: number;
+}
+
+export interface PoTimelineEvent {
+  id: string;
+  at: string;
+  /** inbound | outbound | system */
+  direction: string;
+  kind: string;
+  fromAddr?: string | null;
+  subject?: string | null;
+  summary: string | null;
+}
+
+export interface PoTimelineAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface PoTimeline {
+  events: PoTimelineEvent[];
+  attachments: PoTimelineAttachment[];
 }
 
 export interface PoSendResult {
@@ -1516,6 +1583,22 @@ export type SendMaterialPo409 = {
 
 export type SendMaterialPoTest409 = {
   error?: string;
+};
+
+export type ApprovePoAgentDraft200 = {
+  sent: boolean;
+  id: string;
+  messageId?: string;
+};
+
+export type DismissPoAgentDraft200 = {
+  dismissed: boolean;
+  id: string;
+};
+
+export type ResolvePoAttention200 = {
+  resolved: boolean;
+  id: string;
 };
 
 export type GetDemandSummaryParams = {

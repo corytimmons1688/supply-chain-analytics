@@ -10,6 +10,7 @@ export interface VendorContact {
   vendorName: string;
   toEmails?: string | null;
   ccEmails?: string | null;
+  agentEnabled?: boolean;
   /** Address found on the old per-stock field, as a starting point. */
   legacyStockEmails?: string | null;
   stockCount: number;

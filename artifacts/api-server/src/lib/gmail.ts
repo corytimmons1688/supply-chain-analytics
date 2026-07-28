@@ -21,8 +21,25 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 const PROVIDER = "gmail";
 
-/** `openid email` only so Configuration can name the connected mailbox. */
-export const GMAIL_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/gmail.send"].join(" ");
+/**
+ * `openid email` names the connected mailbox in Configuration. gmail.readonly
+ * is required by the PO follow-up agent to see vendor replies and out-of-thread
+ * ERP acknowledgements. NOTE: the token could technically read the whole
+ * mailbox — the agent code only ever fetches PO threads and PO-number searches,
+ * but that is a code promise, not a scope promise (gmail.metadata can't read
+ * bodies/attachments, so it can't do this job). Cory approved the tradeoff.
+ */
+export const GMAIL_SCOPES = [
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.readonly",
+].join(" ");
+
+/** True when the stored grant predates the readonly scope — reconnect needed for the agent. */
+export function scopeSupportsRead(scope: string | null | undefined): boolean {
+  return Boolean(scope?.includes("gmail.readonly"));
+}
 
 function clientId(): string | undefined {
   return process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim() || undefined;
@@ -250,6 +267,10 @@ export interface OutgoingMail {
   attachments?: Attachment[];
   /** Address to show as From/Reply-To; defaults to the connected mailbox. */
   from?: string | null;
+  /** Gmail thread to send inside — keeps follow-ups in the PO's conversation. */
+  threadId?: string | null;
+  /** RFC 822 Message-ID being replied to, so the VENDOR's client threads it too. */
+  inReplyTo?: string | null;
 }
 
 /**
@@ -264,6 +285,8 @@ export function buildMime(mail: OutgoingMail): string {
     `To: ${mail.to.join(", ")}`,
     mail.cc?.length ? `Cc: ${mail.cc.join(", ")}` : null,
     `Subject: ${encodeHeader(mail.subject)}`,
+    mail.inReplyTo ? `In-Reply-To: ${mail.inReplyTo}` : null,
+    mail.inReplyTo ? `References: ${mail.inReplyTo}` : null,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${boundaryMixed}"`,
   ].filter(Boolean);
@@ -318,7 +341,7 @@ export async function sendMail(mail: OutgoingMail): Promise<{ id: string; thread
   const res = await fetch(SEND_URL, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ raw }),
+    body: JSON.stringify(mail.threadId ? { raw, threadId: mail.threadId } : { raw }),
   });
   const json = (await res.json().catch(() => ({}))) as {
     id?: string;
@@ -331,4 +354,107 @@ export async function sendMail(mail: OutgoingMail): Promise<{ id: string; thread
     throw new Error(`Gmail rejected the message: ${detail}`);
   }
   return { id: json.id ?? "", threadId: json.threadId ?? "" };
+}
+
+// --- reading (PO follow-up agent) --------------------------------------------
+// These are the ONLY reads this codebase performs: PO threads by id, and
+// PO-number searches scoped to a vendor's domains. Nothing else in the mailbox
+// is ever fetched.
+
+const API = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+async function gmailGet<T>(path: string, params?: Record<string, string | number>): Promise<T> {
+  const token = await accessToken();
+  const qs = params
+    ? "?" +
+      Object.entries(params)
+        .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+        .join("&")
+    : "";
+  const res = await fetch(`${API}${path}${qs}`, { headers: { authorization: `Bearer ${token}` } });
+  const json = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
+  if (!res.ok) throw new Error(`Gmail read failed (${res.status}): ${json.error?.message ?? path}`);
+  return json;
+}
+
+interface GmailPayloadPart {
+  mimeType?: string;
+  filename?: string;
+  headers?: { name: string; value: string }[];
+  body?: { data?: string; attachmentId?: string; size?: number };
+  parts?: GmailPayloadPart[];
+}
+
+export interface GmailMessage {
+  id: string;
+  threadId: string;
+  internalDate?: string;
+  payload?: GmailPayloadPart;
+}
+
+export function header(msg: GmailMessage, name: string): string | null {
+  const h = msg.payload?.headers?.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  return h?.value ?? null;
+}
+
+/** Best-effort plain text of a message: text/plain part, else de-tagged HTML. */
+export function bodyText(msg: GmailMessage): string {
+  const chunks: { mime: string; text: string }[] = [];
+  const walk = (p?: GmailPayloadPart): void => {
+    if (!p) return;
+    if (p.body?.data && (p.mimeType === "text/plain" || p.mimeType === "text/html")) {
+      chunks.push({ mime: p.mimeType, text: Buffer.from(p.body.data, "base64url").toString("utf8") });
+    }
+    for (const c of p.parts ?? []) walk(c);
+  };
+  walk(msg.payload);
+  const plain = chunks.find((c) => c.mime === "text/plain")?.text;
+  if (plain) return plain;
+  const html = chunks.find((c) => c.mime === "text/html")?.text ?? "";
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** File attachments on a message (skips inline images without filenames). */
+export function attachmentParts(msg: GmailMessage): { filename: string; mimeType: string; attachmentId: string; size: number }[] {
+  const out: { filename: string; mimeType: string; attachmentId: string; size: number }[] = [];
+  const walk = (p?: GmailPayloadPart): void => {
+    if (!p) return;
+    if (p.filename && p.body?.attachmentId) {
+      out.push({
+        filename: p.filename,
+        mimeType: p.mimeType ?? "application/octet-stream",
+        attachmentId: p.body.attachmentId,
+        size: p.body.size ?? 0,
+      });
+    }
+    for (const c of p.parts ?? []) walk(c);
+  };
+  walk(msg.payload);
+  return out;
+}
+
+export async function fetchThreadMessages(threadId: string): Promise<GmailMessage[]> {
+  const t = await gmailGet<{ messages?: GmailMessage[] }>(`/threads/${threadId}`, { format: "full" });
+  return t.messages ?? [];
+}
+
+export async function fetchMessage(id: string): Promise<GmailMessage> {
+  return gmailGet<GmailMessage>(`/messages/${id}`, { format: "full" });
+}
+
+/** Gmail search — used only with PO-number + vendor-domain queries. */
+export async function searchMessageIds(q: string, maxResults = 20): Promise<{ id: string; threadId: string }[]> {
+  const r = await gmailGet<{ messages?: { id: string; threadId: string }[] }>(`/messages`, { q, maxResults });
+  return r.messages ?? [];
+}
+
+export async function fetchAttachment(messageId: string, attachmentId: string): Promise<Buffer> {
+  const r = await gmailGet<{ data?: string }>(`/messages/${messageId}/attachments/${attachmentId}`);
+  return Buffer.from(r.data ?? "", "base64url");
 }

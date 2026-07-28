@@ -23,5 +23,12 @@ export interface MaterialPo {
   emailedAt?: string | null;
   /** Recipients of that send (To + CC). */
   emailedTo?: string | null;
+  /** Follow-up agent state: awaiting_ack | acknowledged | shipped | closed. Null = not tracked. */
+  agentState?: string | null;
+  /** Delivery date the vendor committed to in their acknowledgement. */
+  promisedDate?: string | null;
+  /** Agent stopped and wants a human decision. */
+  needsAttention?: boolean;
+  attentionReason?: string | null;
   lines: MaterialPoLine[];
 }

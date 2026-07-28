@@ -88,6 +88,22 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
   }
 });
 
+/**
+ * PO follow-up agent watcher (every 30 min via GitHub Actions): reads new
+ * vendor mail on tracked POs, classifies it, updates state, and queues
+ * follow-up DRAFTS. Never sends email — approval happens in the dashboard.
+ */
+router.get("/cron/po-agent", async (req, res, next) => {
+  try {
+    if (!cronAuthorized(req, res)) return;
+    const { runPoAgent } = await import("../lib/po-agent");
+    const out = await runPoAgent();
+    res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
+
 function mtParts(d: Date): { month: string; weekday: string } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Denver",

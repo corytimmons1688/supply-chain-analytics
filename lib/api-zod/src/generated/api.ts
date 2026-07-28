@@ -913,6 +913,23 @@ export const ListMaterialPosResponse = zod.object({
         .string()
         .nullish()
         .describe("Recipients of that send (To + CC)."),
+      agentState: zod
+        .string()
+        .nullish()
+        .describe(
+          "Follow-up agent state: awaiting_ack | acknowledged | shipped | closed. Null = not tracked.",
+        ),
+      promisedDate: zod
+        .string()
+        .nullish()
+        .describe(
+          "Delivery date the vendor committed to in their acknowledgement.",
+        ),
+      needsAttention: zod
+        .boolean()
+        .optional()
+        .describe("Agent stopped and wants a human decision."),
+      attentionReason: zod.string().nullish(),
       lines: zod.array(
         zod.object({
           stockId: zod.string(),
@@ -967,6 +984,7 @@ export const GetVendorContactsResponse = zod.object({
       vendorName: zod.string(),
       toEmails: zod.string().nullish(),
       ccEmails: zod.string().nullish(),
+      agentEnabled: zod.boolean().optional(),
       legacyStockEmails: zod
         .string()
         .nullish()
@@ -989,12 +1007,17 @@ export const SetVendorContactParams = zod.object({
 export const SetVendorContactBody = zod.object({
   toEmails: zod.string().nullish(),
   ccEmails: zod.string().nullish(),
+  agentEnabled: zod
+    .boolean()
+    .optional()
+    .describe("Opt this vendor into the PO follow-up agent."),
 });
 
 export const SetVendorContactResponse = zod.object({
   vendorName: zod.string(),
   toEmails: zod.string().nullish(),
   ccEmails: zod.string().nullish(),
+  agentEnabled: zod.boolean().optional(),
   saved: zod.boolean(),
 });
 
@@ -1107,6 +1130,104 @@ export const SendMaterialPoTestResponse = zod.object({
 });
 
 /**
+ * @summary Agent work queue — pending follow-up drafts and POs flagged for a human
+ */
+export const GetPoAgentQueueResponse = zod.object({
+  drafts: zod.array(
+    zod.object({
+      id: zod.string(),
+      poId: zod.string(),
+      kind: zod.string().describe("ack_nudge | checkin | tracking_request"),
+      vendorName: zod.string().optional(),
+      stockId: zod.string().nullish(),
+      toEmails: zod.string(),
+      ccEmails: zod.string().nullish(),
+      subject: zod.string(),
+      body: zod.string(),
+      createdAt: zod.string(),
+    }),
+  ),
+  needsAttention: zod.array(
+    zod.object({
+      poId: zod.string(),
+      vendorName: zod.string(),
+      stockId: zod.string().nullish(),
+      ltPoNumbers: zod.string().nullish(),
+      agentState: zod.string().nullish(),
+      reason: zod.string().nullish(),
+    }),
+  ),
+  trackedCount: zod.number().describe("POs the agent is actively tracking."),
+});
+
+/**
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ */
+export const ApprovePoAgentDraftParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ApprovePoAgentDraftResponse = zod.object({
+  sent: zod.boolean(),
+  id: zod.string(),
+  messageId: zod.string().optional(),
+});
+
+/**
+ * @summary Dismiss a pending follow-up draft without sending
+ */
+export const DismissPoAgentDraftParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DismissPoAgentDraftResponse = zod.object({
+  dismissed: zod.boolean(),
+  id: zod.string(),
+});
+
+/**
+ * @summary Clear a PO's needs-attention flag after handling it
+ */
+export const ResolvePoAttentionParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ResolvePoAttentionResponse = zod.object({
+  resolved: zod.boolean(),
+  id: zod.string(),
+});
+
+/**
+ * @summary Email/agent activity timeline and captured vendor documents for a PO
+ */
+export const GetPoTimelineParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetPoTimelineResponse = zod.object({
+  events: zod.array(
+    zod.object({
+      id: zod.string(),
+      at: zod.string(),
+      direction: zod.string().describe("inbound | outbound | system"),
+      kind: zod.string(),
+      fromAddr: zod.string().nullish(),
+      subject: zod.string().nullish(),
+      summary: zod.string().nullable(),
+    }),
+  ),
+  attachments: zod.array(
+    zod.object({
+      id: zod.string(),
+      filename: zod.string(),
+      mimeType: zod.string(),
+      sizeBytes: zod.number(),
+      createdAt: zod.string(),
+    }),
+  ),
+});
+
+/**
  * @summary Whether PO email can be sent, and from which mailbox
  */
 export const GetGmailStatusResponse = zod.object({
@@ -1119,6 +1240,12 @@ export const GetGmailStatusResponse = zod.object({
     .nullish()
     .describe("Mailbox PO email is sent from."),
   connectedAt: zod.string().nullish(),
+  needsReconnect: zod
+    .boolean()
+    .optional()
+    .describe(
+      "Grant predates the read scope the PO agent needs — reconnect once.",
+    ),
   redirectUri: zod
     .string()
     .optional()

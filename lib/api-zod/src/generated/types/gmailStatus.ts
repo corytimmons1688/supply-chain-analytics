@@ -13,6 +13,8 @@ export interface GmailStatus {
   /** Mailbox PO email is sent from. */
   accountEmail?: string | null;
   connectedAt?: string | null;
+  /** Grant predates the read scope the PO agent needs — reconnect once. */
+  needsReconnect?: boolean;
   /** Must be registered on the Google OAuth client verbatim. */
   redirectUri?: string;
 }

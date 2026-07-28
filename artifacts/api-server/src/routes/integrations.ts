@@ -7,6 +7,7 @@ import {
   completeConsent,
   verifyState,
   redirectUri,
+  scopeSupportsRead,
 } from "../lib/gmail";
 import { logger } from "../lib/logger";
 
@@ -27,6 +28,9 @@ router.get(
       connected: Boolean(connection),
       accountEmail: connection?.accountEmail ?? null,
       connectedAt: connection?.connectedAt.toISOString() ?? null,
+      // The PO agent needs the readonly scope; grants made before it existed
+      // must reconnect once to add it.
+      needsReconnect: Boolean(connection && !scopeSupportsRead(connection.scope)),
       /** Surfaced so a misconfigured OAuth client is diagnosable from the UI. */
       redirectUri: redirectUri(),
     });

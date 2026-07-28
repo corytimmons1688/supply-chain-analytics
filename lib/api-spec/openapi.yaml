@@ -547,6 +547,97 @@ paths:
                 type: object
                 properties:
                   error: { type: string }
+  /demand/po-agent:
+    get:
+      operationId: getPoAgentQueue
+      tags: [demand]
+      summary: Agent work queue — pending follow-up drafts and POs flagged for a human
+      responses:
+        "200":
+          description: Queue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoAgentQueue" }
+  /demand/po-agent/drafts/{id}/approve:
+    post:
+      operationId: approvePoAgentDraft
+      tags: [demand]
+      summary: Approve a pending follow-up draft (sends it in the PO's email thread)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sent, id]
+                properties:
+                  sent: { type: boolean }
+                  id: { type: string }
+                  messageId: { type: string }
+  /demand/po-agent/drafts/{id}/dismiss:
+    post:
+      operationId: dismissPoAgentDraft
+      tags: [demand]
+      summary: Dismiss a pending follow-up draft without sending
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Dismissed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dismissed, id]
+                properties:
+                  dismissed: { type: boolean }
+                  id: { type: string }
+  /demand/pos/{id}/resolve-attention:
+    post:
+      operationId: resolvePoAttention
+      tags: [demand]
+      summary: Clear a PO's needs-attention flag after handling it
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resolved, id]
+                properties:
+                  resolved: { type: boolean }
+                  id: { type: string }
+  /demand/pos/{id}/timeline:
+    get:
+      operationId: getPoTimeline
+      tags: [demand]
+      summary: Email/agent activity timeline and captured vendor documents for a PO
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Timeline
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoTimeline" }
   /integrations/gmail:
     get:
       operationId: getGmailStatus
@@ -1842,6 +1933,7 @@ components:
       properties:
         toEmails: { type: string, nullable: true }
         ccEmails: { type: string, nullable: true }
+        agentEnabled: { type: boolean, description: "Opt this vendor into the PO follow-up agent." }
     VendorContactSaved:
       type: object
       required: [vendorName, saved]
@@ -1849,6 +1941,7 @@ components:
         vendorName: { type: string }
         toEmails: { type: string, nullable: true }
         ccEmails: { type: string, nullable: true }
+        agentEnabled: { type: boolean }
         saved: { type: boolean }
     VendorContact:
       type: object
@@ -1857,6 +1950,7 @@ components:
         vendorName: { type: string }
         toEmails: { type: string, nullable: true }
         ccEmails: { type: string, nullable: true }
+        agentEnabled: { type: boolean }
         legacyStockEmails: { type: string, nullable: true, description: "Address found on the old per-stock field, as a starting point." }
         stockCount: { type: integer }
         stockIds:
@@ -1944,6 +2038,10 @@ components:
         actualLeadDays: { type: number, nullable: true }
         emailedAt: { type: string, nullable: true, description: "When the PO was emailed to the vendor from the dashboard." }
         emailedTo: { type: string, nullable: true, description: "Recipients of that send (To + CC)." }
+        agentState: { type: string, nullable: true, description: "Follow-up agent state: awaiting_ack | acknowledged | shipped | closed. Null = not tracked." }
+        promisedDate: { type: string, nullable: true, description: "Delivery date the vendor committed to in their acknowledgement." }
+        needsAttention: { type: boolean, description: "Agent stopped and wants a human decision." }
+        attentionReason: { type: string, nullable: true }
         lines:
           type: array
           items: { $ref: "#/components/schemas/MaterialPoLine" }
@@ -1981,6 +2079,7 @@ components:
         connected: { type: boolean }
         accountEmail: { type: string, nullable: true, description: "Mailbox PO email is sent from." }
         connectedAt: { type: string, nullable: true }
+        needsReconnect: { type: boolean, description: "Grant predates the read scope the PO agent needs — reconnect once." }
         redirectUri: { type: string, description: "Must be registered on the Google OAuth client verbatim." }
     GmailDisconnectResult:
       type: object
@@ -2001,6 +2100,71 @@ components:
         emailedTo: { type: string, nullable: true }
         gmailConfigured: { type: boolean }
         gmailAccount: { type: string, nullable: true }
+    PoAgentDraft:
+      type: object
+      required: [id, poId, kind, toEmails, subject, body, createdAt]
+      properties:
+        id: { type: string }
+        poId: { type: string }
+        kind: { type: string, description: "ack_nudge | checkin | tracking_request" }
+        vendorName: { type: string }
+        stockId: { type: string, nullable: true }
+        toEmails: { type: string }
+        ccEmails: { type: string, nullable: true }
+        subject: { type: string }
+        body: { type: string }
+        createdAt: { type: string }
+    PoAttentionItem:
+      type: object
+      required: [poId, vendorName]
+      properties:
+        poId: { type: string }
+        vendorName: { type: string }
+        stockId: { type: string, nullable: true }
+        ltPoNumbers: { type: string, nullable: true }
+        agentState: { type: string, nullable: true }
+        reason: { type: string, nullable: true }
+    PoAgentQueue:
+      type: object
+      required: [drafts, needsAttention, trackedCount]
+      properties:
+        drafts:
+          type: array
+          items: { $ref: "#/components/schemas/PoAgentDraft" }
+        needsAttention:
+          type: array
+          items: { $ref: "#/components/schemas/PoAttentionItem" }
+        trackedCount: { type: integer, description: "POs the agent is actively tracking." }
+    PoTimelineEvent:
+      type: object
+      required: [id, at, direction, kind, summary]
+      properties:
+        id: { type: string }
+        at: { type: string }
+        direction: { type: string, description: "inbound | outbound | system" }
+        kind: { type: string }
+        fromAddr: { type: string, nullable: true }
+        subject: { type: string, nullable: true }
+        summary: { type: string, nullable: true }
+    PoTimelineAttachment:
+      type: object
+      required: [id, filename, mimeType, sizeBytes, createdAt]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        createdAt: { type: string }
+    PoTimeline:
+      type: object
+      required: [events, attachments]
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/PoTimelineEvent" }
+        attachments:
+          type: array
+          items: { $ref: "#/components/schemas/PoTimelineAttachment" }
     PoSendResult:
       type: object
       required: [sent, to, cc, subject, attachmentName]

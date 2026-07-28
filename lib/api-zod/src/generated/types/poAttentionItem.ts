@@ -6,10 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface VendorContactSaved {
+export interface PoAttentionItem {
+  poId: string;
   vendorName: string;
-  toEmails?: string | null;
-  ccEmails?: string | null;
-  agentEnabled?: boolean;
-  saved: boolean;
+  stockId?: string | null;
+  ltPoNumbers?: string | null;
+  agentState?: string | null;
+  reason?: string | null;
 }

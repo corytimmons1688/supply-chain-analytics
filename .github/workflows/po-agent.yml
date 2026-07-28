@@ -1,0 +1,31 @@
+name: PO follow-up agent
+
+# Watches vendor email on tracked POs every 30 min: classifies replies and
+# out-of-thread ERP acknowledgements, updates PO state, and queues follow-up
+# DRAFTS. The agent never sends email — Cory approves drafts in the dashboard.
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: po-agent
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run PO agent watcher
+        run: |
+          curl --silent --show-error --fail --max-time 240 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://supply-chain-analytics-delta.vercel.app/api/cron/po-agent \
+            | tee agent-result.json
+      - name: Summarize
+        run: |
+          echo "### PO agent run" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat agent-result.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

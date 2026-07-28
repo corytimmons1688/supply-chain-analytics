@@ -18,6 +18,7 @@ import type {
 
 import type {
   AdjustmentTotals,
+  ApprovePoAgentDraft200,
   AslEntry,
   AslEntryInput,
   AslGoal,
@@ -32,6 +33,7 @@ import type {
   DemandConfigResult,
   DemandStockDetail,
   DemandSummary,
+  DismissPoAgentDraft200,
   GatewayHealth,
   GetAdjustmentsByStock200,
   GetAdjustmentsByStockParams,
@@ -81,8 +83,10 @@ import type {
   MonthlySnapshot,
   NetsuiteSyncResult,
   OnHandInventory,
+  PoAgentQueue,
   PoEmailPreview,
   PoSendResult,
+  PoTimeline,
   PricingReview,
   PricingReviewInput,
   PurchasingResponse,
@@ -90,6 +94,7 @@ import type {
   QualityIssue,
   QualityIssueInput,
   RegenerateCycleCountSchedule200,
+  ResolvePoAttention200,
   ScorecardResponse,
   SeedCurrentAsl200,
   SeedVendors200,
@@ -2745,6 +2750,420 @@ export const useSendMaterialPoTest = <
 > => {
   return useMutation(getSendMaterialPoTestMutationOptions(options));
 };
+
+/**
+ * @summary Agent work queue — pending follow-up drafts and POs flagged for a human
+ */
+export const getGetPoAgentQueueUrl = () => {
+  return `/api/demand/po-agent`;
+};
+
+export const getPoAgentQueue = async (
+  options?: RequestInit,
+): Promise<PoAgentQueue> => {
+  return customFetch<PoAgentQueue>(getGetPoAgentQueueUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPoAgentQueueQueryKey = () => {
+  return [`/api/demand/po-agent`] as const;
+};
+
+export const getGetPoAgentQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPoAgentQueue>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPoAgentQueue>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPoAgentQueueQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPoAgentQueue>>> = ({
+    signal,
+  }) => getPoAgentQueue({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPoAgentQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPoAgentQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPoAgentQueue>>
+>;
+export type GetPoAgentQueueQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Agent work queue — pending follow-up drafts and POs flagged for a human
+ */
+
+export function useGetPoAgentQueue<
+  TData = Awaited<ReturnType<typeof getPoAgentQueue>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPoAgentQueue>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPoAgentQueueQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ */
+export const getApprovePoAgentDraftUrl = (id: string) => {
+  return `/api/demand/po-agent/drafts/${id}/approve`;
+};
+
+export const approvePoAgentDraft = async (
+  id: string,
+  options?: RequestInit,
+): Promise<ApprovePoAgentDraft200> => {
+  return customFetch<ApprovePoAgentDraft200>(getApprovePoAgentDraftUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getApprovePoAgentDraftMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approvePoAgentDraft>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof approvePoAgentDraft>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["approvePoAgentDraft"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof approvePoAgentDraft>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return approvePoAgentDraft(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ApprovePoAgentDraftMutationResult = NonNullable<
+  Awaited<ReturnType<typeof approvePoAgentDraft>>
+>;
+
+export type ApprovePoAgentDraftMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ */
+export const useApprovePoAgentDraft = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approvePoAgentDraft>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof approvePoAgentDraft>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getApprovePoAgentDraftMutationOptions(options));
+};
+
+/**
+ * @summary Dismiss a pending follow-up draft without sending
+ */
+export const getDismissPoAgentDraftUrl = (id: string) => {
+  return `/api/demand/po-agent/drafts/${id}/dismiss`;
+};
+
+export const dismissPoAgentDraft = async (
+  id: string,
+  options?: RequestInit,
+): Promise<DismissPoAgentDraft200> => {
+  return customFetch<DismissPoAgentDraft200>(getDismissPoAgentDraftUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDismissPoAgentDraftMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissPoAgentDraft>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof dismissPoAgentDraft>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["dismissPoAgentDraft"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof dismissPoAgentDraft>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return dismissPoAgentDraft(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DismissPoAgentDraftMutationResult = NonNullable<
+  Awaited<ReturnType<typeof dismissPoAgentDraft>>
+>;
+
+export type DismissPoAgentDraftMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Dismiss a pending follow-up draft without sending
+ */
+export const useDismissPoAgentDraft = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissPoAgentDraft>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof dismissPoAgentDraft>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDismissPoAgentDraftMutationOptions(options));
+};
+
+/**
+ * @summary Clear a PO's needs-attention flag after handling it
+ */
+export const getResolvePoAttentionUrl = (id: string) => {
+  return `/api/demand/pos/${id}/resolve-attention`;
+};
+
+export const resolvePoAttention = async (
+  id: string,
+  options?: RequestInit,
+): Promise<ResolvePoAttention200> => {
+  return customFetch<ResolvePoAttention200>(getResolvePoAttentionUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResolvePoAttentionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolvePoAttention>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resolvePoAttention>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["resolvePoAttention"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resolvePoAttention>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resolvePoAttention(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResolvePoAttentionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resolvePoAttention>>
+>;
+
+export type ResolvePoAttentionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Clear a PO's needs-attention flag after handling it
+ */
+export const useResolvePoAttention = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolvePoAttention>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resolvePoAttention>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getResolvePoAttentionMutationOptions(options));
+};
+
+/**
+ * @summary Email/agent activity timeline and captured vendor documents for a PO
+ */
+export const getGetPoTimelineUrl = (id: string) => {
+  return `/api/demand/pos/${id}/timeline`;
+};
+
+export const getPoTimeline = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PoTimeline> => {
+  return customFetch<PoTimeline>(getGetPoTimelineUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPoTimelineQueryKey = (id: string) => {
+  return [`/api/demand/pos/${id}/timeline`] as const;
+};
+
+export const getGetPoTimelineQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPoTimeline>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPoTimeline>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPoTimelineQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPoTimeline>>> = ({
+    signal,
+  }) => getPoTimeline(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPoTimeline>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPoTimelineQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPoTimeline>>
+>;
+export type GetPoTimelineQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Email/agent activity timeline and captured vendor documents for a PO
+ */
+
+export function useGetPoTimeline<
+  TData = Awaited<ReturnType<typeof getPoTimeline>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPoTimeline>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPoTimelineQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Whether PO email can be sent, and from which mailbox

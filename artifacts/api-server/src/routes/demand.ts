@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { eq, inArray } from "drizzle-orm";
-import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, vendorContactTable, type StockGoalRow } from "@workspace/db";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -925,6 +925,10 @@ router.get(
           actualLeadDays,
           emailedAt: po.emailedAt?.toISOString() ?? null,
           emailedTo: po.emailedTo,
+          agentState: po.agentState,
+          promisedDate: po.promisedDate,
+          needsAttention: po.needsAttention,
+          attentionReason: po.attentionReason,
           lines: (linesByPo.get(po.id) ?? []).map((l) => ({
             stockId: l.stockId,
             description: l.description,
@@ -1076,6 +1080,7 @@ router.get(
           vendorName,
           toEmails: c?.toEmails ?? null,
           ccEmails: c?.ccEmails ?? null,
+          agentEnabled: c?.agentEnabled ?? false,
           legacyStockEmails: legacyByVendor.get(vendorName) ?? null,
           stockCount: stockIds.length,
           stockIds: stockIds.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).slice(0, 12),
@@ -1092,7 +1097,7 @@ router.put(
   asyncHandler(async (req, res) => {
     const vendorName = String(req.params["vendorName"] ?? "").trim();
     if (!vendorName) return void res.status(400).json({ error: "vendorName required" });
-    const b = (req.body ?? {}) as { toEmails?: string | null; ccEmails?: string | null };
+    const b = (req.body ?? {}) as { toEmails?: string | null; ccEmails?: string | null; agentEnabled?: boolean };
     // Keep only well-formed addresses so a stray word can't end up as a recipient.
     const clean = (raw: string | null | undefined): string | null => {
       const list = parseEmails(raw ?? null);
@@ -1100,14 +1105,15 @@ router.put(
     };
     const toEmails = clean(b.toEmails);
     const ccEmails = clean(b.ccEmails);
+    const agentEnabled = Boolean(b.agentEnabled);
     await db
       .insert(vendorContactTable)
-      .values({ vendorName, toEmails, ccEmails })
+      .values({ vendorName, toEmails, ccEmails, agentEnabled })
       .onConflictDoUpdate({
         target: vendorContactTable.vendorName,
-        set: { toEmails, ccEmails, updatedAt: new Date() },
+        set: { toEmails, ccEmails, agentEnabled, updatedAt: new Date() },
       });
-    res.json({ vendorName, toEmails, ccEmails, saved: true });
+    res.json({ vendorName, toEmails, ccEmails, agentEnabled, saved: true });
   }),
 );
 
@@ -1502,10 +1508,46 @@ router.post(
       });
 
       const emailedAt = new Date();
+      // Start (or reset) agent tracking when the vendor is opted in — a re-send
+      // means we're waiting on an acknowledgement again.
+      const [vc] = await db
+        .select()
+        .from(vendorContactTable)
+        .where(eq(vendorContactTable.vendorName, po.vendorName))
+        .limit(1);
+      const agentTracking = Boolean(vc?.agentEnabled);
       await db
         .update(materialPoTable)
-        .set({ emailedAt, emailedTo: [...to, ...cc].join(", "), updatedAt: emailedAt })
+        .set({
+          emailedAt,
+          emailedTo: [...to, ...cc].join(", "),
+          gmailThreadId: sent.threadId || po.gmailThreadId,
+          ...(agentTracking ? { agentState: "awaiting_ack", needsAttention: false, attentionReason: null } : {}),
+          updatedAt: emailedAt,
+        })
         .where(eq(materialPoTable.id, id));
+      // Timeline: record the send with its RFC 822 Message-ID so later
+      // follow-ups can reference it. Reading the sent message needs the
+      // readonly scope — tolerate its absence.
+      try {
+        const { appendPoEvent } = await import("../lib/po-agent");
+        let rfc822: string | null = null;
+        if (gmail.scopeSupportsRead(connection.scope)) {
+          rfc822 = gmail.header(await gmail.fetchMessage(sent.id), "Message-ID");
+        }
+        await appendPoEvent(id, {
+          direction: "outbound",
+          kind: "sent",
+          gmailMessageId: sent.id,
+          gmailThreadId: sent.threadId,
+          rfc822MessageId: rfc822,
+          fromAddr: connection.accountEmail,
+          subject: email.subject,
+          summary: `PO emailed to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}`,
+        });
+      } catch (e) {
+        logger.warn({ poId: id, err: String(e) }, "Could not record send event");
+      }
 
       logger.info({ poId: id, to, cc, messageId: sent.id }, "PO emailed to vendor via Gmail");
       res.json({
@@ -1525,6 +1567,173 @@ router.post(
       logger.error({ poId: id, err: message }, "PO send failed");
       res.status(502).json({ error: message });
     }
+  }),
+);
+
+// --- PO follow-up agent ------------------------------------------------------
+
+/** Agent work queue: pending follow-up drafts + POs flagged for a human. */
+router.get(
+  "/demand/po-agent",
+  asyncHandler(async (_req, res) => {
+    const [drafts, flagged, tracked] = await Promise.all([
+      db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.status, "pending")),
+      db.select().from(materialPoTable).where(eq(materialPoTable.needsAttention, true)),
+      db.select().from(materialPoTable).where(isNotNull(materialPoTable.agentState)),
+    ]);
+    const poIds = [...new Set([...drafts.map((d) => d.poId), ...flagged.map((p) => p.id)])];
+    const lines = poIds.length
+      ? await db.select().from(materialPoLineTable).where(inArray(materialPoLineTable.poId, poIds))
+      : [];
+    const lineByPo = new Map(lines.map((l) => [l.poId, l]));
+    const poById = new Map(tracked.map((p) => [p.id, p]));
+    for (const p of flagged) poById.set(p.id, p);
+    res.json({
+      drafts: drafts
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .map((d) => ({
+          id: d.id,
+          poId: d.poId,
+          kind: d.kind,
+          vendorName: poById.get(d.poId)?.vendorName ?? "",
+          stockId: lineByPo.get(d.poId)?.stockId ?? null,
+          toEmails: d.toEmails,
+          ccEmails: d.ccEmails,
+          subject: d.subject,
+          body: d.body,
+          createdAt: d.createdAt.toISOString(),
+        })),
+      needsAttention: flagged.map((p) => ({
+        poId: p.id,
+        vendorName: p.vendorName,
+        stockId: lineByPo.get(p.id)?.stockId ?? null,
+        ltPoNumbers: p.ltPoNumbers,
+        agentState: p.agentState,
+        reason: p.attentionReason,
+      })),
+      trackedCount: tracked.filter((p) => p.agentState !== "closed").length,
+    });
+  }),
+);
+
+/** Approve a pending draft: send it as a reply in the PO's thread. */
+router.post(
+  "/demand/po-agent/drafts/:id/approve",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [draft] = await db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.id, id)).limit(1);
+    if (!draft) return void res.status(404).json({ error: "Draft not found" });
+    if (draft.status !== "pending") return void res.status(409).json({ error: `Draft already ${draft.status}` });
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, draft.poId)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
+
+    try {
+      const gmail = await import("../lib/gmail");
+      // Reply threading: reference the most recent message we know of in the thread.
+      const events = await db.select().from(poEmailEventTable).where(eq(poEmailEventTable.poId, po.id));
+      const lastWithRfc = events
+        .filter((e) => e.rfc822MessageId)
+        .sort((a, b) => b.at.getTime() - a.at.getTime())[0];
+      const sent = await gmail.sendMail({
+        to: parseEmails(draft.toEmails),
+        cc: parseEmails(draft.ccEmails),
+        subject: draft.subject,
+        text: draft.body,
+        threadId: po.gmailThreadId,
+        inReplyTo: lastWithRfc?.rfc822MessageId ?? null,
+      });
+      const now = new Date();
+      await db
+        .update(poAgentDraftTable)
+        .set({ status: "sent", sentAt: now, gmailMessageId: sent.id })
+        .where(eq(poAgentDraftTable.id, id));
+      const { appendPoEvent } = await import("../lib/po-agent");
+      await appendPoEvent(po.id, {
+        direction: "outbound",
+        kind: "follow_up",
+        gmailMessageId: sent.id,
+        gmailThreadId: sent.threadId,
+        subject: draft.subject,
+        summary: `Follow-up sent (${draft.kind}) to ${draft.toEmails}`,
+      });
+      res.json({ sent: true, id, messageId: sent.id });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      logger.error({ draftId: id, err: message }, "Draft approval send failed");
+      res.status(502).json({ error: message });
+    }
+  }),
+);
+
+router.post(
+  "/demand/po-agent/drafts/:id/dismiss",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [draft] = await db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.id, id)).limit(1);
+    if (!draft) return void res.status(404).json({ error: "Draft not found" });
+    await db.update(poAgentDraftTable).set({ status: "dismissed" }).where(eq(poAgentDraftTable.id, id));
+    res.json({ dismissed: true, id });
+  }),
+);
+
+/** Clear a needs-attention flag once Cory has dealt with it. */
+router.post(
+  "/demand/pos/:id/resolve-attention",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    await db
+      .update(materialPoTable)
+      .set({ needsAttention: false, attentionReason: null, updatedAt: new Date() })
+      .where(eq(materialPoTable.id, id));
+    res.json({ resolved: true, id });
+  }),
+);
+
+/** Everything that happened around a PO's email conversation. */
+router.get(
+  "/demand/pos/:id/timeline",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    const [events, attachments] = await Promise.all([
+      db.select().from(poEmailEventTable).where(eq(poEmailEventTable.poId, id)),
+      db.select().from(poAttachmentTable).where(eq(poAttachmentTable.poId, id)),
+    ]);
+    res.json({
+      events: events
+        .sort((a, b) => a.at.getTime() - b.at.getTime())
+        .map((e) => ({
+          id: e.id,
+          at: e.at.toISOString(),
+          direction: e.direction,
+          kind: e.kind,
+          fromAddr: e.fromAddr,
+          subject: e.subject,
+          summary: e.summary,
+        })),
+      attachments: attachments.map((a) => ({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        sizeBytes: a.sizeBytes,
+        createdAt: a.createdAt.toISOString(),
+      })),
+    });
+  }),
+);
+
+/** Download a captured vendor document (order acknowledgement PDF etc). */
+router.get(
+  "/demand/pos/:id/attachments/:attId",
+  asyncHandler(async (req, res) => {
+    const [att] = await db
+      .select()
+      .from(poAttachmentTable)
+      .where(and(eq(poAttachmentTable.id, String(req.params["attId"])), eq(poAttachmentTable.poId, String(req.params["id"]))))
+      .limit(1);
+    if (!att) return void res.status(404).json({ error: "Attachment not found" });
+    res.setHeader("content-type", att.mimeType);
+    res.setHeader("content-disposition", `attachment; filename="${att.filename.replace(/[^\w.\- ]+/g, "_")}"`);
+    res.send(Buffer.from(att.contentBase64, "base64"));
   }),
 );
 

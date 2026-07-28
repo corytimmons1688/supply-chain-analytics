@@ -9,4 +9,6 @@
 export interface VendorContactInput {
   toEmails?: string | null;
   ccEmails?: string | null;
+  /** Opt this vendor into the PO follow-up agent. */
+  agentEnabled?: boolean;
 }
