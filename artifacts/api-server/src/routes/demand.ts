@@ -23,6 +23,7 @@ import {
   type WidthRow,
 } from "../lib/demand";
 import { fetchDazpakByStock } from "../lib/dazpak-sync";
+import { logger } from "../lib/logger";
 import type { Bucket } from "../lib/cc";
 
 // Dazpak make-and-hold horizons (Cory's settings): release when Calyx on-hand
@@ -991,6 +992,56 @@ router.put(
 );
 
 /**
+ * Pull an assigned PO number out of the (undocumented) create response, which
+ * may be a bare number/string or an object under any of several key names.
+ */
+function extractPoNumber(created: unknown): string | null {
+  if (created == null) return null;
+  if (typeof created === "number" && Number.isFinite(created)) return String(created);
+  if (typeof created === "string") {
+    const t = created.trim();
+    return /^\d+$/.test(t) ? t : null;
+  }
+  if (typeof created === "object") {
+    const o = created as Record<string, unknown>;
+    for (const key of ["poNumber", "number", "poNo", "purchaseOrderNumber", "id"]) {
+      const v = o[key];
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
+      if (typeof v === "string" && /^\d+$/.test(v.trim())) return v.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Locate a just-created LT PO by the marker our note embeds (the draft id), for
+ * when the create response carries no usable number. Scans recently-changed POs
+ * newest-first so it stays a handful of calls.
+ */
+async function findLtPoByMarker(marker: string): Promise<string | null> {
+  try {
+    const { ltGet, ltGetAllPages } = await import("../lib/ltApi");
+    const since = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
+    const list = await ltGetAllPages<{ number?: string }>("/purchase-orders", {
+      ChangedSinceDate: since,
+    });
+    const numbers = list
+      .map((p) => p.number)
+      .filter((n): n is string => Boolean(n))
+      .sort((a, b) => Number(b.replace(/\D/g, "")) - Number(a.replace(/\D/g, "")))
+      .slice(0, 30);
+    for (const n of numbers) {
+      const d = await ltGet<unknown>("/purchase-order-details", { PONumber: n });
+      const o = (Array.isArray(d) ? d[0] : d) as Record<string, unknown> | undefined;
+      if (String(o?.["notes"] ?? "").includes(marker)) return n;
+    }
+  } catch (err) {
+    logger.warn({ err, marker }, "could not locate the created LT PO by note marker");
+  }
+  return null;
+}
+
+/**
  * Delete a draft PO that never got sent (lines cascade).
  *
  * Only `draft` status is deletable: once a PO is submitted — especially to Label
@@ -1032,6 +1083,7 @@ router.post(
     const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
 
     let ltPoNumbers: string[] = [];
+    let ltCreated = 0;
     let ltError: string | null = null;
     const { ltApiConfigured, ltPost } = await import("../lib/ltApi");
     const ltEnabled = ltApiConfigured();
@@ -1048,8 +1100,21 @@ router.post(
       const stockInfo = await fetchStockInfo();
       const today = new Date().toISOString().slice(0, 10);
       const dateReq = po.requestedDeliveryDate ?? today;
-      const signerRaw = process.env["LT_PO_SIGNER"];
-      const poSigner = signerRaw && Number.isFinite(Number(signerRaw)) ? Number(signerRaw) : undefined;
+      // LT requires a signer ("'Signer Assoc Num' must not be empty"), so be
+      // forgiving about how the env var was entered: accept "87", " 87 ", or a
+      // whole line pasted into the value field ("LT_PO_SIGNER=87").
+      const signerRaw = (process.env["LT_PO_SIGNER"] ?? "").trim();
+      const signerDigits = signerRaw.match(/\d+/)?.[0];
+      const poSigner = signerDigits ? Number(signerDigits) : undefined;
+      if (signerRaw && signerRaw !== String(poSigner)) {
+        logger.warn(
+          { signerRaw, parsed: poSigner },
+          "LT_PO_SIGNER was not a bare number — parsed the digits out; consider cleaning up the env value",
+        );
+      }
+      if (poSigner === undefined) {
+        logger.warn("LT_PO_SIGNER is not set — Label Traxx will reject the PO (signer is required)");
+      }
       try {
         for (const l of lines) {
           const info = stockInfo.get(l.stockId);
@@ -1078,14 +1143,21 @@ router.post(
             })),
           };
           if (poSigner !== undefined) body["poSigner"] = poSigner;
-          const created = await ltPost<Record<string, unknown>>("/stock-purchase-order-create", body);
-          const assigned =
-            (typeof created?.["poNumber"] === "string" && created["poNumber"]) ||
-            (typeof created?.["number"] === "string" && created["number"]) ||
-            (created?.["poNumber"] != null ? String(created["poNumber"]) : null);
+          const created = await ltPost<unknown>("/stock-purchase-order-create", body);
+          ltCreated += 1; // the POST succeeded — a PO now exists in LT
+          let assigned = extractPoNumber(created);
+          if (!assigned) {
+            // The create response shape isn't documented and has returned no
+            // usable number, which once left a real LT PO (2597) unrecorded here
+            // and invited a duplicate on retry. Our note embeds the draft id, so
+            // find the PO by that marker instead of guessing the payload shape.
+            assigned = await findLtPoByMarker(`(PO ${po.id.slice(0, 8)})`);
+          }
           if (assigned) ltPoNumbers.push(String(assigned));
         }
-        status = ltPoNumbers.length > 0 ? "submitted_lt" : po.status;
+        // If LT created anything, never fall back to "draft" — that would offer a
+        // Submit retry and duplicate the PO. Unknown numbers get linked by hand.
+        status = ltCreated > 0 ? "submitted_lt" : po.status;
       } catch (e) {
         ltError = e instanceof Error ? e.message : String(e);
         status = po.status; // stay draft; the caller sees ltError and can retry
