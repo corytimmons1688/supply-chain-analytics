@@ -2012,6 +2012,14 @@ components:
         stockId: { type: string }
         saved: { type: boolean }
         ltUpdated: { type: boolean }
+    SuggestedWidth:
+      type: object
+      required: [width, footage, rolls, reason]
+      properties:
+        width: { type: number, description: "Master width to order, inches (exact — 12.5 vs 12.75 vs 13 stay distinct)." }
+        footage: { type: number }
+        rolls: { type: integer }
+        reason: { type: string, enum: [committed, forecast, both], description: "What drives this width: open-ticket shortfall, forecast/EOQ top-up, or both." }
     MaterialPoLine:
       type: object
       required: [stockId, rolls]
@@ -2020,6 +2028,7 @@ components:
         description: { type: string, nullable: true }
         rolls: { type: integer }
         footage: { type: number, nullable: true }
+        width: { type: number, nullable: true, description: "Master width to order (inches); null = the stock's master width." }
         msiCost: { type: number, nullable: true }
         estCost: { type: number, nullable: true }
     MaterialPo:
@@ -2672,6 +2681,10 @@ components:
         demandFromStockId: { type: string, nullable: true, description: "Predecessor stock whose demand history is merged into this SKU (null = none)." }
         suggestedOrderFootage: { type: number }
         suggestedOrderRolls: { type: integer }
+        suggestedWidths:
+          type: array
+          description: "The suggestion broken out by the width to order: committed shortfalls at the exact ticket widths, forecast/EOQ remainder at the stock's master width."
+          items: { $ref: "#/components/schemas/SuggestedWidth" }
         belowMin: { type: boolean }
         openTicketFootage: { type: number }
         committedWithinLeadFootage: { type: number, description: "Committed footage due to ship within the lead-time horizon (drives the reorder point)." }

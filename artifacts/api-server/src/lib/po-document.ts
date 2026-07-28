@@ -93,7 +93,10 @@ export async function assemblePoDocument(id: string): Promise<PoDocument> {
 
   const company = String(supplier["company"] ?? po.vendorName);
   const custIdMatch = /customer\s*id[:#\s]*([0-9]+)/i.exec(company);
-  const masterWidth = stock?.masterWidth ?? 0;
+  // The width being ORDERED: the line's width (suggestions carry the exact
+  // ticket width) with the stock's master width as the fallback. Drives the
+  // slitting table, area and cost — a 30" order must not price as 13".
+  const masterWidth = line.width && line.width > 0 ? line.width : (stock?.masterWidth ?? 0);
   const rolls = Math.max(1, line.rolls);
   const totalFootage = line.footage ?? 0;
   const footagePerRoll = totalFootage > 0 ? Math.round(totalFootage / rolls) : 0;

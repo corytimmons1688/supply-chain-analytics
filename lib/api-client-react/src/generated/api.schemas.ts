@@ -624,11 +624,34 @@ export interface DemandConfigResult {
   ltUpdated?: boolean;
 }
 
+/**
+ * What drives this width: open-ticket shortfall, forecast/EOQ top-up, or both.
+ */
+export type SuggestedWidthReason =
+  (typeof SuggestedWidthReason)[keyof typeof SuggestedWidthReason];
+
+export const SuggestedWidthReason = {
+  committed: "committed",
+  forecast: "forecast",
+  both: "both",
+} as const;
+
+export interface SuggestedWidth {
+  /** Master width to order, inches (exact — 12.5 vs 12.75 vs 13 stay distinct). */
+  width: number;
+  footage: number;
+  rolls: number;
+  /** What drives this width: open-ticket shortfall, forecast/EOQ top-up, or both. */
+  reason: SuggestedWidthReason;
+}
+
 export interface MaterialPoLine {
   stockId: string;
   description?: string | null;
   rolls: number;
   footage?: number | null;
+  /** Master width to order (inches); null = the stock's master width. */
+  width?: number | null;
   msiCost?: number | null;
   estCost?: number | null;
 }
@@ -1314,6 +1337,8 @@ export interface DemandStockMetrics {
   demandFromStockId: string | null;
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
+  /** The suggestion broken out by the width to order: committed shortfalls at the exact ticket widths, forecast/EOQ remainder at the stock's master width. */
+  suggestedWidths?: SuggestedWidth[];
   belowMin: boolean;
   openTicketFootage: number;
   /** Committed footage due to ship within the lead-time horizon (drives the reorder point). */

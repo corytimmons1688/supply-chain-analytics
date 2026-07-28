@@ -936,6 +936,12 @@ export const ListMaterialPosResponse = zod.object({
           description: zod.string().nullish(),
           rolls: zod.number(),
           footage: zod.number().nullish(),
+          width: zod
+            .number()
+            .nullish()
+            .describe(
+              "Master width to order (inches); null = the stock's master width.",
+            ),
           msiCost: zod.number().nullish(),
           estCost: zod.number().nullish(),
         }),
@@ -959,6 +965,12 @@ export const CreateMaterialPoBody = zod.object({
       description: zod.string().nullish(),
       rolls: zod.number(),
       footage: zod.number().nullish(),
+      width: zod
+        .number()
+        .nullish()
+        .describe(
+          "Master width to order (inches); null = the stock's master width.",
+        ),
       msiCost: zod.number().nullish(),
       estCost: zod.number().nullish(),
     }),
@@ -1457,6 +1469,27 @@ export const GetDemandSummaryResponse = zod.object({
         ),
       suggestedOrderFootage: zod.number(),
       suggestedOrderRolls: zod.number(),
+      suggestedWidths: zod
+        .array(
+          zod.object({
+            width: zod
+              .number()
+              .describe(
+                "Master width to order, inches (exact — 12.5 vs 12.75 vs 13 stay distinct).",
+              ),
+            footage: zod.number(),
+            rolls: zod.number(),
+            reason: zod
+              .enum(["committed", "forecast", "both"])
+              .describe(
+                "What drives this width: open-ticket shortfall, forecast\/EOQ top-up, or both.",
+              ),
+          }),
+        )
+        .optional()
+        .describe(
+          "The suggestion broken out by the width to order: committed shortfalls at the exact ticket widths, forecast\/EOQ remainder at the stock's master width.",
+        ),
       belowMin: zod.boolean(),
       openTicketFootage: zod.number(),
       committedWithinLeadFootage: zod
@@ -1743,6 +1776,27 @@ export const GetDemandStockDetailResponse = zod.object({
       ),
     suggestedOrderFootage: zod.number(),
     suggestedOrderRolls: zod.number(),
+    suggestedWidths: zod
+      .array(
+        zod.object({
+          width: zod
+            .number()
+            .describe(
+              "Master width to order, inches (exact — 12.5 vs 12.75 vs 13 stay distinct).",
+            ),
+          footage: zod.number(),
+          rolls: zod.number(),
+          reason: zod
+            .enum(["committed", "forecast", "both"])
+            .describe(
+              "What drives this width: open-ticket shortfall, forecast\/EOQ top-up, or both.",
+            ),
+        }),
+      )
+      .optional()
+      .describe(
+        "The suggestion broken out by the width to order: committed shortfalls at the exact ticket widths, forecast\/EOQ remainder at the stock's master width.",
+      ),
     belowMin: zod.boolean(),
     openTicketFootage: zod.number(),
     committedWithinLeadFootage: zod

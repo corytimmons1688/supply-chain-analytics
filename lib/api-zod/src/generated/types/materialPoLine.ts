@@ -11,6 +11,8 @@ export interface MaterialPoLine {
   description?: string | null;
   rolls: number;
   footage?: number | null;
+  /** Master width to order (inches); null = the stock's master width. */
+  width?: number | null;
   msiCost?: number | null;
   estCost?: number | null;
 }

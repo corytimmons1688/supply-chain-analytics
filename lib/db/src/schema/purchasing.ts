@@ -64,6 +64,9 @@ export const materialPoLineTable = pgTable("material_po_line", {
   description: text("description"),
   rolls: integer("rolls").notNull(),
   footage: doublePrecision("footage"),
+  // Master width to order, in inches. Suggestions break out by the exact width
+  // the demand requires (12.5/12.75/13/30…); null = the stock's master width.
+  width: doublePrecision("width"),
   msiCost: doublePrecision("msi_cost"),
   estCost: doublePrecision("est_cost"),
 });

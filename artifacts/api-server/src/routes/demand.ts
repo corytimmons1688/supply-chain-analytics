@@ -191,11 +191,12 @@ router.get(
     // Exact-width committed shortage per stock (demand at a width covered only by
     // on-hand + on-order at that width) — drives the width-aware reorder.
     const committedShortageByStock = new Map<string, number>();
+    const committedShortWidthsByStock = new Map<string, { width: number; footage: number }[]>();
     for (const [stockId, lines] of openTicketLinesByStock) {
       const widths = onHandByWidth.get(stockId) ?? [];
       const rolls = widths.reduce((s, w) => s + w.rolls, 0);
       const ft = widths.reduce((s, w) => s + w.footage, 0);
-      const { committedShortageFootage } = computeWidthAvailability({
+      const { committedShortageFootage, shortByExactWidth } = computeWidthAvailability({
         onHand: widths,
         openPos: (openPosByStock.get(stockId) ?? []).map((p) => ({
           masterWidth: p.masterWidth,
@@ -213,6 +214,7 @@ router.get(
         masterWidthFallback: stockInfo.get(stockId)?.masterWidth ?? 0,
       });
       committedShortageByStock.set(stockId, committedShortageFootage);
+      committedShortWidthsByStock.set(stockId, shortByExactWidth);
     }
 
     const allStockIds = new Set<string>();
@@ -330,6 +332,36 @@ router.get(
           makeFootage: Math.round(makeFootage),
           lines: dz.lines,
         };
+      }
+
+      // Break the suggestion out by the width to ORDER: committed shortfalls at
+      // the exact widths the tickets require (a 12.75" job means buying 12.75",
+      // even though wider ≤13" stock could serve it), then any forecast/EOQ
+      // remainder at the stock's own master width.
+      if (metrics.suggestedOrderRolls > 0) {
+        const typical = metrics.typicalRollFootage > 0 ? metrics.typicalRollFootage : 5000;
+        const byWidth: { width: number; footage: number; rolls: number; reason: "committed" | "forecast" | "both" }[] = [];
+        let remainingRolls = metrics.suggestedOrderRolls;
+        for (const ws of committedShortWidthsByStock.get(stockId) ?? []) {
+          if (remainingRolls <= 0) break;
+          const rollsForWidth = Math.min(remainingRolls, Math.ceil(ws.footage / typical));
+          if (rollsForWidth <= 0) continue;
+          byWidth.push({ width: ws.width, footage: rollsForWidth * typical, rolls: rollsForWidth, reason: "committed" });
+          remainingRolls -= rollsForWidth;
+        }
+        if (remainingRolls > 0) {
+          // Forecast/EOQ top-up at the stock's master width (else the widest committed width).
+          const mw = width > 0 ? Math.round(width * 100) / 100 : (byWidth[byWidth.length - 1]?.width ?? 0);
+          const existing = byWidth.find((s) => s.width === mw);
+          if (existing) {
+            existing.rolls += remainingRolls;
+            existing.footage += remainingRolls * typical;
+            existing.reason = "both";
+          } else {
+            byWidth.push({ width: mw, footage: remainingRolls * typical, rolls: remainingRolls, reason: "forecast" });
+          }
+        }
+        metrics.suggestedWidths = byWidth.sort((a, b) => a.width - b.width);
       }
 
       // Skip stocks with no signal at all (zero history AND zero on-hand AND
@@ -740,6 +772,8 @@ interface PoLineInput {
   description?: string | null;
   rolls: number;
   footage?: number | null;
+  /** Master width to order (inches); null = the stock's own master width. */
+  width?: number | null;
   msiCost?: number | null;
   estCost?: number | null;
 }
@@ -782,6 +816,8 @@ function poEmail(po: {
     description: string | null;
     rolls: number;
     footage: number | null;
+    /** Master width to order (inches), so the vendor supplies the right slit. */
+    width?: number | null;
     estCost: number | null;
     /** The vendor's own spec number for the material, when Label Traxx has one. */
     mfgSpecNum?: string | null;
@@ -791,6 +827,7 @@ function poEmail(po: {
     .map(
       (l) =>
         `  • Stock #${l.stockId}${l.description ? ` — ${l.description}` : ""}: ${l.rolls} roll${l.rolls === 1 ? "" : "s"}` +
+        (l.width && l.width > 0 ? ` @ ${l.width}" wide` : "") +
         (l.footage ? ` (~${Math.round(l.footage).toLocaleString()} ft)` : ""),
     )
     .join("\n");
@@ -813,7 +850,9 @@ function poEmail(po: {
         `<tr><td style="padding:6px 12px 6px 0">Stock #${esc(l.stockId)}` +
         `${l.mfgSpecNum?.trim() ? `<br><span style="color:#666;font-size:12px">MFG Spec ${esc(l.mfgSpecNum.trim())}</span>` : ""}</td>` +
         `<td style="padding:6px 12px 6px 0">${esc(l.description ?? "")}</td>` +
-        `<td style="padding:6px 12px 6px 0;white-space:nowrap">${l.rolls} roll${l.rolls === 1 ? "" : "s"}</td>` +
+        `<td style="padding:6px 12px 6px 0;white-space:nowrap">${l.rolls} roll${l.rolls === 1 ? "" : "s"}${
+          l.width && l.width > 0 ? ` @ ${esc(l.width)}&quot;` : ""
+        }</td>` +
         `<td style="padding:6px 0;white-space:nowrap">${l.footage ? `~${Math.round(l.footage).toLocaleString("en-US")} ft` : ""}</td></tr>`,
     )
     .join("");
@@ -934,6 +973,7 @@ router.get(
             description: l.description,
             rolls: l.rolls,
             footage: l.footage,
+            width: l.width,
             msiCost: l.msiCost,
             estCost: l.estCost,
           })),
@@ -974,6 +1014,7 @@ router.post(
       description: l.description ?? null,
       rolls: Math.round(Number(l.rolls)),
       footage: l.footage == null ? null : Number(l.footage),
+      width: l.width == null || Number(l.width) <= 0 ? null : Number(l.width),
       msiCost: l.msiCost == null ? null : Number(l.msiCost),
       estCost: l.estCost == null ? null : Number(l.estCost),
     }));
@@ -1265,7 +1306,9 @@ router.post(
               ordered: footagePerRoll,
               exact: true,
               no1: 1,
-              cut1: info?.masterWidth ?? 0,
+              // Order at the width the demand requires; the stock's master
+              // width only when the line doesn't specify one.
+              cut1: l.width && l.width > 0 ? l.width : (info?.masterWidth ?? 0),
             })),
           };
           if (poSigner !== undefined) body["poSigner"] = poSigner;
@@ -1308,6 +1351,7 @@ router.post(
         description: l.description,
         rolls: l.rolls,
         footage: l.footage,
+        width: l.width,
         estCost: l.estCost,
         mfgSpecNum: submitSpecs.get(l.stockId) ?? null,
       })),
@@ -1341,6 +1385,7 @@ async function poMailPayload(id: string) {
       description: l.description,
       rolls: l.rolls,
       footage: l.footage,
+      width: l.width,
       estCost: l.estCost,
       mfgSpecNum: specs.get(l.stockId) ?? null,
     })),

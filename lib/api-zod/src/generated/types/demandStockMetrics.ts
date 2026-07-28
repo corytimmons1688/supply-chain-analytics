@@ -11,6 +11,7 @@ import type { DemandStockMetricsLeadTimeSource } from "./demandStockMetricsLeadT
 import type { DemandStockMetricsOrderQtySource } from "./demandStockMetricsOrderQtySource";
 import type { DemandStockMetricsReorderMethod } from "./demandStockMetricsReorderMethod";
 import type { DemandStockMetricsReorderReason } from "./demandStockMetricsReorderReason";
+import type { SuggestedWidth } from "./suggestedWidth";
 
 export interface DemandStockMetrics {
   stockId: string;
@@ -90,6 +91,8 @@ export interface DemandStockMetrics {
   demandFromStockId: string | null;
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
+  /** The suggestion broken out by the width to order: committed shortfalls at the exact ticket widths, forecast/EOQ remainder at the stock's master width. */
+  suggestedWidths?: SuggestedWidth[];
   belowMin: boolean;
   openTicketFootage: number;
   /** Committed footage due to ship within the lead-time horizon (drives the reorder point). */

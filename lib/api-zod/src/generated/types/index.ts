@@ -137,6 +137,8 @@ export * from "./stockBreakdownItem";
 export * from "./stockGoal";
 export * from "./stockIdParameter";
 export * from "./stockOpenPo";
+export * from "./suggestedWidth";
+export * from "./suggestedWidthReason";
 export * from "./syncLabeltraxxLeadTimesParams";
 export * from "./timeseriesPoint";
 export * from "./toParameter";

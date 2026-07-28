@@ -1199,7 +1199,12 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
 // Suggested POs tab
 // ---------------------------------------------------------------------
 type SuggestionLine = {
+  /** Row identity: one suggestion row per stock × ordered width. */
+  key: string;
   stockId: string;
+  /** Master width to order (inches); 0 = unknown → stock master width. */
+  width: number;
+  widthReason: "committed" | "forecast" | "both" | null;
   description: string | null;
   vendorName: string;
   vendorEmails: string | null;
@@ -1229,8 +1234,10 @@ type SuggestionLine = {
 };
 
 function lineEstCost(l: SuggestionLine): number | null {
-  if (l.msiCost == null || l.masterWidth <= 0 || l.footagePerRoll <= 0) return null;
-  const msi = footageToMsi(l.rolls * l.footagePerRoll, l.masterWidth);
+  // Cost at the width being ORDERED — a 30" roll is not priced like a 13" one.
+  const w = l.width > 0 ? l.width : l.masterWidth;
+  if (l.msiCost == null || w <= 0 || l.footagePerRoll <= 0) return null;
+  const msi = footageToMsi(l.rolls * l.footagePerRoll, w);
   return msi * (l.msiCost + l.freightMsi);
 }
 
@@ -1318,15 +1325,25 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           r.suggestedOrderRolls > 0 &&
           (committedDriven(r) || (r.activityStatus !== "dormant" && r.activityStatus !== "never")),
       )
-      .map((r) => {
+      .flatMap((r) => {
         const p = purchByStock.get(r.stockId);
-        return {
+        // One suggestion row per width to order (committed shortfalls at the
+        // exact ticket widths, forecast remainder at master width); stocks
+        // with no width detail fall back to a single master-width row.
+        const widths =
+          r.suggestedWidths && r.suggestedWidths.length > 0
+            ? r.suggestedWidths
+            : [{ width: p?.masterWidth ?? 0, footage: r.suggestedOrderFootage, rolls: r.suggestedOrderRolls, reason: null as never }];
+        return widths.map((w) => ({
+          key: `${r.stockId}|${w.width}`,
+          width: w.width,
+          widthReason: (w.reason ?? null) as SuggestionLine["widthReason"],
           stockId: r.stockId,
           description: r.description ?? null,
           vendorName: p?.vendorName ?? "Unassigned vendor",
           vendorEmails: p?.vendorEmails ?? null,
-          suggestedRolls: r.suggestedOrderRolls,
-          rolls: r.suggestedOrderRolls,
+          suggestedRolls: w.rolls,
+          rolls: w.rolls,
           selected: r.belowMin,
           footagePerRoll: r.typicalRollFootage,
           msiCost: p?.msiCost ?? null,
@@ -1347,9 +1364,14 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           openPoCount: r.openPoCount,
           minFootage: r.reorderPointFootage,
           maxFootage: r.maxFootage,
-        };
+        }));
       })
-      .sort((a, b) => Number(b.belowMin) - Number(a.belowMin) || a.stockId.localeCompare(b.stockId, undefined, { numeric: true }));
+      .sort(
+        (a, b) =>
+          Number(b.belowMin) - Number(a.belowMin) ||
+          a.stockId.localeCompare(b.stockId, undefined, { numeric: true }) ||
+          a.width - b.width,
+      );
     setLines(next);
   }, [purch, rows]);
 
@@ -1363,8 +1385,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [lines]);
 
-  const setLine = (stockId: string, patch: Partial<SuggestionLine>) =>
-    setLines((prev) => prev.map((l) => (l.stockId === stockId ? { ...l, ...patch } : l)));
+  const setLine = (key: string, patch: Partial<SuggestionLine>) =>
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
   const handleCreate = async (vendorName: string, vendorLines: SuggestionLine[]) => {
     const selected = vendorLines.filter((l) => l.selected && l.rolls > 0);
@@ -1389,6 +1411,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                 description: l.description,
                 rolls: l.rolls,
                 footage: l.rolls * l.footagePerRoll || null,
+                width: l.width > 0 ? l.width : null,
                 msiCost: l.msiCost,
                 estCost: lineEstCost(l),
               },
@@ -1399,7 +1422,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
       toast({
         title: `${selected.length} PO${selected.length === 1 ? "" : "s"} created`,
-        description: `One per material for ${vendorName} — review & submit in PO History below`,
+        description: `One per material & width for ${vendorName} — review & submit in PO History below`,
       });
     } catch (e) {
       toast({ title: "Failed", description: String(e), variant: "destructive" });
@@ -1442,6 +1465,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
     const l = po.lines[0];
     const line = l
       ? `  • Stock #${l.stockId}${l.description ? ` — ${l.description}` : ""}: ${l.rolls} roll${l.rolls === 1 ? "" : "s"}` +
+        (l.width ? ` @ ${l.width}" wide` : "") +
         (l.footage ? ` (~${Math.round(l.footage).toLocaleString()} ft)` : "")
       : "";
     // Reference the Label Traxx PO number once assigned, so the vendor can quote it.
@@ -1524,6 +1548,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       <tr className="border-b bg-muted/40 text-muted-foreground">
                         <th className="w-8 px-2 py-1.5" />
                         <th className="text-left px-2 py-1.5 font-medium">Stock</th>
+                        <th className="text-right px-2 py-1.5 font-medium" title="Master width to order — committed shortfalls order the exact ticket width">Width</th>
                         <th className="text-left px-2 py-1.5 font-medium">Why</th>
                         <th className="text-right px-2 py-1.5 font-medium" title="On-hand footage in inventory now">
                           On hand (ft)
@@ -1548,13 +1573,33 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     </thead>
                     <tbody>
                       {vendorLines.map((l) => (
-                        <tr key={l.stockId} className="border-b last:border-b-0">
+                        <tr key={l.key} className="border-b last:border-b-0">
                           <td className="px-2 py-1.5">
-                            <Checkbox checked={l.selected} onCheckedChange={(c) => setLine(l.stockId, { selected: c === true })} />
+                            <Checkbox checked={l.selected} onCheckedChange={(c) => setLine(l.key, { selected: c === true })} />
                           </td>
                           <td className="px-2 py-1.5">
                             <span className="font-medium">#{l.stockId}</span>{" "}
                             <span className="text-muted-foreground">{(l.description ?? "").slice(0, 44)}</span>
+                          </td>
+                          <td
+                            className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap"
+                            title={
+                              l.widthReason === "committed"
+                                ? "Open tickets require this exact width"
+                                : l.widthReason === "forecast"
+                                  ? "Forecast/EOQ top-up at the stock's master width"
+                                  : l.widthReason === "both"
+                                    ? "Ticket requirement plus forecast top-up at this width"
+                                    : undefined
+                            }
+                          >
+                            {l.width > 0 ? (
+                              <span className={cn("font-medium", l.widthReason === "committed" && "text-red-700 dark:text-red-400")}>
+                                {l.width}″
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </td>
                           <td className="px-2 py-1.5">
                             {(l.reorderReason === "committed" || l.reorderReason === "both") && (
@@ -1620,7 +1665,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                               min={0}
                               className="h-6 w-16 text-xs text-right inline-block"
                               value={l.rolls}
-                              onChange={(e) => setLine(l.stockId, { rolls: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+                              onChange={(e) => setLine(l.key, { rolls: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
                             />
                             {l.eoqRolls > 0 && (
                               <div
@@ -1679,7 +1724,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                 <div className="min-w-0">
                   <span className="font-medium">{po.vendorName}</span>{" "}
                   <span className="text-muted-foreground">
-                    · {po.lines.map((l) => `#${l.stockId}×${l.rolls}`).join(", ")} ·{" "}
+                    · {po.lines.map((l) => `#${l.stockId}×${l.rolls}${l.width ? ` @ ${l.width}\u2033` : ""}`).join(", ")} ·{" "}
                     {new Date(po.createdAt).toLocaleDateString()}
                     {po.requestedDeliveryDate && ` · due ${po.requestedDeliveryDate}`}
                   </span>

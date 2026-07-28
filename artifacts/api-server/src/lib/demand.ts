@@ -638,6 +638,12 @@ export interface WidthAvailResult {
   widthRows: WidthRow[];
   lineStatus: Map<string, string>;
   committedShortageFootage: number;
+  /**
+   * Uncovered committed footage by the EXACT width the tickets require
+   * (12.5 vs 12.75 vs 13 stay distinct even though supply pools ≤13") — this
+   * is what the buyer actually orders, so suggestions break out by it.
+   */
+  shortByExactWidth: { width: number; footage: number }[];
 }
 
 /**
@@ -692,6 +698,8 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
   // Demand per bucket + per-line netting (earliest ship first).
   const requiredByW = new Map<string, number>();
   const lineStatus = new Map<string, string>();
+  // Residual (uncovered) footage per EXACT required width — what to order.
+  const shortExact = new Map<number, number>();
   const ordered = [...input.lines].sort((a, b) =>
     (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"),
   );
@@ -709,6 +717,12 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
     const u = Math.min(unconfirmed.get(k) ?? 0, need);
     unconfirmed.set(k, (unconfirmed.get(k) ?? 0) - u);
     need -= u;
+    if (need > 1) {
+      const exact =
+        Math.round((line.requiredWidth || 0) * 100) / 100 ||
+        Math.round((input.masterWidthFallback || 0) * 100) / 100;
+      shortExact.set(exact, (shortExact.get(exact) ?? 0) + need);
+    }
     lineStatus.set(
       line.key,
       need > 1 ? "Out" : u > 0 ? "Ordered Not Confirmed" : c > 0 ? "Ordered" : "In",
@@ -743,7 +757,11 @@ export function computeWidthAvailability(input: WidthAvailInput): WidthAvailResu
     });
   }
   widthRows.sort((a, b) => a.width - b.width);
-  return { widthRows, lineStatus, committedShortageFootage: Math.round(committedShortageFootage) };
+  const shortByExactWidth = [...shortExact.entries()]
+    .map(([width, footage]) => ({ width, footage: Math.round(footage) }))
+    .filter((s) => s.footage > 0)
+    .sort((a, b) => a.width - b.width);
+  return { widthRows, lineStatus, committedShortageFootage: Math.round(committedShortageFootage), shortByExactWidth };
 }
 
 export interface PoRollRow {
@@ -1064,6 +1082,13 @@ export interface StockMetrics {
   orderQtySource: "manual" | "eoq" | "heuristic";
   suggestedOrderFootage: number;
   suggestedOrderRolls: number;
+  /**
+   * The suggestion broken out by the width to ORDER: committed shortfalls at
+   * the exact ticket widths (12.5 vs 12.75 vs 13 stay distinct), any
+   * forecast/EOQ remainder at the stock's master width. Filled by the summary
+   * route, which owns the width-availability computation.
+   */
+  suggestedWidths: { width: number; footage: number; rolls: number; reason: "committed" | "forecast" | "both" }[];
   belowMin: boolean;
   /** End-of-life: still counted for on-hand, but never suggested for reorder. */
   discontinued: boolean;
@@ -1413,6 +1438,7 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       demandFromStockId: input.demandFromStockId ?? null,
       suggestedOrderFootage: Math.round(suggestedOrderFootage),
       suggestedOrderRolls,
+      suggestedWidths: [],
       belowMin,
       openTicketFootage: Math.round(openTicketFootage),
       committedWithinLeadFootage: Math.round(committedWithinLead),
