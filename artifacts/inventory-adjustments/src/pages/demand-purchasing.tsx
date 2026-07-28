@@ -30,6 +30,7 @@ import {
   type MaterialPo,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { authorizedFetch, openAuthorizedUrl } from "@/lib/auth-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,7 +144,7 @@ async function openPoDocument(win: Window, poId: string): Promise<void> {
   win.document.close();
   let d: PoDocData;
   try {
-    const res = await fetch(`/api/demand/pos/${poId}/document`);
+    const res = await authorizedFetch(`/api/demand/pos/${poId}/document`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     d = (await res.json()) as PoDocData;
   } catch (e) {
@@ -2131,7 +2132,7 @@ function SendPoDialog({
     let live = true;
     (async () => {
       try {
-        const res = await fetch(`/api/demand/pos/${po.id}/email-preview`);
+        const res = await authorizedFetch(`/api/demand/pos/${po.id}/email-preview`);
         const json = (await res.json()) as EmailPreview & { error?: string };
         if (!live) return;
         if (!res.ok) setError(json.error ?? `HTTP ${res.status}`);
@@ -2212,14 +2213,13 @@ function SendPoDialog({
               <span className="inline-flex items-center gap-1">
                 <Printer className="w-3 h-3 text-muted-foreground" />
                 {preview.attachmentName}
-                <a
-                  href={`/api/demand/pos/${po.id}/pdf`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => void openAuthorizedUrl(`/api/demand/pos/${po.id}/pdf`)}
                   className="text-primary hover:underline ml-1"
                 >
                   preview
-                </a>
+                </button>
               </span>
             </div>
             <pre className="whitespace-pre-wrap rounded-md border bg-muted/40 p-3 max-h-56 overflow-auto font-sans leading-relaxed">
@@ -2730,12 +2730,13 @@ function PoActivityDialog({ po, onClose }: { po: MaterialPo; onClose: () => void
                 {data.attachments!.map((a) => (
                   <div key={a.id} className="flex items-center gap-2">
                     <Printer className="w-3 h-3 text-muted-foreground" />
-                    <a
-                      href={`/api/demand/pos/${po.id}/attachments/${a.id}`}
+                    <button
+                      type="button"
+                      onClick={() => void openAuthorizedUrl(`/api/demand/pos/${po.id}/attachments/${a.id}`, a.filename)}
                       className="text-primary hover:underline"
                     >
                       {a.filename}
-                    </a>
+                    </button>
                     <span className="text-muted-foreground">
                       {(a.sizeBytes / 1024).toFixed(0)} KB · {new Date(a.createdAt).toLocaleDateString()}
                     </span>

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut } from "lucide-react";
+import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth } from "@workspace/api-client-react";
 import {
@@ -167,12 +168,36 @@ export function Layout({ children }: LayoutProps) {
             {health?.latencyMs ? `${health.latencyMs}ms` : "---"}
             <Activity className="w-3.5 h-3.5 ml-1.5" />
           </div>
+          <UserMenu />
         </div>
       </header>
 
       <main className="flex-1 overflow-auto">
         <div className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8 space-y-4 sm:space-y-6">{children}</div>
       </main>
+    </div>
+  );
+}
+
+
+/** Signed-in identity + sign-out, fed by the Better Auth session. */
+function UserMenu() {
+  const { data: session } = authClient.useSession();
+  if (!session?.user) return null;
+  return (
+    <div className="flex items-center gap-2 pl-2 border-l border-border">
+      <span className="hidden md:inline text-muted-foreground max-w-[14rem] truncate" title={session.user.email}>
+        {session.user.name || session.user.email}
+      </span>
+      <button
+        type="button"
+        onClick={() => void signOutEverywhere()}
+        className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+        title="Sign out"
+      >
+        <LogOut className="w-3.5 h-3.5" />
+        <span className="hidden lg:inline">Sign out</span>
+      </button>
     </div>
   );
 }
