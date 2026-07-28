@@ -391,7 +391,12 @@ export default function DemandPlanning() {
   const [showOnly, setShowOnly] = React.useState<
     "all" | "belowMin" | "review" | "dormant" | "activeOnHand" | "anyOnHand"
   >("all");
-  const [tab, setTab] = React.useState<"demand" | "pos" | "config">("demand");
+  // `?tab=` lets an external redirect land on the right tab — the Gmail OAuth
+  // callback comes back to ?tab=config so the connect card is on screen.
+  const [tab, setTab] = React.useState<"demand" | "pos" | "config">(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    return requested === "pos" || requested === "config" ? requested : "demand";
+  });
 
   const params: GetDemandSummaryParams = {
     monthsBack,

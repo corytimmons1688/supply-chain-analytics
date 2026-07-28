@@ -48,6 +48,8 @@ import type {
   GetVendorLeadTimesParams,
   GetVendorScorecardsParams,
   GetVendorTrendParams,
+  GmailDisconnectResult,
+  GmailStatus,
   GoalBand,
   GoalBandInput,
   GoalsResponse,
@@ -79,6 +81,8 @@ import type {
   MonthlySnapshot,
   NetsuiteSyncResult,
   OnHandInventory,
+  PoEmailPreview,
+  PoSendResult,
   PricingReview,
   PricingReviewInput,
   PurchasingResponse,
@@ -89,6 +93,7 @@ import type {
   ScorecardResponse,
   SeedCurrentAsl200,
   SeedVendors200,
+  SendMaterialPo409,
   StockGoal,
   SyncLabeltraxxLeadTimesParams,
   VarianceInvestigation,
@@ -2483,6 +2488,333 @@ export const useSubmitMaterialPo = <
   TContext
 > => {
   return useMutation(getSubmitMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Exactly what the vendor PO email will contain, before anything is sent
+ */
+export const getGetPoEmailPreviewUrl = (id: string) => {
+  return `/api/demand/pos/${id}/email-preview`;
+};
+
+export const getPoEmailPreview = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PoEmailPreview> => {
+  return customFetch<PoEmailPreview>(getGetPoEmailPreviewUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPoEmailPreviewQueryKey = (id: string) => {
+  return [`/api/demand/pos/${id}/email-preview`] as const;
+};
+
+export const getGetPoEmailPreviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPoEmailPreview>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPoEmailPreview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPoEmailPreviewQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPoEmailPreview>>
+  > = ({ signal }) => getPoEmailPreview(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPoEmailPreview>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPoEmailPreviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPoEmailPreview>>
+>;
+export type GetPoEmailPreviewQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Exactly what the vendor PO email will contain, before anything is sent
+ */
+
+export function useGetPoEmailPreview<
+  TData = Awaited<ReturnType<typeof getPoEmailPreview>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPoEmailPreview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPoEmailPreviewQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Email the PO to the vendor through Gmail with the PO PDF attached
+ */
+export const getSendMaterialPoUrl = (id: string) => {
+  return `/api/demand/pos/${id}/send`;
+};
+
+export const sendMaterialPo = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PoSendResult> => {
+  return customFetch<PoSendResult>(getSendMaterialPoUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getSendMaterialPoMutationOptions = <
+  TError = ErrorType<SendMaterialPo409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["sendMaterialPo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendMaterialPo>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return sendMaterialPo(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendMaterialPoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendMaterialPo>>
+>;
+
+export type SendMaterialPoMutationError = ErrorType<SendMaterialPo409>;
+
+/**
+ * @summary Email the PO to the vendor through Gmail with the PO PDF attached
+ */
+export const useSendMaterialPo = <
+  TError = ErrorType<SendMaterialPo409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendMaterialPo>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendMaterialPo>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getSendMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary Whether PO email can be sent, and from which mailbox
+ */
+export const getGetGmailStatusUrl = () => {
+  return `/api/integrations/gmail`;
+};
+
+export const getGmailStatus = async (
+  options?: RequestInit,
+): Promise<GmailStatus> => {
+  return customFetch<GmailStatus>(getGetGmailStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetGmailStatusQueryKey = () => {
+  return [`/api/integrations/gmail`] as const;
+};
+
+export const getGetGmailStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getGmailStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getGmailStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetGmailStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getGmailStatus>>> = ({
+    signal,
+  }) => getGmailStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getGmailStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetGmailStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getGmailStatus>>
+>;
+export type GetGmailStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Whether PO email can be sent, and from which mailbox
+ */
+
+export function useGetGmailStatus<
+  TData = Awaited<ReturnType<typeof getGmailStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getGmailStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetGmailStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Forget the stored Gmail refresh token
+ */
+export const getDisconnectGmailUrl = () => {
+  return `/api/integrations/gmail/disconnect`;
+};
+
+export const disconnectGmail = async (
+  options?: RequestInit,
+): Promise<GmailDisconnectResult> => {
+  return customFetch<GmailDisconnectResult>(getDisconnectGmailUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDisconnectGmailMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disconnectGmail>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof disconnectGmail>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["disconnectGmail"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof disconnectGmail>>,
+    void
+  > = () => {
+    return disconnectGmail(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DisconnectGmailMutationResult = NonNullable<
+  Awaited<ReturnType<typeof disconnectGmail>>
+>;
+
+export type DisconnectGmailMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Forget the stored Gmail refresh token
+ */
+export const useDisconnectGmail = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disconnectGmail>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof disconnectGmail>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getDisconnectGmailMutationOptions(options));
 };
 
 /**

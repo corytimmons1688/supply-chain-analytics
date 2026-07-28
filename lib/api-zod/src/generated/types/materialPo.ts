@@ -19,5 +19,9 @@ export interface MaterialPo {
   createdAt: string;
   receivedOn?: string | null;
   actualLeadDays?: number | null;
+  /** When the PO was emailed to the vendor from the dashboard. */
+  emailedAt?: string | null;
+  /** Recipients of that send (To + CC). */
+  emailedTo?: string | null;
   lines: MaterialPoLine[];
 }

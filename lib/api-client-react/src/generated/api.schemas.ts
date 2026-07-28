@@ -641,6 +641,10 @@ export interface MaterialPo {
   createdAt: string;
   receivedOn?: string | null;
   actualLeadDays?: number | null;
+  /** When the PO was emailed to the vendor from the dashboard. */
+  emailedAt?: string | null;
+  /** Recipients of that send (To + CC). */
+  emailedTo?: string | null;
   lines: MaterialPoLine[];
 }
 
@@ -661,6 +665,47 @@ export interface PoEmail {
   to: string;
   subject: string;
   body: string;
+}
+
+export interface GmailStatus {
+  /** OAuth client env vars are present, so connecting is possible. */
+  configured: boolean;
+  connected: boolean;
+  /** Mailbox PO email is sent from. */
+  accountEmail?: string | null;
+  connectedAt?: string | null;
+  /** Must be registered on the Google OAuth client verbatim. */
+  redirectUri?: string;
+}
+
+export interface GmailDisconnectResult {
+  disconnected: boolean;
+}
+
+export interface PoEmailPreview {
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  attachmentName: string;
+  /** PO is not in Label Traxx yet, so the PDF is marked DRAFT. */
+  isDraft: boolean;
+  emailedAt?: string | null;
+  emailedTo?: string | null;
+  gmailConfigured: boolean;
+  gmailAccount?: string | null;
+}
+
+export interface PoSendResult {
+  sent: boolean;
+  to: string[];
+  cc: string[];
+  subject: string;
+  attachmentName: string;
+  messageId?: string;
+  threadId?: string;
+  emailedAt?: string;
+  from?: string | null;
 }
 
 export interface MaterialPoUpdateInput {
@@ -1463,6 +1508,10 @@ export type DeleteMaterialPo409 = {
   error?: string;
   status?: string;
   ltPoNumbers?: string | null;
+};
+
+export type SendMaterialPo409 = {
+  error?: string;
 };
 
 export type GetDemandSummaryParams = {

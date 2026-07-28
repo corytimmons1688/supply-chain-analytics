@@ -33,6 +33,10 @@ export const materialPoTable = pgTable("material_po", {
   ltPoNumbers: text("lt_po_numbers"),
   notes: text("notes"),
   requestedDeliveryDate: text("requested_delivery_date"), // ISO date
+  // Set when the PO has actually been emailed to the vendor from the dashboard
+  // (Gmail), so the UI can show it and a second send is a deliberate re-send.
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+  emailedTo: text("emailed_to"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

@@ -9,6 +9,7 @@ import monthlySnapshotsRouter from "./monthly-snapshots";
 import demandRouter from "./demand";
 import cycleCountsRouter from "./cycle-counts";
 import vendorsRouter from "./vendors";
+import integrationsRouter from "./integrations";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(monthlySnapshotsRouter);
 router.use(demandRouter);
 router.use(cycleCountsRouter);
 router.use(vendorsRouter);
+router.use(integrationsRouter);
 
 export default router;

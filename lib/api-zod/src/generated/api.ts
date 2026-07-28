@@ -905,6 +905,14 @@ export const ListMaterialPosResponse = zod.object({
       createdAt: zod.string(),
       receivedOn: zod.string().nullish(),
       actualLeadDays: zod.number().nullish(),
+      emailedAt: zod
+        .string()
+        .nullish()
+        .describe("When the PO was emailed to the vendor from the dashboard."),
+      emailedTo: zod
+        .string()
+        .nullish()
+        .describe("Recipients of that send (To + CC)."),
       lines: zod.array(
         zod.object({
           stockId: zod.string(),
@@ -1036,6 +1044,73 @@ export const SubmitMaterialPoResponse = zod.object({
     subject: zod.string(),
     body: zod.string(),
   }),
+});
+
+/**
+ * @summary Exactly what the vendor PO email will contain, before anything is sent
+ */
+export const GetPoEmailPreviewParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetPoEmailPreviewResponse = zod.object({
+  to: zod.array(zod.string()),
+  cc: zod.array(zod.string()),
+  subject: zod.string(),
+  body: zod.string(),
+  attachmentName: zod.string(),
+  isDraft: zod
+    .boolean()
+    .describe("PO is not in Label Traxx yet, so the PDF is marked DRAFT."),
+  emailedAt: zod.string().nullish(),
+  emailedTo: zod.string().nullish(),
+  gmailConfigured: zod.boolean(),
+  gmailAccount: zod.string().nullish(),
+});
+
+/**
+ * @summary Email the PO to the vendor through Gmail with the PO PDF attached
+ */
+export const SendMaterialPoParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const SendMaterialPoResponse = zod.object({
+  sent: zod.boolean(),
+  to: zod.array(zod.string()),
+  cc: zod.array(zod.string()),
+  subject: zod.string(),
+  attachmentName: zod.string(),
+  messageId: zod.string().optional(),
+  threadId: zod.string().optional(),
+  emailedAt: zod.string().optional(),
+  from: zod.string().nullish(),
+});
+
+/**
+ * @summary Whether PO email can be sent, and from which mailbox
+ */
+export const GetGmailStatusResponse = zod.object({
+  configured: zod
+    .boolean()
+    .describe("OAuth client env vars are present, so connecting is possible."),
+  connected: zod.boolean(),
+  accountEmail: zod
+    .string()
+    .nullish()
+    .describe("Mailbox PO email is sent from."),
+  connectedAt: zod.string().nullish(),
+  redirectUri: zod
+    .string()
+    .optional()
+    .describe("Must be registered on the Google OAuth client verbatim."),
+});
+
+/**
+ * @summary Forget the stored Gmail refresh token
+ */
+export const DisconnectGmailResponse = zod.object({
+  disconnected: zod.boolean(),
 });
 
 /**

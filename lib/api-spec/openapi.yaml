@@ -483,6 +483,68 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MaterialPoSubmitResult" }
+  /demand/pos/{id}/email-preview:
+    get:
+      operationId: getPoEmailPreview
+      tags: [demand]
+      summary: Exactly what the vendor PO email will contain, before anything is sent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Preview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoEmailPreview" }
+  /demand/pos/{id}/send:
+    post:
+      operationId: sendMaterialPo
+      tags: [demand]
+      summary: Email the PO to the vendor through Gmail with the PO PDF attached
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoSendResult" }
+        "409":
+          description: Gmail is not set up or not connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+  /integrations/gmail:
+    get:
+      operationId: getGmailStatus
+      tags: [integrations]
+      summary: Whether PO email can be sent, and from which mailbox
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GmailStatus" }
+  /integrations/gmail/disconnect:
+    post:
+      operationId: disconnectGmail
+      tags: [integrations]
+      summary: Forget the stored Gmail refresh token
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GmailDisconnectResult" }
   /demand/summary:
     get:
       operationId: getDemandSummary
@@ -1856,6 +1918,8 @@ components:
         createdAt: { type: string }
         receivedOn: { type: string, nullable: true }
         actualLeadDays: { type: number, nullable: true }
+        emailedAt: { type: string, nullable: true, description: "When the PO was emailed to the vendor from the dashboard." }
+        emailedTo: { type: string, nullable: true, description: "Recipients of that send (To + CC)." }
         lines:
           type: array
           items: { $ref: "#/components/schemas/MaterialPoLine" }
@@ -1885,6 +1949,47 @@ components:
         to: { type: string }
         subject: { type: string }
         body: { type: string }
+    GmailStatus:
+      type: object
+      required: [configured, connected]
+      properties:
+        configured: { type: boolean, description: "OAuth client env vars are present, so connecting is possible." }
+        connected: { type: boolean }
+        accountEmail: { type: string, nullable: true, description: "Mailbox PO email is sent from." }
+        connectedAt: { type: string, nullable: true }
+        redirectUri: { type: string, description: "Must be registered on the Google OAuth client verbatim." }
+    GmailDisconnectResult:
+      type: object
+      required: [disconnected]
+      properties:
+        disconnected: { type: boolean }
+    PoEmailPreview:
+      type: object
+      required: [to, cc, subject, body, attachmentName, isDraft, gmailConfigured]
+      properties:
+        to: { type: array, items: { type: string } }
+        cc: { type: array, items: { type: string } }
+        subject: { type: string }
+        body: { type: string }
+        attachmentName: { type: string }
+        isDraft: { type: boolean, description: "PO is not in Label Traxx yet, so the PDF is marked DRAFT." }
+        emailedAt: { type: string, nullable: true }
+        emailedTo: { type: string, nullable: true }
+        gmailConfigured: { type: boolean }
+        gmailAccount: { type: string, nullable: true }
+    PoSendResult:
+      type: object
+      required: [sent, to, cc, subject, attachmentName]
+      properties:
+        sent: { type: boolean }
+        to: { type: array, items: { type: string } }
+        cc: { type: array, items: { type: string } }
+        subject: { type: string }
+        attachmentName: { type: string }
+        messageId: { type: string }
+        threadId: { type: string }
+        emailedAt: { type: string }
+        from: { type: string, nullable: true }
     MaterialPoUpdateInput:
       type: object
       properties:

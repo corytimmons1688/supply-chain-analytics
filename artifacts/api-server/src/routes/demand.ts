@@ -23,6 +23,7 @@ import {
   type WidthRow,
 } from "../lib/demand";
 import { fetchDazpakByStock } from "../lib/dazpak-sync";
+import { assemblePoDocument, PoDocumentError } from "../lib/po-document";
 import { logger } from "../lib/logger";
 import type { Bucket } from "../lib/cc";
 
@@ -785,7 +786,7 @@ function poEmail(po: {
     /** The vendor's own spec number for the material, when Label Traxx has one. */
     mfgSpecNum?: string | null;
   }[];
-}): { to: string; cc: string; subject: string; body: string } {
+}): { to: string; cc: string; subject: string; body: string; html: string } {
   const lines = po.lines
     .map(
       (l) =>
@@ -802,6 +803,34 @@ function poEmail(po: {
     (total > 0 ? `Estimated total: $${total.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n` : "") +
     `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
     `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
+  // HTML alternative for the Gmail send — same content, readable in a vendor's
+  // inbox. The plain-text part above stays the fallback.
+  const esc = (v: unknown) =>
+    String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const itemRows = po.lines
+    .map(
+      (l) =>
+        `<tr><td style="padding:6px 12px 6px 0">Stock #${esc(l.stockId)}` +
+        `${l.mfgSpecNum?.trim() ? `<br><span style="color:#666;font-size:12px">MFG Spec ${esc(l.mfgSpecNum.trim())}</span>` : ""}</td>` +
+        `<td style="padding:6px 12px 6px 0">${esc(l.description ?? "")}</td>` +
+        `<td style="padding:6px 12px 6px 0;white-space:nowrap">${l.rolls} roll${l.rolls === 1 ? "" : "s"}</td>` +
+        `<td style="padding:6px 0;white-space:nowrap">${l.footage ? `~${Math.round(l.footage).toLocaleString("en-US")} ft` : ""}</td></tr>`,
+    )
+    .join("");
+  const html =
+    `<div style="font-family:Helvetica,Arial,sans-serif;font-size:14px;color:#111;line-height:1.5">` +
+    `<p>Hi All,</p><p>Please find our purchase order${esc(poRef)} below${
+      po.lines.length === 1 ? " and attached as a PDF" : ""
+    }:</p>` +
+    `<table style="border-collapse:collapse;font-size:14px;margin:0 0 16px"><thead><tr style="text-align:left;color:#666;font-size:11px;text-transform:uppercase">` +
+    `<th style="padding:0 12px 4px 0">Material</th><th style="padding:0 12px 4px 0">Description</th>` +
+    `<th style="padding:0 12px 4px 0">Qty</th><th style="padding:0 0 4px">Footage</th></tr></thead>` +
+    `<tbody>${itemRows}</tbody></table>` +
+    (po.requestedDeliveryDate ? `<p><strong>Requested delivery:</strong> ${esc(po.requestedDeliveryDate)}</p>` : "") +
+    `<p style="margin:16px 0 4px"><strong>Ship to</strong></p>` +
+    `<p style="margin:0">Calyx Containers<br>1991 Parkway Blvd<br>West Valley City, UT 84119</p>` +
+    `<p>Please confirm receipt and expected ship date.</p>` +
+    `<p>Thank you,<br>Calyx Containers Supply Chain</p></div>`;
   return {
     to: parseEmails(po.vendorEmails).join(","),
     cc: parseEmails(po.vendorCcEmails ?? null).join(","),
@@ -816,6 +845,7 @@ function poEmail(po: {
           ? po.lines.map((l) => `#${l.stockId}`).join(", ")
           : `${po.lines.length} items`),
     body,
+    html,
   };
 }
 
@@ -893,6 +923,8 @@ router.get(
           createdAt: po.createdAt.toISOString(),
           receivedOn,
           actualLeadDays,
+          emailedAt: po.emailedAt?.toISOString() ?? null,
+          emailedTo: po.emailedTo,
           lines: (linesByPo.get(po.id) ?? []).map((l) => ({
             stockId: l.stockId,
             description: l.description,
@@ -963,90 +995,30 @@ router.post(
 router.get(
   "/demand/pos/:id/document",
   asyncHandler(async (req, res) => {
-    const id = String(req.params["id"]);
-    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
-    if (!po) return void res.status(404).json({ error: "PO not found" });
-    const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
-    const line = lines[0];
-    if (!line) return void res.status(400).json({ error: "PO has no line" });
-
-    const [stock] = await db.select().from(ltStockTable).where(eq(ltStockTable.stockId, line.stockId)).limit(1);
-
-    // Supplier address + customer id, live from the LT API.
-    let supplier: Record<string, unknown> = {};
-    let vendorPartNum: string | null = null;
-    const { ltGet } = await import("../lib/ltApi");
-    if (stock?.supplierNumber) {
-      supplier = (await ltGet<Record<string, unknown>>("/supplier-details", {
-        SupplierNumber: stock.supplierNumber,
-      }).catch(() => ({}))) as Record<string, unknown>;
+    try {
+      res.json(await assemblePoDocument(String(req.params["id"])));
+    } catch (e) {
+      if (e instanceof PoDocumentError) return void res.status(e.status).json({ error: e.message });
+      throw e;
     }
-    // If already in Label Traxx, pull the real vendor part number off the PO.
-    const firstLtPo = (po.ltPoNumbers ?? "").split(",").map((n) => n.trim()).filter(Boolean)[0];
-    if (firstLtPo) {
-      const ltPo = await ltGet<Record<string, unknown>>("/purchase-order-details", { PONumber: firstLtPo }).catch(() => null);
-      const items = ltPo && Array.isArray(ltPo["poItems"]) ? (ltPo["poItems"] as Record<string, unknown>[]) : [];
-      vendorPartNum = items[0]?.["vendorPartNum"] != null ? String(items[0]!["vendorPartNum"]) : null;
+  }),
+);
+
+/** The same document as a PDF — what gets attached to the vendor email. */
+router.get(
+  "/demand/pos/:id/pdf",
+  asyncHandler(async (req, res) => {
+    try {
+      const doc = await assemblePoDocument(String(req.params["id"]));
+      const { renderPoPdf, poPdfFilename } = await import("../lib/po-pdf");
+      const pdf = await renderPoPdf(doc);
+      res.setHeader("content-type", "application/pdf");
+      res.setHeader("content-disposition", `inline; filename="${poPdfFilename(doc)}"`);
+      res.send(pdf);
+    } catch (e) {
+      if (e instanceof PoDocumentError) return void res.status(e.status).json({ error: e.message });
+      throw e;
     }
-
-    const company = String(supplier["company"] ?? po.vendorName);
-    const custIdMatch = /customer\s*id[:#\s]*([0-9]+)/i.exec(company);
-    const masterWidth = stock?.masterWidth ?? 0;
-    const rolls = Math.max(1, line.rolls);
-    const totalFootage = line.footage ?? 0;
-    const footagePerRoll = totalFootage > 0 ? Math.round(totalFootage / rolls) : 0;
-    const costMsi = line.msiCost ?? stock?.costMsi ?? 0;
-    const areaMsi = masterWidth > 0 ? (totalFootage * 12 * masterWidth) / 1000 : 0;
-    const purchasePrice = areaMsi * costMsi;
-    const weight = stock?.areaToWeightFactor ? areaMsi / stock.areaToWeightFactor : 0;
-
-    res.json({
-      poNumber: firstLtPo ?? `DRAFT-${po.id.slice(0, 6).toUpperCase()}`,
-      isDraft: !firstLtPo,
-      orderedDate: po.createdAt.toISOString().slice(0, 10),
-      requestedDeliveryDate: po.requestedDeliveryDate,
-      type: "New Order",
-      supplier: {
-        company: company.replace(/\s*customer\s*id[:#\s]*[0-9]+/i, "").trim(),
-        customerId: custIdMatch ? custIdMatch[1] : (supplier["accountNumber"] ? String(supplier["accountNumber"]) : null),
-        address1: supplier["address1"] ?? null,
-        address2: supplier["address2"] ?? null,
-        city: supplier["city"] ?? null,
-        state: supplier["state"] ?? null,
-        zip: supplier["zip"] ?? null,
-        country: supplier["country"] ?? null,
-        phone: supplier["phone"] ?? null,
-        fax: supplier["fax"] ?? null,
-        terms: supplier["terms"] ?? null,
-      },
-      shipTo: {
-        name: "Calyx Containers",
-        address1: "1991 Parkway Blvd",
-        city: "West Valley City",
-        state: "UT",
-        zip: "84119",
-        country: "USA",
-        phone: "1 (888) 432-7766",
-      },
-      material: {
-        stockId: line.stockId,
-        vendorPartNum,
-        description: stock?.faceStock ?? line.description ?? null,
-        mfgSpecNum: stock?.mfgSpecNum ?? null,
-        masterWidth,
-        costMsi,
-        color: stock?.faceColor ?? null,
-        adhesive: stock?.adhesive ?? null,
-        topCoat: stock?.topCoat || "None",
-      },
-      rolls: Array.from({ length: rolls }, (_, i) => ({ no: i + 1, footage: footagePerRoll, width: masterWidth })),
-      totals: {
-        rolls,
-        areaMsi: Math.round(areaMsi),
-        purchasePrice: Math.round(purchasePrice * 100) / 100,
-        weight: Math.round(weight),
-      },
-    });
   }),
 );
 
@@ -1335,6 +1307,144 @@ router.post(
       })),
     });
     res.json({ id, status, ltPoNumbers, ltWriteEnabled: true, ltError, email });
+  }),
+);
+
+/**
+ * Everything the send-confirmation dialog needs: resolved recipients, the exact
+ * subject/body that will go out, and the attachment name. Read-only — nothing is
+ * sent until the buyer confirms.
+ */
+async function poMailPayload(id: string) {
+  const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+  if (!po) throw new PoDocumentError("PO not found", 404);
+  const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
+  if (lines.length === 0) throw new PoDocumentError("PO has no line", 400);
+  const [contacts, specs] = await Promise.all([
+    vendorEmailsFor(po.vendorName, po.vendorEmails),
+    mfgSpecsFor(lines.map((l) => l.stockId)),
+  ]);
+  const email = poEmail({
+    vendorName: po.vendorName,
+    vendorEmails: contacts.to,
+    vendorCcEmails: contacts.cc,
+    ltPoNumbers: po.ltPoNumbers,
+    requestedDeliveryDate: po.requestedDeliveryDate,
+    lines: lines.map((l) => ({
+      stockId: l.stockId,
+      description: l.description,
+      rolls: l.rolls,
+      footage: l.footage,
+      estCost: l.estCost,
+      mfgSpecNum: specs.get(l.stockId) ?? null,
+    })),
+  });
+  return { po, email };
+}
+
+router.get(
+  "/demand/pos/:id/email-preview",
+  asyncHandler(async (req, res) => {
+    try {
+      const id = String(req.params["id"]);
+      const [{ po, email }, doc, gmail] = await Promise.all([
+        poMailPayload(id),
+        assemblePoDocument(id),
+        import("../lib/gmail").then(async (g) => ({
+          configured: g.gmailConfigured(),
+          connection: g.gmailConfigured() ? await g.gmailConnection() : null,
+        })),
+      ]);
+      const { poPdfFilename } = await import("../lib/po-pdf");
+      res.json({
+        to: parseEmails(email.to),
+        cc: parseEmails(email.cc),
+        subject: email.subject,
+        body: email.body,
+        attachmentName: poPdfFilename(doc),
+        /** The PDF says DRAFT until the PO exists in Label Traxx — worth a warning. */
+        isDraft: doc.isDraft,
+        emailedAt: po.emailedAt?.toISOString() ?? null,
+        emailedTo: po.emailedTo,
+        gmailConfigured: gmail.configured,
+        gmailAccount: gmail.connection?.accountEmail ?? null,
+      });
+    } catch (e) {
+      if (e instanceof PoDocumentError) return void res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+  }),
+);
+
+/**
+ * Email the PO to the vendor through Gmail, with the PO PDF attached. Sends as
+ * the connected mailbox, so it lands in that account's Sent folder and vendor
+ * replies come straight back. Only ever called from an explicit confirmation.
+ */
+router.post(
+  "/demand/pos/:id/send",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    try {
+      const gmail = await import("../lib/gmail");
+      if (!gmail.gmailConfigured()) {
+        return void res.status(409).json({
+          error: "Gmail is not set up on this deployment — GOOGLE_OAUTH_CLIENT_ID/SECRET are missing.",
+        });
+      }
+      const connection = await gmail.gmailConnection();
+      if (!connection) {
+        return void res
+          .status(409)
+          .json({ error: "Gmail is not connected — connect it in Demand Planning → Configuration." });
+      }
+
+      const { po, email } = await poMailPayload(id);
+      const to = parseEmails(email.to);
+      const cc = parseEmails(email.cc);
+      if (to.length === 0) {
+        return void res.status(400).json({
+          error: `No To address for ${po.vendorName} — add one under Configuration → Vendor PO contacts.`,
+        });
+      }
+
+      const doc = await assemblePoDocument(id);
+      const { renderPoPdf, poPdfFilename } = await import("../lib/po-pdf");
+      const pdf = await renderPoPdf(doc);
+
+      const sent = await gmail.sendMail({
+        to,
+        cc,
+        subject: email.subject,
+        text: email.body,
+        html: email.html,
+        attachments: [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }],
+      });
+
+      const emailedAt = new Date();
+      await db
+        .update(materialPoTable)
+        .set({ emailedAt, emailedTo: [...to, ...cc].join(", "), updatedAt: emailedAt })
+        .where(eq(materialPoTable.id, id));
+
+      logger.info({ poId: id, to, cc, messageId: sent.id }, "PO emailed to vendor via Gmail");
+      res.json({
+        sent: true,
+        to,
+        cc,
+        subject: email.subject,
+        attachmentName: poPdfFilename(doc),
+        messageId: sent.id,
+        threadId: sent.threadId,
+        emailedAt: emailedAt.toISOString(),
+        from: connection.accountEmail,
+      });
+    } catch (e) {
+      if (e instanceof PoDocumentError) return void res.status(e.status).json({ error: e.message });
+      const message = e instanceof Error ? e.message : String(e);
+      logger.error({ poId: id, err: message }, "PO send failed");
+      res.status(502).json({ error: message });
+    }
   }),
 );
 
