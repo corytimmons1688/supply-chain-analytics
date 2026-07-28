@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -2549,6 +2550,9 @@ function PoAgentQueueCard() {
   const dismiss = useDismissPoAgentDraft();
   const resolve = useResolvePoAttention();
   const [expanded, setExpanded] = React.useState<string | null>(null);
+  // Local edits per draft — what Approve actually sends. Untouched drafts send
+  // the agent's wording unchanged.
+  const [edits, setEdits] = React.useState<Record<string, { subject: string; body: string }>>({});
 
   const refresh = () =>
     Promise.all([
@@ -2587,7 +2591,7 @@ function PoAgentQueueCard() {
                   className="text-primary hover:underline"
                   onClick={() => setExpanded(expanded === d.id ? null : d.id)}
                 >
-                  {expanded === d.id ? "Hide" : "Review"}
+                  {expanded === d.id ? "Hide" : "Review / edit"}
                 </button>
                 <Button
                   size="sm"
@@ -2595,8 +2599,15 @@ function PoAgentQueueCard() {
                   disabled={approve.isPending}
                   onClick={async () => {
                     try {
-                      await approve.mutateAsync({ id: d.id });
-                      toast({ title: "Follow-up sent", description: `${d.vendorName} — ${d.subject}` });
+                      const edit = edits[d.id];
+                      await approve.mutateAsync({
+                        id: d.id,
+                        data: edit ? { subject: edit.subject, body: edit.body } : {},
+                      });
+                      toast({
+                        title: edit ? "Edited follow-up sent" : "Follow-up sent",
+                        description: `${d.vendorName} — ${edit?.subject ?? d.subject}`,
+                      });
                       await refresh();
                     } catch (e) {
                       toast({ title: "Send failed", description: String(e), variant: "destructive" });
@@ -2620,9 +2631,37 @@ function PoAgentQueueCard() {
               </div>
             </div>
             {expanded === d.id && (
-              <pre className="whitespace-pre-wrap rounded bg-muted/40 p-2 font-sans leading-relaxed">
-                {`Subject: ${d.subject}\n\n${d.body}`}
-              </pre>
+              <div className="space-y-1.5 rounded bg-muted/40 p-2">
+                <Input
+                  className="h-7 text-xs"
+                  value={edits[d.id]?.subject ?? d.subject}
+                  onChange={(e) =>
+                    setEdits((prev) => ({
+                      ...prev,
+                      [d.id]: { subject: e.target.value, body: prev[d.id]?.body ?? d.body },
+                    }))
+                  }
+                />
+                <Textarea
+                  className="text-xs min-h-[7rem] font-sans leading-relaxed"
+                  value={edits[d.id]?.body ?? d.body}
+                  onChange={(e) =>
+                    setEdits((prev) => ({
+                      ...prev,
+                      [d.id]: { subject: prev[d.id]?.subject ?? d.subject, body: e.target.value },
+                    }))
+                  }
+                />
+                {edits[d.id] && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:underline"
+                    onClick={() => setEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== d.id)))}
+                  >
+                    Reset to the agent's wording
+                  </button>
+                )}
+              </div>
             )}
           </div>
         ))}
@@ -2717,6 +2756,17 @@ function PoActivityDialog({ po, onClose }: { po: MaterialPo; onClose: () => void
                     <div>{e.summary}</div>
                     {e.fromAddr && e.direction === "inbound" && (
                       <div className="text-muted-foreground truncate">{e.fromAddr}</div>
+                    )}
+                    {e.preview && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-primary hover:underline">
+                          Read the message
+                        </summary>
+                        <div className="mt-1 whitespace-pre-wrap rounded bg-muted/40 p-2 leading-relaxed max-h-48 overflow-y-auto">
+                          {e.subject && <div className="font-medium mb-1">{e.subject}</div>}
+                          {e.preview}
+                        </div>
+                      </details>
                     )}
                   </div>
                 </div>

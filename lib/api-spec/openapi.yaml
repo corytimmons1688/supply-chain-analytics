@@ -557,12 +557,22 @@ paths:
     post:
       operationId: approvePoAgentDraft
       tags: [demand]
-      summary: Approve a pending follow-up draft (sends it in the PO's email thread)
+      summary: Approve a pending follow-up draft (sends it in the PO's email thread), optionally with edited wording
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "Optional edits — omitted fields send the draft as the agent wrote it."
+              properties:
+                subject: { type: string }
+                body: { type: string }
       responses:
         "200":
           description: Sent
@@ -2152,6 +2162,7 @@ components:
         fromAddr: { type: string, nullable: true }
         subject: { type: string, nullable: true }
         summary: { type: string, nullable: true }
+        preview: { type: string, nullable: true, description: "First ~1200 chars of the message body, for in-dashboard review." }
     PoTimelineAttachment:
       type: object
       required: [id, filename, mimeType, sizeBytes, createdAt]

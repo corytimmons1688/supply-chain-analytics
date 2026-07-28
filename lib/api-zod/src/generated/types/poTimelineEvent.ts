@@ -15,4 +15,6 @@ export interface PoTimelineEvent {
   fromAddr?: string | null;
   subject?: string | null;
   summary: string | null;
+  /** First ~1200 chars of the message body, for in-dashboard review. */
+  preview?: string | null;
 }

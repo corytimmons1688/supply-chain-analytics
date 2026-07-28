@@ -19,6 +19,7 @@ import type {
 import type {
   AdjustmentTotals,
   ApprovePoAgentDraft200,
+  ApprovePoAgentDraftBody,
   AslEntry,
   AslEntryInput,
   AslGoal,
@@ -2826,7 +2827,7 @@ export function useGetPoAgentQueue<
 }
 
 /**
- * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread), optionally with edited wording
  */
 export const getApprovePoAgentDraftUrl = (id: string) => {
   return `/api/demand/po-agent/drafts/${id}/approve`;
@@ -2834,11 +2835,14 @@ export const getApprovePoAgentDraftUrl = (id: string) => {
 
 export const approvePoAgentDraft = async (
   id: string,
+  approvePoAgentDraftBody?: ApprovePoAgentDraftBody,
   options?: RequestInit,
 ): Promise<ApprovePoAgentDraft200> => {
   return customFetch<ApprovePoAgentDraft200>(getApprovePoAgentDraftUrl(id), {
     ...options,
     method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(approvePoAgentDraftBody),
   });
 };
 
@@ -2849,14 +2853,14 @@ export const getApprovePoAgentDraftMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<ApprovePoAgentDraftBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof approvePoAgentDraft>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<ApprovePoAgentDraftBody> },
   TContext
 > => {
   const mutationKey = ["approvePoAgentDraft"];
@@ -2870,11 +2874,11 @@ export const getApprovePoAgentDraftMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
-    { id: string }
+    { id: string; data: BodyType<ApprovePoAgentDraftBody> }
   > = (props) => {
-    const { id } = props ?? {};
+    const { id, data } = props ?? {};
 
-    return approvePoAgentDraft(id, requestOptions);
+    return approvePoAgentDraft(id, data, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -2883,11 +2887,11 @@ export const getApprovePoAgentDraftMutationOptions = <
 export type ApprovePoAgentDraftMutationResult = NonNullable<
   Awaited<ReturnType<typeof approvePoAgentDraft>>
 >;
-
+export type ApprovePoAgentDraftMutationBody = BodyType<ApprovePoAgentDraftBody>;
 export type ApprovePoAgentDraftMutationError = ErrorType<unknown>;
 
 /**
- * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread), optionally with edited wording
  */
 export const useApprovePoAgentDraft = <
   TError = ErrorType<unknown>,
@@ -2896,14 +2900,14 @@ export const useApprovePoAgentDraft = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<ApprovePoAgentDraftBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof approvePoAgentDraft>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<ApprovePoAgentDraftBody> },
   TContext
 > => {
   return useMutation(getApprovePoAgentDraftMutationOptions(options));

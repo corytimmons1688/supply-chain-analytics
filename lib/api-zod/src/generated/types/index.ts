@@ -10,6 +10,7 @@ export * from "./adjustmentRow";
 export * from "./adjustmentRowDirection";
 export * from "./adjustmentTotals";
 export * from "./approvePoAgentDraft200";
+export * from "./approvePoAgentDraftBody";
 export * from "./aslEntry";
 export * from "./aslEntryInput";
 export * from "./aslGoal";

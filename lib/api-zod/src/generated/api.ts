@@ -1174,11 +1174,20 @@ export const GetPoAgentQueueResponse = zod.object({
 });
 
 /**
- * @summary Approve a pending follow-up draft (sends it in the PO's email thread)
+ * @summary Approve a pending follow-up draft (sends it in the PO's email thread), optionally with edited wording
  */
 export const ApprovePoAgentDraftParams = zod.object({
   id: zod.coerce.string(),
 });
+
+export const ApprovePoAgentDraftBody = zod
+  .object({
+    subject: zod.string().optional(),
+    body: zod.string().optional(),
+  })
+  .describe(
+    "Optional edits — omitted fields send the draft as the agent wrote it.",
+  );
 
 export const ApprovePoAgentDraftResponse = zod.object({
   sent: zod.boolean(),
@@ -1227,6 +1236,12 @@ export const GetPoTimelineResponse = zod.object({
       fromAddr: zod.string().nullish(),
       subject: zod.string().nullish(),
       summary: zod.string().nullable(),
+      preview: zod
+        .string()
+        .nullish()
+        .describe(
+          "First ~1200 chars of the message body, for in-dashboard review.",
+        ),
     }),
   ),
   attachments: zod.array(

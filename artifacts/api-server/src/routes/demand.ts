@@ -1713,16 +1713,24 @@ router.get(
   }),
 );
 
-/** Approve a pending draft: send it as a reply in the PO's thread. */
+/**
+ * Approve a pending draft: send it as a reply in the PO's thread. The body may
+ * carry edited subject/body — the buyer can rewrite the agent's wording before
+ * it goes out; what actually sent is stored back on the draft row.
+ */
 router.post(
   "/demand/po-agent/drafts/:id/approve",
   asyncHandler(async (req, res) => {
     const id = String(req.params["id"]);
+    const overrides = (req.body ?? {}) as { subject?: string; body?: string };
     const [draft] = await db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.id, id)).limit(1);
     if (!draft) return void res.status(404).json({ error: "Draft not found" });
     if (draft.status !== "pending") return void res.status(409).json({ error: `Draft already ${draft.status}` });
     const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, draft.poId)).limit(1);
     if (!po) return void res.status(404).json({ error: "PO not found" });
+
+    const subject = overrides.subject?.trim() || draft.subject;
+    const body = overrides.body?.trim() || draft.body;
 
     try {
       const gmail = await import("../lib/gmail");
@@ -1734,15 +1742,15 @@ router.post(
       const sent = await gmail.sendMail({
         to: parseEmails(draft.toEmails),
         cc: parseEmails(draft.ccEmails),
-        subject: draft.subject,
-        text: draft.body,
+        subject,
+        text: body,
         threadId: po.gmailThreadId,
         inReplyTo: lastWithRfc?.rfc822MessageId ?? null,
       });
       const now = new Date();
       await db
         .update(poAgentDraftTable)
-        .set({ status: "sent", sentAt: now, gmailMessageId: sent.id })
+        .set({ status: "sent", sentAt: now, gmailMessageId: sent.id, subject, body })
         .where(eq(poAgentDraftTable.id, id));
       const { appendPoEvent } = await import("../lib/po-agent");
       await appendPoEvent(po.id, {
@@ -1750,8 +1758,8 @@ router.post(
         kind: "follow_up",
         gmailMessageId: sent.id,
         gmailThreadId: sent.threadId,
-        subject: draft.subject,
-        summary: `Follow-up sent (${draft.kind}) to ${draft.toEmails}`,
+        subject,
+        summary: `Follow-up sent (${draft.kind}) to ${draft.toEmails}${overrides.body ? " (edited before send)" : ""}`,
       });
       res.json({ sent: true, id, messageId: sent.id });
     } catch (e) {
@@ -1806,6 +1814,9 @@ router.get(
           fromAddr: e.fromAddr,
           subject: e.subject,
           summary: e.summary,
+          // First ~1200 chars of the vendor's message, so "review the message"
+          // is possible without leaving the dashboard.
+          preview: ((e.extracted ?? {}) as Record<string, unknown>)["bodyPreview"] ?? null,
         })),
       attachments: attachments.map((a) => ({
         id: a.id,

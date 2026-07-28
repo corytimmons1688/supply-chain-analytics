@@ -26,12 +26,13 @@ import { logger } from "./logger";
  * attached documents; anything odd flags the PO for a human.
  *
  * OUTBOUND IS DRAFT-ONLY: the agent never sends email. It inserts rows into
- * po_agent_draft; Cory approves each one in the dashboard.
+ * po_agent_draft; Cory reviews (and can edit) each one in the dashboard.
  */
 
 const ACK_NUDGE_AFTER_BUSINESS_DAYS = 2;
 const MAX_ACK_NUDGES = 2;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const BODY_PREVIEW_CHARS = 1200;
 const ACTIVE_STATES = ["awaiting_ack", "acknowledged", "shipped"] as const;
 
 function businessDaysBetween(from: Date, to: Date): number {
@@ -73,6 +74,8 @@ export interface Classification {
   needsHumanReason: string | null;
 }
 
+type ClassifyResult = { ok: true; c: Classification } | { ok: false; reason: string };
+
 const CLASSIFY_TOOL = {
   name: "record_classification",
   description: "Record the classification of a vendor email about a purchase order.",
@@ -104,9 +107,10 @@ const CLASSIFY_TOOL = {
 } as const;
 
 /**
- * Classify one vendor email with the Claude API. Returns null when
- * ANTHROPIC_API_KEY is unset or the call fails — callers must degrade to
- * "reply received, needs review" rather than guessing.
+ * Classify one vendor email with the Claude API. Failures return the actual
+ * reason so the dashboard can show WHY a message wasn't classified — an
+ * earlier version collapsed every failure into "not configured", which sent
+ * the buyer hunting for a missing key when the real problem was a 400.
  */
 export async function classifyVendorEmail(input: {
   vendorName: string;
@@ -119,9 +123,9 @@ export async function classifyVendorEmail(input: {
   date: string;
   body: string;
   attachmentNames: string[];
-}): Promise<Classification | null> {
+}): Promise<ClassifyResult> {
   const apiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
-  if (!apiKey) return null;
+  if (!apiKey) return { ok: false, reason: "ANTHROPIC_API_KEY is not set on this deployment" };
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -130,10 +134,12 @@ export async function classifyVendorEmail(input: {
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
+      // No sampling params: Claude 5 models reject non-default temperature/
+      // top_p/top_k with a 400. Classification is a simple task → low effort.
       body: JSON.stringify({
-        model: process.env["ANTHROPIC_MODEL"]?.trim() || "claude-sonnet-5",
-        max_tokens: 600,
-        temperature: 0,
+        model: process.env["ANTHROPIC_MODEL"]?.trim() || "claude-opus-5",
+        max_tokens: 2000,
+        output_config: { effort: "low" },
         system:
           "You classify emails from label-stock vendors about purchase orders for Calyx Containers' buyer. " +
           "Be literal: only call something an acknowledgement if the vendor confirms the order or provides an order/sales-order confirmation. " +
@@ -160,27 +166,33 @@ export async function classifyVendorEmail(input: {
     });
     const json = (await res.json()) as {
       content?: { type: string; input?: Record<string, unknown> }[];
+      stop_reason?: string;
       error?: { message?: string };
     };
     if (!res.ok) throw new Error(json.error?.message ?? `HTTP ${res.status}`);
     const call = json.content?.find((c) => c.type === "tool_use");
-    const i = (call?.input ?? {}) as Record<string, unknown>;
+    if (!call) throw new Error(`no tool_use in response (stop_reason=${json.stop_reason ?? "?"})`);
+    const i = (call.input ?? {}) as Record<string, unknown>;
     return {
-      kind: (i["kind"] as Classification["kind"]) ?? "other",
-      promisedDate: typeof i["promised_date"] === "string" ? i["promised_date"] : null,
-      tracking: Array.isArray(i["tracking"])
-        ? (i["tracking"] as { carrier?: string; number?: string }[])
-            .filter((t) => t?.number)
-            .map((t) => ({ carrier: String(t.carrier ?? ""), number: String(t.number) }))
-        : [],
-      confirmedQuantity: typeof i["confirmed_quantity"] === "string" ? i["confirmed_quantity"] : null,
-      summary: String(i["summary"] ?? "Vendor email received"),
-      needsHuman: Boolean(i["needs_human"]),
-      needsHumanReason: typeof i["needs_human_reason"] === "string" ? i["needs_human_reason"] : null,
+      ok: true,
+      c: {
+        kind: (i["kind"] as Classification["kind"]) ?? "other",
+        promisedDate: typeof i["promised_date"] === "string" ? i["promised_date"] : null,
+        tracking: Array.isArray(i["tracking"])
+          ? (i["tracking"] as { carrier?: string; number?: string }[])
+              .filter((t) => t?.number)
+              .map((t) => ({ carrier: String(t.carrier ?? ""), number: String(t.number) }))
+          : [],
+        confirmedQuantity: typeof i["confirmed_quantity"] === "string" ? i["confirmed_quantity"] : null,
+        summary: String(i["summary"] ?? "Vendor email received"),
+        needsHuman: Boolean(i["needs_human"]),
+        needsHumanReason: typeof i["needs_human_reason"] === "string" ? i["needs_human_reason"] : null,
+      },
     };
   } catch (e) {
-    logger.warn({ err: e instanceof Error ? e.message : String(e) }, "Email classification failed");
-    return null;
+    const reason = e instanceof Error ? e.message : String(e);
+    logger.warn({ err: reason }, "Email classification failed");
+    return { ok: false, reason };
   }
 }
 
@@ -189,6 +201,7 @@ export async function classifyVendorEmail(input: {
 export interface AgentRunResult {
   posChecked: number;
   inboundProcessed: number;
+  reclassified: number;
   acksDetected: number;
   draftsCreated: number;
   closed: number;
@@ -197,7 +210,7 @@ export interface AgentRunResult {
 }
 
 export async function runPoAgent(): Promise<AgentRunResult> {
-  const zero: AgentRunResult = { posChecked: 0, inboundProcessed: 0, acksDetected: 0, draftsCreated: 0, closed: 0, flagged: 0 };
+  const zero: AgentRunResult = { posChecked: 0, inboundProcessed: 0, reclassified: 0, acksDetected: 0, draftsCreated: 0, closed: 0, flagged: 0 };
   if (!gmailConfigured()) return { ...zero, skipped: "gmail not configured" };
   const connection = await gmailConnection();
   if (!connection) return { ...zero, skipped: "gmail not connected" };
@@ -235,6 +248,74 @@ export async function runPoAgent(): Promise<AgentRunResult> {
     let ackAt = po.ackAt;
     let notes = po.notes;
 
+    /** Classification effects, shared by fresh messages and reclassification. */
+    const applyEffects = async (c: Classification, msg: GmailMessage): Promise<void> => {
+      // Save vendor documents on substantive messages (the ACK PDF etc.).
+      if (["ack", "ship_notice", "delay"].includes(c.kind)) {
+        const already = await db
+          .select({ id: poAttachmentTable.id })
+          .from(poAttachmentTable)
+          .where(and(eq(poAttachmentTable.poId, po.id), eq(poAttachmentTable.gmailMessageId, msg.id)));
+        if (already.length === 0) {
+          for (const a of attachmentParts(msg)) {
+            if (a.size > MAX_ATTACHMENT_BYTES) continue;
+            try {
+              const content = await fetchAttachment(msg.id, a.attachmentId);
+              await db.insert(poAttachmentTable).values({
+                poId: po.id,
+                filename: a.filename,
+                mimeType: a.mimeType,
+                contentBase64: content.toString("base64"),
+                sizeBytes: content.length,
+                gmailMessageId: msg.id,
+              });
+            } catch (e) {
+              logger.warn({ poId: po.id, file: a.filename, err: String(e) }, "Attachment capture failed");
+            }
+          }
+        }
+      }
+
+      if (c.promisedDate) promisedDate = c.promisedDate;
+      if (c.kind === "ack" && state === "awaiting_ack") {
+        state = "acknowledged";
+        ackAt = new Date(Number(msg.internalDate ?? Date.now()));
+        result.acksDetected += 1;
+      }
+      if (c.kind === "ship_notice") state = "shipped";
+      if (c.tracking.length) {
+        const stamp = new Date().toISOString().slice(0, 10);
+        const lineTxt = c.tracking.map((t) => `${t.carrier} ${t.number}`.trim()).join("; ");
+        notes = `${notes?.trim() ? `${notes.trim()}\n` : ""}Tracking: ${lineTxt} (from vendor email ${stamp})`;
+      }
+      if (c.kind === "delay") {
+        needsAttention = true;
+        attentionReason = `Vendor announced a delay${c.promisedDate ? ` — new date ${c.promisedDate}` : ""}`;
+      }
+      if (c.kind === "question") {
+        needsAttention = true;
+        attentionReason = "Vendor asked a question — reply needed";
+      }
+      if (c.needsHuman && !needsAttention) {
+        needsAttention = true;
+        attentionReason = c.needsHumanReason ?? "Flagged by classifier";
+      }
+    };
+
+    const classifyMsg = (msg: GmailMessage): Promise<ClassifyResult> =>
+      classifyVendorEmail({
+        vendorName: po.vendorName,
+        poRef: ref,
+        stockLine: line ? `Stock #${line.stockId} — ${line.description ?? ""} (${line.rolls} rolls)` : "unknown",
+        requestedDelivery: po.requestedDeliveryDate,
+        agentState: state,
+        from: header(msg, "From") ?? "",
+        subject: header(msg, "Subject") ?? "",
+        date: header(msg, "Date") ?? "",
+        body: bodyText(msg),
+        attachmentNames: attachmentParts(msg).map((a) => a.filename),
+      });
+
     try {
       if (po.agentState == null) {
         await appendEvent(po.id, {
@@ -269,6 +350,34 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       const trackedThreads = new Set<string>();
       if (po.gmailThreadId) trackedThreads.add(po.gmailThreadId);
       for (const e of events) if (e.gmailThreadId) trackedThreads.add(e.gmailThreadId);
+
+      // 2b. Heal earlier failures: inbound events recorded without a
+      // classification (extracted.kind missing) get re-classified now — e.g.
+      // the batch flagged while the classifier was rejecting every call.
+      for (const e of events) {
+        if (e.direction !== "inbound" || !e.gmailMessageId) continue;
+        const extracted = (e.extracted ?? {}) as Record<string, unknown>;
+        if (extracted["kind"]) continue; // already classified
+        const msg = await fetchMessage(e.gmailMessageId).catch(() => null);
+        if (!msg) continue;
+        const r = await classifyMsg(msg);
+        if (!r.ok) continue; // still failing — leave for the next run
+        await db
+          .update(poEmailEventTable)
+          .set({
+            kind: r.c.kind,
+            summary: r.c.summary,
+            extracted: { ...r.c, bodyPreview: bodyText(msg).slice(0, BODY_PREVIEW_CHARS) },
+          })
+          .where(eq(poEmailEventTable.id, e.id));
+        await applyEffects(r.c, msg);
+        // The flag existed only because classification was failing.
+        if (needsAttention && attentionReason && /classif/i.test(attentionReason)) {
+          needsAttention = false;
+          attentionReason = null;
+        }
+        result.reclassified += 1;
+      }
 
       // 3. Collect new messages: replies in tracked threads…
       const fresh: GmailMessage[] = [];
@@ -313,83 +422,27 @@ export async function runPoAgent(): Promise<AgentRunResult> {
 
         result.inboundProcessed += 1;
         sawInbound = true;
-        const attachments = attachmentParts(msg);
-        const classified = await classifyVendorEmail({
-          vendorName: po.vendorName,
-          poRef: ref,
-          stockLine: line ? `Stock #${line.stockId} — ${line.description ?? ""} (${line.rolls} rolls)` : "unknown",
-          requestedDelivery: po.requestedDeliveryDate,
-          agentState: state,
-          from,
-          subject: header(msg, "Subject") ?? "",
-          date: header(msg, "Date") ?? "",
-          body: bodyText(msg),
-          attachmentNames: attachments.map((a) => a.filename),
-        });
+        const r = await classifyMsg(msg);
+        const preview = bodyText(msg).slice(0, BODY_PREVIEW_CHARS);
 
-        const kind = classified?.kind ?? "other";
         await appendEvent(po.id, {
           direction: "inbound",
-          kind,
+          kind: r.ok ? r.c.kind : "other",
           gmailMessageId: msg.id,
           gmailThreadId: msg.threadId,
           rfc822MessageId: header(msg, "Message-ID"),
           fromAddr: from,
           subject: header(msg, "Subject"),
-          summary: classified?.summary ?? "Vendor reply received (not classified — ANTHROPIC_API_KEY unset)",
-          extracted: classified ?? undefined,
+          summary: r.ok ? r.c.summary : `Vendor reply received (classification failed: ${r.reason})`,
+          extracted: r.ok ? { ...r.c, bodyPreview: preview } : { bodyPreview: preview },
         });
 
-        if (!classified) {
+        if (!r.ok) {
           needsAttention = true;
-          attentionReason = "Vendor replied but the classifier is not configured — review the message";
+          attentionReason = `Vendor replied — automatic classification failed (${r.reason.slice(0, 120)}); review the message`;
           continue;
         }
-
-        // Save vendor documents on substantive messages (the ACK PDF etc.).
-        if (["ack", "ship_notice", "delay"].includes(kind)) {
-          for (const a of attachments) {
-            if (a.size > MAX_ATTACHMENT_BYTES) continue;
-            try {
-              const content = await fetchAttachment(msg.id, a.attachmentId);
-              await db.insert(poAttachmentTable).values({
-                poId: po.id,
-                filename: a.filename,
-                mimeType: a.mimeType,
-                contentBase64: content.toString("base64"),
-                sizeBytes: content.length,
-                gmailMessageId: msg.id,
-              });
-            } catch (e) {
-              logger.warn({ poId: po.id, file: a.filename, err: String(e) }, "Attachment capture failed");
-            }
-          }
-        }
-
-        if (classified.promisedDate) promisedDate = classified.promisedDate;
-        if (kind === "ack" && state === "awaiting_ack") {
-          state = "acknowledged";
-          ackAt = new Date(Number(msg.internalDate ?? Date.now()));
-          result.acksDetected += 1;
-        }
-        if (kind === "ship_notice") state = "shipped";
-        if (classified.tracking.length) {
-          const stamp = new Date().toISOString().slice(0, 10);
-          const lineTxt = classified.tracking.map((t) => `${t.carrier} ${t.number}`.trim()).join("; ");
-          notes = `${notes?.trim() ? `${notes.trim()}\n` : ""}Tracking: ${lineTxt} (from vendor email ${stamp})`;
-        }
-        if (kind === "delay") {
-          needsAttention = true;
-          attentionReason = `Vendor announced a delay${classified.promisedDate ? ` — new date ${classified.promisedDate}` : ""}`;
-        }
-        if (kind === "question") {
-          needsAttention = true;
-          attentionReason = "Vendor asked a question — reply needed";
-        }
-        if (classified.needsHuman && !needsAttention) {
-          needsAttention = true;
-          attentionReason = classified.needsHumanReason ?? "Flagged by classifier";
-        }
+        await applyEffects(r.c, msg);
       }
 
       // 5. Nudge when the vendor has gone quiet (draft only — nothing sends).
