@@ -747,6 +747,8 @@ function poEmail(po: {
   vendorName: string;
   vendorEmails: string | null;
   vendorCcEmails?: string | null;
+  /** Label Traxx PO number(s) once assigned, so the vendor can quote them. */
+  ltPoNumbers?: string | null;
   requestedDeliveryDate: string | null;
   lines: { stockId: string; description: string | null; rolls: number; footage: number | null; estCost: number | null }[];
 }): { to: string; cc: string; subject: string; body: string } {
@@ -758,9 +760,10 @@ function poEmail(po: {
     )
     .join("\n");
   const total = po.lines.reduce((sum, l) => sum + (l.estCost ?? 0), 0);
+  const poRef = po.ltPoNumbers?.trim() ? ` ${po.ltPoNumbers.trim()}` : "";
   const body =
-    `Hi ${po.vendorName} team,\n\n` +
-    `Please find our purchase order below:\n\n${lines}\n\n` +
+    `Hi All,\n\n` +
+    `Please find our purchase order${poRef} below:\n\n${lines}\n\n` +
     (po.requestedDeliveryDate ? `Requested delivery: ${po.requestedDeliveryDate}\n` : "") +
     (total > 0 ? `Estimated total: $${total.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n` : "") +
     `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
@@ -768,7 +771,15 @@ function poEmail(po: {
   return {
     to: parseEmails(po.vendorEmails).join(","),
     cc: parseEmails(po.vendorCcEmails ?? null).join(","),
-    subject: `Calyx Containers PO — ${po.vendorName} — ${po.lines.length} item${po.lines.length === 1 ? "" : "s"}`,
+    // POs are 1 material : 1 PO, so name the stock in the subject; fall back to
+    // a list if a legacy multi-line draft ever shows up.
+    subject:
+      `Calyx Containers PO${poRef} — ${po.vendorName} — ` +
+      (po.lines.length === 1
+        ? `Stock #${po.lines[0]!.stockId}`
+        : po.lines.length <= 3
+          ? po.lines.map((l) => `#${l.stockId}`).join(", ")
+          : `${po.lines.length} items`),
     body,
   };
 }
@@ -1275,6 +1286,7 @@ router.post(
       vendorName: po.vendorName,
       vendorEmails: submitContacts.to,
       vendorCcEmails: submitContacts.cc,
+      ltPoNumbers: ltPoNumbers.length ? ltPoNumbers.join(", ") : po.ltPoNumbers,
       requestedDeliveryDate: po.requestedDeliveryDate,
       lines: lines.map((l) => ({
         stockId: l.stockId,

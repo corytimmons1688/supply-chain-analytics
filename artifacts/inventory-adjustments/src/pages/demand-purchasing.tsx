@@ -1395,12 +1395,14 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       ? `  • Stock #${l.stockId}${l.description ? ` — ${l.description}` : ""}: ${l.rolls} roll${l.rolls === 1 ? "" : "s"}` +
         (l.footage ? ` (~${Math.round(l.footage).toLocaleString()} ft)` : "")
       : "";
+    // Reference the Label Traxx PO number once assigned, so the vendor can quote it.
+    const poRef = po.ltPoNumbers?.trim() ? ` ${po.ltPoNumbers.trim()}` : "";
     const body =
-      `Hi ${po.vendorName} team,\n\nPlease find our purchase order below:\n\n${line}\n\n` +
+      `Hi All,\n\nPlease find our purchase order${poRef} below:\n\n${line}\n\n` +
       (po.requestedDeliveryDate ? `Requested delivery: ${po.requestedDeliveryDate}\n` : "") +
       `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
       `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
-    const subject = `Calyx Containers PO — ${po.vendorName} — Stock #${l?.stockId ?? ""}`;
+    const subject = `Calyx Containers PO${poRef} — ${po.vendorName} — Stock #${l?.stockId ?? ""}`;
     const cc = po.vendorCcEmails ? `&cc=${encodeURIComponent(po.vendorCcEmails)}` : "";
     return `mailto:${encodeURIComponent(po.vendorEmails ?? "")}?subject=${encodeURIComponent(subject)}${cc}&body=${encodeURIComponent(body)}`;
   };
