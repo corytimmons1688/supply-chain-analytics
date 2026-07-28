@@ -11,6 +11,8 @@ export interface MaterialPo {
   id: string;
   vendorName: string;
   vendorEmails?: string | null;
+  /** Vendor-level CC addresses for the PO email. */
+  vendorCcEmails?: string | null;
   status: string;
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;

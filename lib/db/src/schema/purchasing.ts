@@ -4,6 +4,22 @@ function uuid() {
   return crypto.randomUUID();
 }
 
+/**
+ * PO contacts per VENDOR, not per material — the same vendor supplies many
+ * stocks, so addresses used to have to be re-entered on every one. To and CC are
+ * separate, each a comma/semicolon-separated list.
+ */
+export const vendorContactTable = pgTable("vendor_contact", {
+  // Matches the effective vendor name (stock_goal.vendorName override, else the
+  // Label Traxx supplier name).
+  vendorName: text("vendor_name").primaryKey(),
+  toEmails: text("to_emails"),
+  ccEmails: text("cc_emails"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type VendorContactRow = typeof vendorContactTable.$inferSelect;
+
 // Material purchase orders raised from Demand Planning → Suggested POs.
 // Status flow: draft → submitted (recorded here + emailed to vendor) →
 // submitted_lt (also created in Label Traxx once LT writes are enabled).

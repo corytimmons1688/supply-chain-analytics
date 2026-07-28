@@ -895,6 +895,10 @@ export const ListMaterialPosResponse = zod.object({
       id: zod.string(),
       vendorName: zod.string(),
       vendorEmails: zod.string().nullish(),
+      vendorCcEmails: zod
+        .string()
+        .nullish()
+        .describe("Vendor-level CC addresses for the PO email."),
       status: zod.string(),
       ltPoNumbers: zod.string().nullish(),
       requestedDeliveryDate: zod.string().nullish(),
@@ -944,6 +948,46 @@ export const CreateMaterialPoResponse = zod.object({
     subject: zod.string(),
     body: zod.string(),
   }),
+});
+
+/**
+ * @summary PO To/CC addresses per vendor, with the materials each vendor supplies
+ */
+export const GetVendorContactsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      vendorName: zod.string(),
+      toEmails: zod.string().nullish(),
+      ccEmails: zod.string().nullish(),
+      legacyStockEmails: zod
+        .string()
+        .nullish()
+        .describe(
+          "Address found on the old per-stock field, as a starting point.",
+        ),
+      stockCount: zod.number(),
+      stockIds: zod.array(zod.string()).optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Save a vendor's PO To/CC addresses
+ */
+export const SetVendorContactParams = zod.object({
+  vendorName: zod.coerce.string(),
+});
+
+export const SetVendorContactBody = zod.object({
+  toEmails: zod.string().nullish(),
+  ccEmails: zod.string().nullish(),
+});
+
+export const SetVendorContactResponse = zod.object({
+  vendorName: zod.string(),
+  toEmails: zod.string().nullish(),
+  ccEmails: zod.string().nullish(),
+  saved: zod.boolean(),
 });
 
 /**

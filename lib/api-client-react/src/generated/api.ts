@@ -44,6 +44,7 @@ import type {
   GetAdjustmentsTotalsParams,
   GetDemandStockDetailParams,
   GetDemandSummaryParams,
+  GetVendorContacts200,
   GetVendorLeadTimesParams,
   GetVendorScorecardsParams,
   GetVendorTrendParams,
@@ -96,6 +97,8 @@ import type {
   VendorAlias,
   VendorAliasInput,
   VendorAliasUpdate,
+  VendorContactInput,
+  VendorContactSaved,
   VendorInput,
   VendorMetric,
   VendorMetricInput,
@@ -2063,6 +2066,168 @@ export const useCreateMaterialPo = <
   TContext
 > => {
   return useMutation(getCreateMaterialPoMutationOptions(options));
+};
+
+/**
+ * @summary PO To/CC addresses per vendor, with the materials each vendor supplies
+ */
+export const getGetVendorContactsUrl = () => {
+  return `/api/demand/vendor-contacts`;
+};
+
+export const getVendorContacts = async (
+  options?: RequestInit,
+): Promise<GetVendorContacts200> => {
+  return customFetch<GetVendorContacts200>(getGetVendorContactsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetVendorContactsQueryKey = () => {
+  return [`/api/demand/vendor-contacts`] as const;
+};
+
+export const getGetVendorContactsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getVendorContacts>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getVendorContacts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetVendorContactsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getVendorContacts>>
+  > = ({ signal }) => getVendorContacts({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getVendorContacts>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetVendorContactsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getVendorContacts>>
+>;
+export type GetVendorContactsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary PO To/CC addresses per vendor, with the materials each vendor supplies
+ */
+
+export function useGetVendorContacts<
+  TData = Awaited<ReturnType<typeof getVendorContacts>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getVendorContacts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetVendorContactsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Save a vendor's PO To/CC addresses
+ */
+export const getSetVendorContactUrl = (vendorName: string) => {
+  return `/api/demand/vendor-contacts/${vendorName}`;
+};
+
+export const setVendorContact = async (
+  vendorName: string,
+  vendorContactInput: VendorContactInput,
+  options?: RequestInit,
+): Promise<VendorContactSaved> => {
+  return customFetch<VendorContactSaved>(getSetVendorContactUrl(vendorName), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(vendorContactInput),
+  });
+};
+
+export const getSetVendorContactMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setVendorContact>>,
+    TError,
+    { vendorName: string; data: BodyType<VendorContactInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setVendorContact>>,
+  TError,
+  { vendorName: string; data: BodyType<VendorContactInput> },
+  TContext
+> => {
+  const mutationKey = ["setVendorContact"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setVendorContact>>,
+    { vendorName: string; data: BodyType<VendorContactInput> }
+  > = (props) => {
+    const { vendorName, data } = props ?? {};
+
+    return setVendorContact(vendorName, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetVendorContactMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setVendorContact>>
+>;
+export type SetVendorContactMutationBody = BodyType<VendorContactInput>;
+export type SetVendorContactMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Save a vendor's PO To/CC addresses
+ */
+export const useSetVendorContact = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setVendorContact>>,
+    TError,
+    { vendorName: string; data: BodyType<VendorContactInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setVendorContact>>,
+  TError,
+  { vendorName: string; data: BodyType<VendorContactInput> },
+  TContext
+> => {
+  return useMutation(getSetVendorContactMutationOptions(options));
 };
 
 /**

@@ -570,6 +570,28 @@ export interface PurchasingItem {
   tickets?: OpenTicket[];
 }
 
+export interface VendorContactInput {
+  toEmails?: string | null;
+  ccEmails?: string | null;
+}
+
+export interface VendorContactSaved {
+  vendorName: string;
+  toEmails?: string | null;
+  ccEmails?: string | null;
+  saved: boolean;
+}
+
+export interface VendorContact {
+  vendorName: string;
+  toEmails?: string | null;
+  ccEmails?: string | null;
+  /** Address found on the old per-stock field, as a starting point. */
+  legacyStockEmails?: string | null;
+  stockCount: number;
+  stockIds?: string[];
+}
+
 export type PurchasingResponseStatusCounts = { [key: string]: number };
 
 export interface PurchasingResponse {
@@ -611,6 +633,8 @@ export interface MaterialPo {
   id: string;
   vendorName: string;
   vendorEmails?: string | null;
+  /** Vendor-level CC addresses for the PO email. */
+  vendorCcEmails?: string | null;
   status: string;
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;
@@ -1424,6 +1448,10 @@ export type ListWeeklySnapshots200 = {
 
 export type ListMonthlySnapshots200 = {
   items: MonthlySnapshotSummary[];
+};
+
+export type GetVendorContacts200 = {
+  items: VendorContact[];
 };
 
 export type DeleteMaterialPo200 = {

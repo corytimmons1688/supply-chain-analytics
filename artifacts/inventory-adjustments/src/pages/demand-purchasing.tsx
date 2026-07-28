@@ -10,6 +10,9 @@ import {
   useSubmitMaterialPo,
   useUpdateMaterialPo,
   useDeleteMaterialPo,
+  useGetVendorContacts,
+  getGetVendorContactsQueryKey,
+  useSetVendorContact,
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
@@ -1398,7 +1401,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       `\nShip to:\nCalyx Containers\n1991 Parkway Blvd\nWest Valley City, UT 84119\n\n` +
       `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
     const subject = `Calyx Containers PO — ${po.vendorName} — Stock #${l?.stockId ?? ""}`;
-    return `mailto:${encodeURIComponent(po.vendorEmails ?? "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const cc = po.vendorCcEmails ? `&cc=${encodeURIComponent(po.vendorCcEmails)}` : "";
+    return `mailto:${encodeURIComponent(po.vendorEmails ?? "")}?subject=${encodeURIComponent(subject)}${cc}&body=${encodeURIComponent(body)}`;
   };
 
   if (isLoading) return <Skeleton className="h-72 rounded-lg" />;
@@ -1783,12 +1787,14 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
   if (isLoading) return <Skeleton className="h-72 rounded-lg" />;
 
   return (
+    <div className="space-y-4">
+    <VendorContactsCard />
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <CardTitle className="text-base flex items-center gap-2">
-              <Settings2 className="w-4 h-4 text-muted-foreground" /> Purchasing Configuration
+              <Settings2 className="w-4 h-4 text-muted-foreground" /> Per-material Configuration
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
               Click any value to edit. Vendor, MSI cost, and lead time default to the Label Traxx stock record; edits
@@ -1805,7 +1811,6 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
               <tr className="border-b bg-muted/40 text-muted-foreground">
                 <th className="text-left px-2 py-1.5 font-medium">Stock</th>
                 <th className="text-left px-2 py-1.5 font-medium min-w-[10rem]">Vendor</th>
-                <th className="text-left px-2 py-1.5 font-medium min-w-[14rem]">Vendor PO email(s)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Lead time (days)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Footage / roll</th>
                 <th className="text-right px-2 py-1.5 font-medium">Order qty (rolls)</th>
@@ -1833,13 +1838,6 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                       {it.vendorNameSource === "labeltraxx" && (
                         <span className="text-[10px] text-muted-foreground">from Label Traxx</span>
                       )}
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <EditableCell
-                        value={it.vendorEmails ?? ""}
-                        placeholder="orders@vendor.com"
-                        onSave={(v) => save(it.stockId, { vendorEmails: v })}
-                      />
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       <EditableCell
@@ -1891,6 +1889,118 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+    </div>
+  );
+}
+
+/**
+ * PO addresses per VENDOR (not per material — one vendor supplies many stocks).
+ * To and CC each accept several addresses, comma or semicolon separated.
+ */
+function VendorContactsCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useGetVendorContacts({
+    query: { queryKey: getGetVendorContactsQueryKey(), staleTime: 60_000 },
+  });
+  const setContact = useSetVendorContact();
+  const [q, setQ] = React.useState("");
+
+  const save = async (vendorName: string, patch: { toEmails?: string | null; ccEmails?: string | null }) => {
+    const current = (data?.items ?? []).find((v) => v.vendorName === vendorName);
+    try {
+      await setContact.mutateAsync({
+        vendorName,
+        data: {
+          toEmails: patch.toEmails !== undefined ? patch.toEmails : (current?.toEmails ?? null),
+          ccEmails: patch.ccEmails !== undefined ? patch.ccEmails : (current?.ccEmails ?? null),
+        },
+      });
+      await queryClient.invalidateQueries({ queryKey: getGetVendorContactsQueryKey() });
+      toast({ title: "Saved", description: `${vendorName} PO contacts updated` });
+    } catch (e) {
+      toast({ title: "Failed to save", description: String(e), variant: "destructive" });
+    }
+  };
+
+  if (isLoading) return <Skeleton className="h-56 rounded-lg" />;
+  const rows = (data?.items ?? []).filter((v) =>
+    !q.trim() ? true : v.vendorName.toLowerCase().includes(q.trim().toLowerCase()),
+  );
+  const missing = (data?.items ?? []).filter((v) => !v.toEmails).length;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Mail className="w-4 h-4 text-muted-foreground" /> Vendor PO Contacts
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Where POs are emailed, set once per vendor. Separate multiple addresses with commas.
+              {missing > 0 && (
+                <span className="text-amber-700 dark:text-amber-400">
+                  {" "}· {missing} vendor{missing === 1 ? "" : "s"} still without a To address
+                </span>
+              )}
+            </p>
+          </div>
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search vendor…"
+            className="h-8 w-56 text-xs"
+          />
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-md border overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40 text-muted-foreground">
+                <th className="text-left px-2 py-1.5 font-medium min-w-[12rem]">Vendor</th>
+                <th className="text-left px-2 py-1.5 font-medium min-w-[18rem]">To</th>
+                <th className="text-left px-2 py-1.5 font-medium min-w-[18rem]">CC</th>
+                <th className="text-right px-2 py-1.5 font-medium">Materials</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((v) => (
+                <tr key={v.vendorName} className="border-b last:border-b-0 align-top">
+                  <td className="px-2 py-1.5">
+                    <div className="font-medium">{v.vendorName}</div>
+                    {!v.toEmails && (
+                      <div className="text-[10px] text-amber-700 dark:text-amber-400">no To address</div>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <EditableCell
+                      value={v.toEmails ?? ""}
+                      placeholder={v.legacyStockEmails ?? "orders@vendor.com, rep@vendor.com"}
+                      onSave={(val) => save(v.vendorName, { toEmails: val })}
+                    />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <EditableCell
+                      value={v.ccEmails ?? ""}
+                      placeholder="purchasing@calyxcontainers.com"
+                      onSave={(val) => save(v.vendorName, { ccEmails: val })}
+                    />
+                  </td>
+                  <td
+                    className="px-2 py-1.5 text-right text-muted-foreground tabular-nums"
+                    title={(v.stockIds ?? []).map((s) => `#${s}`).join(", ")}
+                  >
+                    {v.stockCount}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

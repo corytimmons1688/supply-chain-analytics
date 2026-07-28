@@ -378,6 +378,44 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MaterialPoCreateResult" }
+  /demand/vendor-contacts:
+    get:
+      operationId: getVendorContacts
+      tags: [demand]
+      summary: PO To/CC addresses per vendor, with the materials each vendor supplies
+      responses:
+        "200":
+          description: Vendor contacts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/VendorContact" }
+  /demand/vendor-contacts/{vendorName}:
+    put:
+      operationId: setVendorContact
+      tags: [demand]
+      summary: Save a vendor's PO To/CC addresses
+      parameters:
+        - name: vendorName
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VendorContactInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorContactSaved" }
   /demand/pos/{id}:
     put:
       operationId: updateMaterialPo
@@ -1713,6 +1751,31 @@ components:
         requiredFootage: { type: number, description: "Open-ticket footage requiring this exact width." }
         shortFootage: { type: number, description: "max(0, required − onHand − onOrder) at this width." }
         status: { type: string, description: "Computed availability for this width (In / Ordered / Ordered Not Confirmed / Out / Without Tickets)." }
+    VendorContactInput:
+      type: object
+      properties:
+        toEmails: { type: string, nullable: true }
+        ccEmails: { type: string, nullable: true }
+    VendorContactSaved:
+      type: object
+      required: [vendorName, saved]
+      properties:
+        vendorName: { type: string }
+        toEmails: { type: string, nullable: true }
+        ccEmails: { type: string, nullable: true }
+        saved: { type: boolean }
+    VendorContact:
+      type: object
+      required: [vendorName, stockCount]
+      properties:
+        vendorName: { type: string }
+        toEmails: { type: string, nullable: true }
+        ccEmails: { type: string, nullable: true }
+        legacyStockEmails: { type: string, nullable: true, description: "Address found on the old per-stock field, as a starting point." }
+        stockCount: { type: integer }
+        stockIds:
+          type: array
+          items: { type: string }
     StockOpenPo:
       type: object
       description: An open (unreceived) Stock PO for this material.
@@ -1786,6 +1849,7 @@ components:
         id: { type: string }
         vendorName: { type: string }
         vendorEmails: { type: string, nullable: true }
+        vendorCcEmails: { type: string, nullable: true, description: "Vendor-level CC addresses for the PO email." }
         status: { type: string }
         ltPoNumbers: { type: string, nullable: true }
         requestedDeliveryDate: { type: string, nullable: true }

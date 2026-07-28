@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { eq } from "drizzle-orm";
-import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, vendorContactTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -746,9 +746,10 @@ interface PoLineInput {
 function poEmail(po: {
   vendorName: string;
   vendorEmails: string | null;
+  vendorCcEmails?: string | null;
   requestedDeliveryDate: string | null;
   lines: { stockId: string; description: string | null; rolls: number; footage: number | null; estCost: number | null }[];
-}): { to: string; subject: string; body: string } {
+}): { to: string; cc: string; subject: string; body: string } {
   const lines = po.lines
     .map(
       (l) =>
@@ -766,18 +767,41 @@ function poEmail(po: {
     `Please confirm receipt and expected ship date.\n\nThank you,\nCalyx Containers Supply Chain`;
   return {
     to: parseEmails(po.vendorEmails).join(","),
+    cc: parseEmails(po.vendorCcEmails ?? null).join(","),
     subject: `Calyx Containers PO — ${po.vendorName} — ${po.lines.length} item${po.lines.length === 1 ? "" : "s"}`,
     body,
+  };
+}
+
+/**
+ * PO addresses for a vendor. Vendor-level `vendor_contact` is authoritative; the
+ * legacy per-stock `stock_goal.vendorEmails` is only a To-fallback so anything
+ * entered before this existed keeps working.
+ */
+async function vendorEmailsFor(
+  vendorName: string,
+  legacyTo?: string | null,
+): Promise<{ to: string | null; cc: string | null }> {
+  const [row] = await db
+    .select()
+    .from(vendorContactTable)
+    .where(eq(vendorContactTable.vendorName, vendorName))
+    .limit(1);
+  return {
+    to: row?.toEmails?.trim() || legacyTo?.trim() || null,
+    cc: row?.ccEmails?.trim() || null,
   };
 }
 
 router.get(
   "/demand/pos",
   asyncHandler(async (_req, res) => {
-    const [pos, lines] = await Promise.all([
+    const [pos, lines, vendorContacts] = await Promise.all([
       db.select().from(materialPoTable),
       db.select().from(materialPoLineTable),
+      db.select().from(vendorContactTable),
     ]);
+    const contactByVendor = new Map(vendorContacts.map((c) => [c.vendorName, c]));
     const linesByPo = new Map<string, typeof lines>();
     for (const l of lines) {
       const arr = linesByPo.get(l.poId) ?? [];
@@ -810,10 +834,13 @@ router.get(
         const actualLeadDays = receivedOn
           ? Math.round((Date.parse(receivedOn) - Date.parse(poDate)) / 86_400_000)
           : null;
+        const vc = contactByVendor.get(po.vendorName);
         return {
           id: po.id,
           vendorName: po.vendorName,
-          vendorEmails: po.vendorEmails,
+          // Vendor-level contacts win; the PO's own snapshot is the fallback.
+          vendorEmails: vc?.toEmails ?? po.vendorEmails,
+          vendorCcEmails: vc?.ccEmails ?? null,
           status: receivedOn ? "received" : po.status,
           ltPoNumbers: po.ltPoNumbers,
           requestedDeliveryDate: po.requestedDeliveryDate,
@@ -869,9 +896,11 @@ router.post(
       estCost: l.estCost == null ? null : Number(l.estCost),
     }));
     await db.insert(materialPoLineTable).values(lineValues);
+    const contacts = await vendorEmailsFor(vendorName, b.vendorEmails ?? null);
     const email = poEmail({
       vendorName,
-      vendorEmails: b.vendorEmails ?? null,
+      vendorEmails: contacts.to,
+      vendorCcEmails: contacts.cc,
       requestedDeliveryDate: b.requestedDeliveryDate ?? null,
       lines: lineValues,
     });
@@ -988,6 +1017,78 @@ router.put(
       .set({ ltPoNumbers: b.ltPoNumbers?.trim() || null, updatedAt: new Date() })
       .where(eq(materialPoTable.id, id));
     res.json({ id, saved: true });
+  }),
+);
+
+/**
+ * Vendor PO contacts. Lists every vendor currently in use (stock_goal override,
+ * else the LT supplier) joined to its saved To/CC addresses, so the Configuration
+ * tab can show all vendors — including ones with nothing entered yet.
+ */
+router.get(
+  "/demand/vendor-contacts",
+  asyncHandler(async (_req, res) => {
+    const [stockInfo, goalRows, contacts] = await Promise.all([
+      fetchStockInfo(),
+      db.select().from(stockGoalTable),
+      db.select().from(vendorContactTable),
+    ]);
+    const goalByStock = new Map(goalRows.map((g) => [g.stockId, g]));
+    // Effective vendor per active stock, with the materials each one supplies.
+    const stocksByVendor = new Map<string, string[]>();
+    const legacyByVendor = new Map<string, string>();
+    for (const [stockId, info] of stockInfo) {
+      if (info.inactive) continue;
+      const goal = goalByStock.get(stockId);
+      const vendor = (goal?.vendorName ?? info.supplierName ?? "").trim();
+      if (!vendor) continue;
+      const arr = stocksByVendor.get(vendor) ?? [];
+      arr.push(stockId);
+      stocksByVendor.set(vendor, arr);
+      // Carry any address entered on the old per-stock field as a starting point.
+      const legacy = goal?.vendorEmails?.trim();
+      if (legacy && !legacyByVendor.has(vendor)) legacyByVendor.set(vendor, legacy);
+    }
+    const byVendor = new Map(contacts.map((c) => [c.vendorName, c]));
+    const items = [...stocksByVendor.entries()]
+      .map(([vendorName, stockIds]) => {
+        const c = byVendor.get(vendorName);
+        return {
+          vendorName,
+          toEmails: c?.toEmails ?? null,
+          ccEmails: c?.ccEmails ?? null,
+          legacyStockEmails: legacyByVendor.get(vendorName) ?? null,
+          stockCount: stockIds.length,
+          stockIds: stockIds.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).slice(0, 12),
+        };
+      })
+      .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
+    res.json({ items });
+  }),
+);
+
+/** Save a vendor's To/CC PO addresses (blank clears). */
+router.put(
+  "/demand/vendor-contacts/:vendorName",
+  asyncHandler(async (req, res) => {
+    const vendorName = String(req.params["vendorName"] ?? "").trim();
+    if (!vendorName) return void res.status(400).json({ error: "vendorName required" });
+    const b = (req.body ?? {}) as { toEmails?: string | null; ccEmails?: string | null };
+    // Keep only well-formed addresses so a stray word can't end up as a recipient.
+    const clean = (raw: string | null | undefined): string | null => {
+      const list = parseEmails(raw ?? null);
+      return list.length ? list.join(", ") : null;
+    };
+    const toEmails = clean(b.toEmails);
+    const ccEmails = clean(b.ccEmails);
+    await db
+      .insert(vendorContactTable)
+      .values({ vendorName, toEmails, ccEmails })
+      .onConflictDoUpdate({
+        target: vendorContactTable.vendorName,
+        set: { toEmails, ccEmails, updatedAt: new Date() },
+      });
+    res.json({ vendorName, toEmails, ccEmails, saved: true });
   }),
 );
 
@@ -1169,9 +1270,11 @@ router.post(
       .set({ status, ltPoNumbers: ltPoNumbers.length ? ltPoNumbers.join(",") : null, updatedAt: new Date() })
       .where(eq(materialPoTable.id, id));
 
+    const submitContacts = await vendorEmailsFor(po.vendorName, po.vendorEmails);
     const email = poEmail({
       vendorName: po.vendorName,
-      vendorEmails: po.vendorEmails,
+      vendorEmails: submitContacts.to,
+      vendorCcEmails: submitContacts.cc,
       requestedDeliveryDate: po.requestedDeliveryDate,
       lines: lines.map((l) => ({
         stockId: l.stockId,
