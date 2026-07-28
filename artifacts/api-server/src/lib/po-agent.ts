@@ -33,6 +33,10 @@ const ACK_NUDGE_AFTER_BUSINESS_DAYS = 2;
 const MAX_ACK_NUDGES = 2;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const BODY_PREVIEW_CHARS = 1200;
+// PDFs handed to the classifier (order acknowledgements are structured PDFs —
+// the promised date/quantity often exist ONLY there, not in the email body).
+const MAX_CLASSIFY_PDFS = 3;
+const MAX_CLASSIFY_PDF_BYTES = 4 * 1024 * 1024;
 const ACTIVE_STATES = ["awaiting_ack", "acknowledged", "shipped"] as const;
 
 function businessDaysBetween(from: Date, to: Date): number {
@@ -69,6 +73,10 @@ export interface Classification {
   promisedDate: string | null;
   tracking: { carrier: string; number: string }[];
   confirmedQuantity: string | null;
+  /** Vendor's own order / sales-order number from the ACK (e.g. "22414417"). */
+  vendorOrderNumber: string | null;
+  /** Differences between the acknowledgement and our PO — quantity, width, price, dates. */
+  discrepancies: string | null;
   summary: string;
   needsHuman: boolean;
   needsHumanReason: string | null;
@@ -89,7 +97,11 @@ const CLASSIFY_TOOL = {
         description:
           "ack = order confirmed/acknowledged; ship_notice = shipped or tracking provided; delay = date pushed out; question = vendor needs an answer from us; ooo_or_auto = out-of-office or generic auto-reply",
       },
-      promised_date: { type: ["string", "null"], description: "Vendor-committed ship or delivery date, YYYY-MM-DD" },
+      promised_date: {
+        type: ["string", "null"],
+        description:
+          "Vendor-committed ship or delivery date, YYYY-MM-DD — from the email body OR an attached acknowledgement document. Prefer a delivery/arrival date over a ship date when both are given.",
+      },
       tracking: {
         type: "array",
         items: {
@@ -98,8 +110,17 @@ const CLASSIFY_TOOL = {
           properties: { carrier: { type: "string" }, number: { type: "string" } },
         },
       },
-      confirmed_quantity: { type: ["string", "null"], description: "Quantity the vendor confirmed, verbatim" },
-      summary: { type: "string", description: "One factual sentence for the PO timeline" },
+      confirmed_quantity: { type: ["string", "null"], description: "Quantity the vendor confirmed, verbatim (check attached documents)" },
+      vendor_order_number: {
+        type: ["string", "null"],
+        description: "The vendor's own order / sales-order / confirmation number, e.g. '22414417'",
+      },
+      discrepancies: {
+        type: ["string", "null"],
+        description:
+          "Differences between the acknowledgement and our PO — quantity, width, price, or a promised date later than our requested delivery. Null when everything matches.",
+      },
+      summary: { type: "string", description: "One factual sentence for the PO timeline, including key figures from attached documents" },
       needs_human: { type: "boolean", description: "True if a buyer should look at this message" },
       needs_human_reason: { type: ["string", "null"] },
     },
@@ -123,10 +144,41 @@ export async function classifyVendorEmail(input: {
   date: string;
   body: string;
   attachmentNames: string[];
+  /** PDF attachments (base64) passed to the model as documents — order
+   * acknowledgements usually carry the real dates/quantities here. */
+  pdfs?: { filename: string; data: string }[];
 }): Promise<ClassifyResult> {
   const apiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
   if (!apiKey) return { ok: false, reason: "ANTHROPIC_API_KEY is not set on this deployment" };
   try {
+    const pdfs = input.pdfs ?? [];
+    const content: unknown[] = [
+      // Documents go before the text block (per API guidance).
+      ...pdfs.map((p) => ({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: p.data },
+        title: p.filename,
+      })),
+      {
+        type: "text",
+        text:
+          `Purchase order context:\n` +
+          `- PO reference: ${input.poRef}\n` +
+          `- Vendor: ${input.vendorName}\n` +
+          `- Material: ${input.stockLine}\n` +
+          `- Requested delivery: ${input.requestedDelivery ?? "unspecified"}\n` +
+          `- Current tracking state: ${input.agentState}\n\n` +
+          `Email received:\n` +
+          `From: ${input.from}\nDate: ${input.date}\nSubject: ${input.subject}\n` +
+          `Attachments: ${input.attachmentNames.join(", ") || "(none)"}` +
+          (pdfs.length
+            ? `\n(The PDF attachment${pdfs.length === 1 ? "" : "s"} ${pdfs.map((p) => p.filename).join(", ")} ${
+                pdfs.length === 1 ? "is" : "are"
+              } provided above — read ${pdfs.length === 1 ? "it" : "them"} for order details.)`
+            : "") +
+          `\n\n${input.body.slice(0, 5000)}`,
+      },
+    ];
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -143,23 +195,9 @@ export async function classifyVendorEmail(input: {
         system:
           "You classify emails from label-stock vendors about purchase orders for Calyx Containers' buyer. " +
           "Be literal: only call something an acknowledgement if the vendor confirms the order or provides an order/sales-order confirmation. " +
-          "Dates must come from the email, never invented. Treat marketing mail and unrelated threads as 'other'.",
-        messages: [
-          {
-            role: "user",
-            content:
-              `Purchase order context:\n` +
-              `- PO reference: ${input.poRef}\n` +
-              `- Vendor: ${input.vendorName}\n` +
-              `- Material: ${input.stockLine}\n` +
-              `- Requested delivery: ${input.requestedDelivery ?? "unspecified"}\n` +
-              `- Current tracking state: ${input.agentState}\n\n` +
-              `Email received:\n` +
-              `From: ${input.from}\nDate: ${input.date}\nSubject: ${input.subject}\n` +
-              `Attachments: ${input.attachmentNames.join(", ") || "(none)"}\n\n` +
-              `${input.body.slice(0, 5000)}`,
-          },
-        ],
+          "When an order acknowledgement PDF is attached, extract the promised/estimated delivery date, confirmed quantity, and the vendor's order number from it, and compare quantity, width, price, and dates against our PO context — report real differences in `discrepancies`. " +
+          "Dates must come from the email or its documents, never invented. Treat marketing mail and unrelated threads as 'other'.",
+        messages: [{ role: "user", content }],
         tools: [CLASSIFY_TOOL],
         tool_choice: { type: "tool", name: "record_classification" },
       }),
@@ -184,6 +222,8 @@ export async function classifyVendorEmail(input: {
               .map((t) => ({ carrier: String(t.carrier ?? ""), number: String(t.number) }))
           : [],
         confirmedQuantity: typeof i["confirmed_quantity"] === "string" ? i["confirmed_quantity"] : null,
+        vendorOrderNumber: typeof i["vendor_order_number"] === "string" ? i["vendor_order_number"] : null,
+        discrepancies: typeof i["discrepancies"] === "string" && i["discrepancies"].trim() ? i["discrepancies"] : null,
         summary: String(i["summary"] ?? "Vendor email received"),
         needsHuman: Boolean(i["needs_human"]),
         needsHumanReason: typeof i["needs_human_reason"] === "string" ? i["needs_human_reason"] : null,
@@ -288,6 +328,10 @@ export async function runPoAgent(): Promise<AgentRunResult> {
         const lineTxt = c.tracking.map((t) => `${t.carrier} ${t.number}`.trim()).join("; ");
         notes = `${notes?.trim() ? `${notes.trim()}\n` : ""}Tracking: ${lineTxt} (from vendor email ${stamp})`;
       }
+      if (c.discrepancies) {
+        needsAttention = true;
+        attentionReason = `ACK discrepancy: ${c.discrepancies.slice(0, 200)}`;
+      }
       if (c.kind === "delay") {
         needsAttention = true;
         attentionReason = `Vendor announced a delay${c.promisedDate ? ` — new date ${c.promisedDate}` : ""}`;
@@ -302,19 +346,38 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       }
     };
 
-    const classifyMsg = (msg: GmailMessage): Promise<ClassifyResult> =>
-      classifyVendorEmail({
+    const classifyMsg = async (msg: GmailMessage): Promise<ClassifyResult> => {
+      // Hand PDF attachments to the model — order acknowledgements are
+      // structured PDFs and the promised date/quantity often exist only there.
+      const parts = attachmentParts(msg);
+      const pdfs: { filename: string; data: string }[] = [];
+      for (const p of parts.filter((a) => a.mimeType === "application/pdf" && a.size <= MAX_CLASSIFY_PDF_BYTES)) {
+        if (pdfs.length >= MAX_CLASSIFY_PDFS) break;
+        try {
+          pdfs.push({ filename: p.filename, data: (await fetchAttachment(msg.id, p.attachmentId)).toString("base64") });
+        } catch (e) {
+          logger.warn({ poId: po.id, file: p.filename, err: String(e) }, "Could not fetch PDF for classification");
+        }
+      }
+      return classifyVendorEmail({
         vendorName: po.vendorName,
         poRef: ref,
-        stockLine: line ? `Stock #${line.stockId} — ${line.description ?? ""} (${line.rolls} rolls)` : "unknown",
+        stockLine: line
+          ? `Stock #${line.stockId} — ${line.description ?? ""} (${line.rolls} rolls` +
+            (line.width ? ` @ ${line.width}" wide` : "") +
+            (line.footage ? `, ${Math.round(line.footage).toLocaleString("en-US")} ft total` : "") +
+            `)`
+          : "unknown",
         requestedDelivery: po.requestedDeliveryDate,
         agentState: state,
         from: header(msg, "From") ?? "",
         subject: header(msg, "Subject") ?? "",
         date: header(msg, "Date") ?? "",
         body: bodyText(msg),
-        attachmentNames: attachmentParts(msg).map((a) => a.filename),
+        attachmentNames: parts.map((a) => a.filename),
+        pdfs,
       });
+    };
 
     try {
       if (po.agentState == null) {
