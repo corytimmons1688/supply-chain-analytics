@@ -1719,6 +1719,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
         })
       )}
 
+      <CoveredByInboundCard rows={rows} purch={purch} />
+
       <PoAgentQueueCard />
       {activityPo && <PoActivityDialog po={activityPo} onClose={() => setActivityPo(null)} />}
 
@@ -2882,5 +2884,84 @@ function PoActivityDialog({ po, onClose }: { po: MaterialPo; onClose: () => void
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Stocks sitting below their Min on the shelf but NOT suggested for reorder,
+ * because inbound POs already cover the gap. The reorder engine works on
+ * position (on hand + on order) so it never double-buys what's already
+ * inbound — this card makes that reasoning visible instead of leaving the
+ * buyer wondering why a below-Min stock isn't in the list.
+ */
+function CoveredByInboundCard({
+  rows,
+  purch,
+}: {
+  rows: DemandStockMetrics[];
+  purch: { items: PurchasingItem[] } | undefined;
+}) {
+  const purchByStock = React.useMemo(() => new Map((purch?.items ?? []).map((i) => [i.stockId, i])), [purch]);
+  const covered = rows.filter(
+    (r) =>
+      !r.inactive &&
+      !r.discontinued &&
+      r.reorderPointFootage > 0 &&
+      r.onHandFootage < r.reorderPointFootage &&
+      !r.belowMin &&
+      r.suggestedOrderRolls === 0 &&
+      r.openPoFootage > 0,
+  );
+  if (covered.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <PackageCheck className="w-4 h-4 text-muted-foreground" />
+          Below Min on hand — covered by inbound POs
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          On-hand is under the reorder point, but open POs already cover the gap, so ordering again would double-buy.
+          A stock reappears in Suggested POs the moment on-hand + on-order drops below its Min.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-2 text-xs">
+        {covered.map((r) => {
+          const position = r.onHandFootage + r.openPoFootage;
+          const pos = purchByStock.get(r.stockId)?.openPos ?? [];
+          return (
+            <div key={r.stockId} className="rounded-md border px-3 py-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span>
+                  <span className="font-medium">#{r.stockId}</span>{" "}
+                  <span className="text-muted-foreground">{(r.description ?? "").slice(0, 44)}</span>
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {fmt(r.onHandFootage)} ft on hand · Min {fmt(r.reorderPointFootage)}
+                </span>
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                {pos.length > 0
+                  ? pos
+                      .map(
+                        (p) =>
+                          `PO ${p.poNumber}: ${fmt(p.totalFootage)} ft${
+                            p.promisedDeliveryDate ? `, promised ${p.promisedDeliveryDate}` : ""
+                          }`,
+                      )
+                      .join(" · ")
+                  : `${fmt(r.openPoFootage)} ft on order`}
+                {" → position "}
+                <span className="font-mono text-foreground">{fmt(position)} ft</span>
+                {" ≥ Min. "}
+                <span title="Position must fall below Min to trigger a suggestion">
+                  To force another order now, set Min above {fmt(position)} ft.
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
