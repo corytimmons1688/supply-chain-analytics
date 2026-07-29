@@ -197,8 +197,11 @@ export async function classifyVendorEmail(input: {
       },
       // No sampling params: Claude 5 models reject non-default temperature/
       // top_p/top_k with a 400. Classification is a simple task → low effort.
+      // Sonnet 5 per Cory (2026-07-28) to cut API spend — ~40-60% cheaper than
+      // Opus 5 and fully capable for schema-forced email classification.
+      // ANTHROPIC_MODEL env overrides without a code change.
       body: JSON.stringify({
-        model: process.env["ANTHROPIC_MODEL"]?.trim() || "claude-opus-5",
+        model: process.env["ANTHROPIC_MODEL"]?.trim() || "claude-sonnet-5",
         max_tokens: 2000,
         output_config: { effort: "low" },
         system:
