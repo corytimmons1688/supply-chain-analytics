@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
+import Overview from "@/pages/overview";
 import StockDetails from "@/pages/stock-details";
 import Goals from "@/pages/goals";
 import RootCause from "@/pages/root-cause";
@@ -65,7 +66,8 @@ function Router() {
       <Route>
         <RequireAuth>
           <Switch>
-            <Route path="/" component={Dashboard} />
+            <Route path="/" component={Overview} />
+            <Route path="/adjustments" component={Dashboard} />
             <Route path="/stock/:stockId" component={StockDetails} />
             <Route path="/goals" component={Goals} />
             <Route path="/root-cause" component={RootCause} />

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard } from "lucide-react";
 import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth } from "@workspace/api-client-react";
@@ -16,7 +16,7 @@ interface LayoutProps {
 }
 
 const INVENTORY_CONTROL_ITEMS = [
-  { href: "/", label: "Dashboard", icon: BarChart3 },
+  { href: "/adjustments", label: "Adjustments Dashboard", icon: BarChart3 },
   { href: "/snapshots", label: "Weekly/Monthly Tracking", icon: Camera },
   { href: "/goals", label: "Budget", icon: Target },
   { href: "/root-cause", label: "Root Cause", icon: ClipboardList },
@@ -55,6 +55,18 @@ export function Layout({ children }: LayoutProps) {
         </Link>
 
         <nav className="flex items-center gap-1">
+          <Link
+            href="/"
+            className={cn(
+              "flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium transition-colors outline-none whitespace-nowrap",
+              location === "/"
+                ? "text-primary bg-primary/10"
+                : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            <LayoutDashboard className="w-4 h-4" />
+            <span className="hidden sm:inline">Overview</span>
+          </Link>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
