@@ -9,7 +9,7 @@
 /**
  * Optional edits — omitted fields send the draft as the agent wrote it.
  */
-export type ApprovePoAgentDraftBody = {
+export interface ApproveDraftInput {
   subject?: string;
   body?: string;
-};
+}

@@ -5,12 +5,15 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentLesson } from "./agentLesson";
 import type { PoAgentDraft } from "./poAgentDraft";
 import type { PoAttentionItem } from "./poAttentionItem";
 
 export interface PoAgentQueue {
   drafts: PoAgentDraft[];
   needsAttention: PoAttentionItem[];
+  /** Buyer-approved conventions the classifier honors, newest first. */
+  lessons?: AgentLesson[];
   /** POs the agent is actively tracking. */
   trackedCount: number;
 }

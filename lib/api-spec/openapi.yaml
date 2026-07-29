@@ -567,12 +567,7 @@ paths:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              description: "Optional edits — omitted fields send the draft as the agent wrote it."
-              properties:
-                subject: { type: string }
-                body: { type: string }
+            schema: { $ref: "#/components/schemas/ApproveDraftInput" }
       responses:
         "200":
           description: Sent
@@ -606,16 +601,42 @@ paths:
                 properties:
                   dismissed: { type: boolean }
                   id: { type: string }
-  /demand/pos/{id}/resolve-attention:
-    post:
-      operationId: resolvePoAttention
+  /demand/po-agent/lessons/{id}:
+    delete:
+      operationId: deleteAgentLesson
       tags: [demand]
-      summary: Clear a PO's needs-attention flag after handling it
+      summary: Remove a learned vendor lesson
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, id]
+                properties:
+                  deleted: { type: boolean }
+                  id: { type: string }
+  /demand/pos/{id}/resolve-attention:
+    post:
+      operationId: resolvePoAttention
+      tags: [demand]
+      summary: Clear a PO's needs-attention flag, optionally teaching the agent why it was fine
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResolveAttentionInput" }
       responses:
         "200":
           description: Resolved
@@ -2116,6 +2137,25 @@ components:
         emailedTo: { type: string, nullable: true }
         gmailConfigured: { type: boolean }
         gmailAccount: { type: string, nullable: true }
+    ApproveDraftInput:
+      type: object
+      description: "Optional edits — omitted fields send the draft as the agent wrote it."
+      properties:
+        subject: { type: string }
+        body: { type: string }
+    ResolveAttentionInput:
+      type: object
+      description: "Optional explanation; when present it is saved as a vendor lesson the classifier honors going forward."
+      properties:
+        explanation: { type: string }
+    AgentLesson:
+      type: object
+      required: [id, lesson, createdAt]
+      properties:
+        id: { type: string }
+        vendorName: { type: string, nullable: true, description: "Vendor the lesson applies to; null = all vendors." }
+        lesson: { type: string }
+        createdAt: { type: string }
     PoAgentDraft:
       type: object
       required: [id, poId, kind, toEmails, subject, body, createdAt]
@@ -2150,6 +2190,10 @@ components:
         needsAttention:
           type: array
           items: { $ref: "#/components/schemas/PoAttentionItem" }
+        lessons:
+          type: array
+          description: "Buyer-approved conventions the classifier honors, newest first."
+          items: { $ref: "#/components/schemas/AgentLesson" }
         trackedCount: { type: integer, description: "POs the agent is actively tracking." }
     PoTimelineEvent:
       type: object

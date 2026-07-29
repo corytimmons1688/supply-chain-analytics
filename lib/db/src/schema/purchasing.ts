@@ -147,3 +147,22 @@ export const poAttachmentTable = pgTable(
 export type PoEmailEventRow = typeof poEmailEventTable.$inferSelect;
 export type PoAgentDraftRow = typeof poAgentDraftTable.$inferSelect;
 export type PoAttachmentRow = typeof poAttachmentTable.$inferSelect;
+
+/**
+ * Buyer-approved conventions the agent learns from resolved flags — e.g.
+ * "Derprosa's confirmations round width to one decimal". Injected into every
+ * classification for the matching vendor so known system quirks stop being
+ * flagged as discrepancies. This is the agent's whole "training" mechanism:
+ * plain-language lessons, visible and deletable in the dashboard.
+ */
+export const agentLessonTable = pgTable("agent_lesson", {
+  id: text("id").primaryKey().$defaultFn(uuid),
+  /** Vendor the lesson applies to; null = every vendor. */
+  vendorName: text("vendor_name"),
+  lesson: text("lesson").notNull(),
+  /** PO whose resolved flag produced the lesson, for traceability. */
+  poId: text("po_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type AgentLessonRow = typeof agentLessonTable.$inferSelect;

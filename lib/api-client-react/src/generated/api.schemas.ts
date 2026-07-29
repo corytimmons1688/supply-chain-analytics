@@ -734,6 +734,29 @@ export interface PoEmailPreview {
   gmailAccount?: string | null;
 }
 
+/**
+ * Optional edits — omitted fields send the draft as the agent wrote it.
+ */
+export interface ApproveDraftInput {
+  subject?: string;
+  body?: string;
+}
+
+/**
+ * Optional explanation; when present it is saved as a vendor lesson the classifier honors going forward.
+ */
+export interface ResolveAttentionInput {
+  explanation?: string;
+}
+
+export interface AgentLesson {
+  id: string;
+  /** Vendor the lesson applies to; null = all vendors. */
+  vendorName?: string | null;
+  lesson: string;
+  createdAt: string;
+}
+
 export interface PoAgentDraft {
   id: string;
   poId: string;
@@ -760,6 +783,8 @@ export interface PoAttentionItem {
 export interface PoAgentQueue {
   drafts: PoAgentDraft[];
   needsAttention: PoAttentionItem[];
+  /** Buyer-approved conventions the classifier honors, newest first. */
+  lessons?: AgentLesson[];
   /** POs the agent is actively tracking. */
   trackedCount: number;
 }
@@ -1614,14 +1639,6 @@ export type SendMaterialPoTest409 = {
   error?: string;
 };
 
-/**
- * Optional edits — omitted fields send the draft as the agent wrote it.
- */
-export type ApprovePoAgentDraftBody = {
-  subject?: string;
-  body?: string;
-};
-
 export type ApprovePoAgentDraft200 = {
   sent: boolean;
   id: string;
@@ -1630,6 +1647,11 @@ export type ApprovePoAgentDraft200 = {
 
 export type DismissPoAgentDraft200 = {
   dismissed: boolean;
+  id: string;
+};
+
+export type DeleteAgentLesson200 = {
+  deleted: boolean;
   id: string;
 };
 

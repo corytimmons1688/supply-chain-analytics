@@ -18,8 +18,8 @@ import type {
 
 import type {
   AdjustmentTotals,
+  ApproveDraftInput,
   ApprovePoAgentDraft200,
-  ApprovePoAgentDraftBody,
   AslEntry,
   AslEntryInput,
   AslGoal,
@@ -28,6 +28,7 @@ import type {
   CycleCountCompletion,
   CycleCountKpi,
   CycleCountScheduleResponse,
+  DeleteAgentLesson200,
   DeleteMaterialPo200,
   DeleteMaterialPo409,
   DemandConfigInput,
@@ -95,6 +96,7 @@ import type {
   QualityIssue,
   QualityIssueInput,
   RegenerateCycleCountSchedule200,
+  ResolveAttentionInput,
   ResolvePoAttention200,
   ScorecardResponse,
   SeedCurrentAsl200,
@@ -2835,14 +2837,14 @@ export const getApprovePoAgentDraftUrl = (id: string) => {
 
 export const approvePoAgentDraft = async (
   id: string,
-  approvePoAgentDraftBody?: ApprovePoAgentDraftBody,
+  approveDraftInput?: ApproveDraftInput,
   options?: RequestInit,
 ): Promise<ApprovePoAgentDraft200> => {
   return customFetch<ApprovePoAgentDraft200>(getApprovePoAgentDraftUrl(id), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(approvePoAgentDraftBody),
+    body: JSON.stringify(approveDraftInput),
   });
 };
 
@@ -2853,14 +2855,14 @@ export const getApprovePoAgentDraftMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
     TError,
-    { id: string; data: BodyType<ApprovePoAgentDraftBody> },
+    { id: string; data: BodyType<ApproveDraftInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof approvePoAgentDraft>>,
   TError,
-  { id: string; data: BodyType<ApprovePoAgentDraftBody> },
+  { id: string; data: BodyType<ApproveDraftInput> },
   TContext
 > => {
   const mutationKey = ["approvePoAgentDraft"];
@@ -2874,7 +2876,7 @@ export const getApprovePoAgentDraftMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
-    { id: string; data: BodyType<ApprovePoAgentDraftBody> }
+    { id: string; data: BodyType<ApproveDraftInput> }
   > = (props) => {
     const { id, data } = props ?? {};
 
@@ -2887,7 +2889,7 @@ export const getApprovePoAgentDraftMutationOptions = <
 export type ApprovePoAgentDraftMutationResult = NonNullable<
   Awaited<ReturnType<typeof approvePoAgentDraft>>
 >;
-export type ApprovePoAgentDraftMutationBody = BodyType<ApprovePoAgentDraftBody>;
+export type ApprovePoAgentDraftMutationBody = BodyType<ApproveDraftInput>;
 export type ApprovePoAgentDraftMutationError = ErrorType<unknown>;
 
 /**
@@ -2900,14 +2902,14 @@ export const useApprovePoAgentDraft = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof approvePoAgentDraft>>,
     TError,
-    { id: string; data: BodyType<ApprovePoAgentDraftBody> },
+    { id: string; data: BodyType<ApproveDraftInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof approvePoAgentDraft>>,
   TError,
-  { id: string; data: BodyType<ApprovePoAgentDraftBody> },
+  { id: string; data: BodyType<ApproveDraftInput> },
   TContext
 > => {
   return useMutation(getApprovePoAgentDraftMutationOptions(options));
@@ -2998,7 +3000,91 @@ export const useDismissPoAgentDraft = <
 };
 
 /**
- * @summary Clear a PO's needs-attention flag after handling it
+ * @summary Remove a learned vendor lesson
+ */
+export const getDeleteAgentLessonUrl = (id: string) => {
+  return `/api/demand/po-agent/lessons/${id}`;
+};
+
+export const deleteAgentLesson = async (
+  id: string,
+  options?: RequestInit,
+): Promise<DeleteAgentLesson200> => {
+  return customFetch<DeleteAgentLesson200>(getDeleteAgentLessonUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteAgentLessonMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAgentLesson>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteAgentLesson>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["deleteAgentLesson"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteAgentLesson>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteAgentLesson(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteAgentLessonMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAgentLesson>>
+>;
+
+export type DeleteAgentLessonMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Remove a learned vendor lesson
+ */
+export const useDeleteAgentLesson = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAgentLesson>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteAgentLesson>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDeleteAgentLessonMutationOptions(options));
+};
+
+/**
+ * @summary Clear a PO's needs-attention flag, optionally teaching the agent why it was fine
  */
 export const getResolvePoAttentionUrl = (id: string) => {
   return `/api/demand/pos/${id}/resolve-attention`;
@@ -3006,11 +3092,14 @@ export const getResolvePoAttentionUrl = (id: string) => {
 
 export const resolvePoAttention = async (
   id: string,
+  resolveAttentionInput?: ResolveAttentionInput,
   options?: RequestInit,
 ): Promise<ResolvePoAttention200> => {
   return customFetch<ResolvePoAttention200>(getResolvePoAttentionUrl(id), {
     ...options,
     method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(resolveAttentionInput),
   });
 };
 
@@ -3021,14 +3110,14 @@ export const getResolvePoAttentionMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof resolvePoAttention>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<ResolveAttentionInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof resolvePoAttention>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<ResolveAttentionInput> },
   TContext
 > => {
   const mutationKey = ["resolvePoAttention"];
@@ -3042,11 +3131,11 @@ export const getResolvePoAttentionMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof resolvePoAttention>>,
-    { id: string }
+    { id: string; data: BodyType<ResolveAttentionInput> }
   > = (props) => {
-    const { id } = props ?? {};
+    const { id, data } = props ?? {};
 
-    return resolvePoAttention(id, requestOptions);
+    return resolvePoAttention(id, data, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -3055,11 +3144,11 @@ export const getResolvePoAttentionMutationOptions = <
 export type ResolvePoAttentionMutationResult = NonNullable<
   Awaited<ReturnType<typeof resolvePoAttention>>
 >;
-
+export type ResolvePoAttentionMutationBody = BodyType<ResolveAttentionInput>;
 export type ResolvePoAttentionMutationError = ErrorType<unknown>;
 
 /**
- * @summary Clear a PO's needs-attention flag after handling it
+ * @summary Clear a PO's needs-attention flag, optionally teaching the agent why it was fine
  */
 export const useResolvePoAttention = <
   TError = ErrorType<unknown>,
@@ -3068,14 +3157,14 @@ export const useResolvePoAttention = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof resolvePoAttention>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<ResolveAttentionInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof resolvePoAttention>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<ResolveAttentionInput> },
   TContext
 > => {
   return useMutation(getResolvePoAttentionMutationOptions(options));

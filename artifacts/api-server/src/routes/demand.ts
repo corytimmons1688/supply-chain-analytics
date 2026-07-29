@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, ltPoTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, ltPoTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, agentLessonTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -1673,10 +1673,11 @@ router.post(
 router.get(
   "/demand/po-agent",
   asyncHandler(async (_req, res) => {
-    const [drafts, flagged, tracked] = await Promise.all([
+    const [drafts, flagged, tracked, lessons] = await Promise.all([
       db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.status, "pending")),
       db.select().from(materialPoTable).where(eq(materialPoTable.needsAttention, true)),
       db.select().from(materialPoTable).where(isNotNull(materialPoTable.agentState)),
+      db.select().from(agentLessonTable),
     ]);
     const poIds = [...new Set([...drafts.map((d) => d.poId), ...flagged.map((p) => p.id)])];
     const lines = poIds.length
@@ -1708,6 +1709,9 @@ router.get(
         agentState: p.agentState,
         reason: p.attentionReason,
       })),
+      lessons: lessons
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .map((l) => ({ id: l.id, vendorName: l.vendorName, lesson: l.lesson, createdAt: l.createdAt.toISOString() })),
       trackedCount: tracked.filter((p) => p.agentState !== "closed").length,
     });
   }),
@@ -1781,16 +1785,45 @@ router.post(
   }),
 );
 
-/** Clear a needs-attention flag once Cory has dealt with it. */
+/**
+ * Clear a needs-attention flag. An optional explanation becomes a vendor
+ * lesson — a buyer-approved convention every future classification for that
+ * vendor honors, so the same known quirk stops being flagged. This is how the
+ * agent "learns": plain language, visible and deletable in the dashboard.
+ */
 router.post(
   "/demand/pos/:id/resolve-attention",
   asyncHandler(async (req, res) => {
     const id = String(req.params["id"]);
+    const explanation = ((req.body ?? {}) as { explanation?: string }).explanation?.trim();
+    const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
+    if (!po) return void res.status(404).json({ error: "PO not found" });
     await db
       .update(materialPoTable)
       .set({ needsAttention: false, attentionReason: null, updatedAt: new Date() })
       .where(eq(materialPoTable.id, id));
+    const { appendPoEvent } = await import("../lib/po-agent");
+    if (explanation) {
+      await db.insert(agentLessonTable).values({ vendorName: po.vendorName, lesson: explanation, poId: id });
+      await appendPoEvent(id, {
+        direction: "system",
+        kind: "note",
+        summary: `Flag resolved by buyer — lesson saved for ${po.vendorName}: ${explanation}`,
+      });
+    } else if (po.needsAttention) {
+      await appendPoEvent(id, { direction: "system", kind: "note", summary: "Flag resolved by buyer" });
+    }
     res.json({ resolved: true, id });
+  }),
+);
+
+/** Remove a learned lesson the buyer no longer wants applied. */
+router.delete(
+  "/demand/po-agent/lessons/:id",
+  asyncHandler(async (req, res) => {
+    const id = String(req.params["id"]);
+    await db.delete(agentLessonTable).where(eq(agentLessonTable.id, id));
+    res.json({ deleted: true, id });
   }),
 );
 

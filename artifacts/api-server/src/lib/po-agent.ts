@@ -1,4 +1,4 @@
-import { db, materialPoTable, materialPoLineTable, vendorContactTable, ltPoTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable } from "@workspace/db";
+import { db, materialPoTable, materialPoLineTable, vendorContactTable, ltPoTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, agentLessonTable } from "@workspace/db";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   gmailConfigured,
@@ -147,6 +147,9 @@ export async function classifyVendorEmail(input: {
   /** PDF attachments (base64) passed to the model as documents — order
    * acknowledgements usually carry the real dates/quantities here. */
   pdfs?: { filename: string; data: string }[];
+  /** Buyer-approved vendor conventions ("their system rounds width to one
+   * decimal") — known quirks that must NOT be reported as discrepancies. */
+  buyerNotes?: string[];
 }): Promise<ClassifyResult> {
   const apiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
   if (!apiKey) return { ok: false, reason: "ANTHROPIC_API_KEY is not set on this deployment" };
@@ -167,7 +170,13 @@ export async function classifyVendorEmail(input: {
           `- Vendor: ${input.vendorName}\n` +
           `- Material: ${input.stockLine}\n` +
           `- Requested delivery: ${input.requestedDelivery ?? "unspecified"}\n` +
-          `- Current tracking state: ${input.agentState}\n\n` +
+          `- Current tracking state: ${input.agentState}\n` +
+          (input.buyerNotes?.length
+            ? `\nBuyer-approved conventions for this vendor — treat these as normal, do NOT report them as discrepancies and do NOT flag them for review:\n${input.buyerNotes
+                .map((n) => `- ${n}`)
+                .join("\n")}\n`
+            : "") +
+          `\n` +
           `Email received:\n` +
           `From: ${input.from}\nDate: ${input.date}\nSubject: ${input.subject}\n` +
           `Attachments: ${input.attachmentNames.join(", ") || "(none)"}` +
@@ -260,6 +269,10 @@ export async function runPoAgent(): Promise<AgentRunResult> {
   const enabledVendors = await db.select().from(vendorContactTable).where(eq(vendorContactTable.agentEnabled, true));
   const vendorByName = new Map(enabledVendors.map((v) => [v.vendorName, v]));
   if (vendorByName.size === 0) return { ...zero, skipped: "no vendors enabled" };
+
+  // Buyer-approved conventions, injected into every classification for the
+  // matching vendor (null vendorName = applies everywhere).
+  const allLessons = await db.select().from(agentLessonTable);
 
   // Every emailed PO for an enabled vendor. agentState null means it was sent
   // before the agent existed (or before the vendor was enabled) — adopt it.
@@ -376,6 +389,9 @@ export async function runPoAgent(): Promise<AgentRunResult> {
         body: bodyText(msg),
         attachmentNames: parts.map((a) => a.filename),
         pdfs,
+        buyerNotes: allLessons
+          .filter((l) => !l.vendorName || l.vendorName === po.vendorName)
+          .map((l) => l.lesson),
       });
     };
 

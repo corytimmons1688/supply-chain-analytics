@@ -23,6 +23,7 @@ import {
   useApprovePoAgentDraft,
   useDismissPoAgentDraft,
   useResolvePoAttention,
+  useDeleteAgentLesson,
   useGetPoTimeline,
   getGetPoTimelineQueryKey,
   type DemandStockMetrics,
@@ -1938,6 +1939,7 @@ export function EmailTab() {
     <div className="space-y-4">
       <GmailCard />
       <PoAgentQueueCard />
+      <AgentLessonsCard />
       <VendorContactsCard />
     </div>
   );
@@ -2550,6 +2552,8 @@ function PoAgentQueueCard() {
   const dismiss = useDismissPoAgentDraft();
   const resolve = useResolvePoAttention();
   const [expanded, setExpanded] = React.useState<string | null>(null);
+  const [resolving, setResolving] = React.useState<{ poId: string; vendorName: string; reason?: string | null } | null>(null);
+  const [explanation, setExplanation] = React.useState("");
   // Local edits per draft — what Approve actually sends. Untouched drafts send
   // the agent's wording unchanged.
   const [edits, setEdits] = React.useState<Record<string, { subject: string; body: string }>>({});
@@ -2677,14 +2681,112 @@ function PoAgentQueueCard() {
               variant="outline"
               size="sm"
               className="h-7 text-xs shrink-0"
-              disabled={resolve.isPending}
-              onClick={async () => {
-                await resolve.mutateAsync({ id: a.poId }).catch(() => {});
-                await refresh();
+              onClick={() => {
+                setResolving(a);
+                setExplanation("");
               }}
             >
               Mark handled
             </Button>
+          </div>
+        ))}
+      </CardContent>
+
+      {/* Resolve with an optional lesson — this is how the agent learns. */}
+      <Dialog open={resolving != null} onOpenChange={(o) => !o && setResolving(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Mark handled — {resolving?.vendorName}</DialogTitle>
+            <DialogDescription className="text-xs">{resolving?.reason}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Textarea
+              className="text-xs min-h-[5rem]"
+              placeholder={`Optional: explain why this is fine — the agent will remember it for ${resolving?.vendorName ?? "this vendor"} and stop flagging it. e.g. "Their system rounds width to one decimal, so 12.8 on the confirmation means our 12.75."`}
+              value={explanation}
+              onChange={(e) => setExplanation(e.target.value)}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Leave blank to just clear the flag. Saved lessons appear on the Email tab and can be removed any time.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setResolving(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={resolve.isPending}
+              onClick={async () => {
+                if (!resolving) return;
+                try {
+                  await resolve.mutateAsync({
+                    id: resolving.poId,
+                    data: explanation.trim() ? { explanation: explanation.trim() } : {},
+                  });
+                  toast({
+                    title: explanation.trim() ? "Handled — lesson saved" : "Handled",
+                    description: explanation.trim()
+                      ? `The agent will apply this to future ${resolving.vendorName} email`
+                      : undefined,
+                  });
+                  setResolving(null);
+                  await refresh();
+                } catch (e) {
+                  toast({ title: "Failed", description: String(e), variant: "destructive" });
+                }
+              }}
+            >
+              {explanation.trim() ? "Mark handled & teach the agent" : "Mark handled"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+/** Lessons the agent has learned from resolved flags — visible and removable. */
+function AgentLessonsCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data } = useGetPoAgentQueue({
+    query: { queryKey: getGetPoAgentQueueQueryKey(), staleTime: 30_000 },
+  });
+  const remove = useDeleteAgentLesson();
+  const lessons = data?.lessons ?? [];
+  if (lessons.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">What the agent has learned</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Vendor conventions you approved when resolving flags. The classifier honors these on every future email —
+          remove one and the agent goes back to flagging it.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-1.5 text-xs">
+        {lessons.map((l) => (
+          <div key={l.id} className="flex items-start justify-between gap-3 rounded-md border px-3 py-2">
+            <div className="min-w-0">
+              <Badge variant="outline" className="mr-2">
+                {l.vendorName ?? "All vendors"}
+              </Badge>
+              {l.lesson}
+              <span className="text-muted-foreground"> · {new Date(l.createdAt).toLocaleDateString()}</span>
+            </div>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-red-600 shrink-0"
+              title="Forget this lesson"
+              onClick={async () => {
+                await remove.mutateAsync({ id: l.id }).catch(() => {});
+                await queryClient.invalidateQueries({ queryKey: getGetPoAgentQueueQueryKey() });
+                toast({ title: "Lesson removed" });
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         ))}
       </CardContent>

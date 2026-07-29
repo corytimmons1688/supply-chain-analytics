@@ -1170,6 +1170,22 @@ export const GetPoAgentQueueResponse = zod.object({
       reason: zod.string().nullish(),
     }),
   ),
+  lessons: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        vendorName: zod
+          .string()
+          .nullish()
+          .describe("Vendor the lesson applies to; null = all vendors."),
+        lesson: zod.string(),
+        createdAt: zod.string(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Buyer-approved conventions the classifier honors, newest first.",
+    ),
   trackedCount: zod.number().describe("POs the agent is actively tracking."),
 });
 
@@ -1208,11 +1224,31 @@ export const DismissPoAgentDraftResponse = zod.object({
 });
 
 /**
- * @summary Clear a PO's needs-attention flag after handling it
+ * @summary Remove a learned vendor lesson
+ */
+export const DeleteAgentLessonParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteAgentLessonResponse = zod.object({
+  deleted: zod.boolean(),
+  id: zod.string(),
+});
+
+/**
+ * @summary Clear a PO's needs-attention flag, optionally teaching the agent why it was fine
  */
 export const ResolvePoAttentionParams = zod.object({
   id: zod.coerce.string(),
 });
+
+export const ResolvePoAttentionBody = zod
+  .object({
+    explanation: zod.string().optional(),
+  })
+  .describe(
+    "Optional explanation; when present it is saved as a vendor lesson the classifier honors going forward.",
+  );
 
 export const ResolvePoAttentionResponse = zod.object({
   resolved: zod.boolean(),
