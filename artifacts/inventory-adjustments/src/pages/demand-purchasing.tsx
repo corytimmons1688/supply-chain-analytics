@@ -61,7 +61,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2 } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -492,6 +492,14 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   );
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const [summaryView, setSummaryView] = React.useState<"bars" | "grid">("bars");
+  // Full product descriptions: widen the label column and let text wrap.
+  const [wideLabels, setWideLabels] = React.useState(() => localStorage.getItem("sca-wide-labels") === "1");
+  const toggleWideLabels = () => {
+    setWideLabels((v) => {
+      localStorage.setItem("sca-wide-labels", v ? "0" : "1");
+      return !v;
+    });
+  };
   /**
    * Width-bar hover card. Rendered as ONE position:fixed node outside the
    * scrolling list — an absolutely-positioned tooltip inside the
@@ -768,6 +776,17 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                   <LayoutGrid className="w-3.5 h-3.5" />
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={toggleWideLabels}
+                title={wideLabels ? "Collapse descriptions" : "Expand descriptions — show the full product name"}
+                className={cn(
+                  "flex items-center rounded-md border px-2 py-1",
+                  wideLabels ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <UnfoldHorizontal className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
           {/* Legend: availability statuses + corner-flag markers (Batched parity). */}
@@ -827,9 +846,15 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                       selectedStock === r.stockId && "bg-accent/50",
                     )}
                   >
-                    <div className="w-28 shrink-0">
+                    <div className={cn("shrink-0", wideLabels ? "w-72 sm:w-96" : "w-28")}>
                       <div className="text-xs font-semibold">#{r.stockId}</div>
-                      <div className="text-[10px] text-muted-foreground truncate" title={r.description}>
+                      <div
+                        className={cn(
+                          "text-[10px] text-muted-foreground",
+                          wideLabels ? "whitespace-normal break-words" : "truncate",
+                        )}
+                        title={r.description}
+                      >
                         {r.description}
                       </div>
                     </div>
@@ -943,7 +968,13 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                       >
                         <td className="px-3 py-1.5">
                           <div className="font-semibold">#{r.stockId}</div>
-                          <div className="text-[10px] text-muted-foreground truncate max-w-[12rem]" title={r.description}>
+                          <div
+                            className={cn(
+                              "text-[10px] text-muted-foreground",
+                              wideLabels ? "whitespace-normal break-words max-w-[28rem]" : "truncate max-w-[12rem]",
+                            )}
+                            title={r.description}
+                          >
                             {r.description}
                           </div>
                         </td>
