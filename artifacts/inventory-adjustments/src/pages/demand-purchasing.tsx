@@ -1231,6 +1231,8 @@ type SuggestionLine = {
   /** Current position + band, so the buyer can judge the suggestion in place. */
   onHandFootage: number;
   onOrderFootage: number;
+  /** on hand + on order − open-ticket book — what Min compares against. */
+  availableFootage: number;
   openPoCount: number;
   minFootage: number;
   maxFootage: number;
@@ -1364,6 +1366,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           committedShortageFootage: r.committedShortageFootage,
           onHandFootage: r.onHandFootage,
           onOrderFootage: r.openPoFootage,
+          availableFootage: r.availableFootage,
           openPoCount: r.openPoCount,
           minFootage: r.reorderPointFootage,
           maxFootage: r.maxFootage,
@@ -1568,6 +1571,12 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                         >
                           On order (ft)
                         </th>
+                        <th
+                          className="text-right px-2 py-1.5 font-medium"
+                          title="On hand + on order − open-ticket requirements — the uncommitted stock Min compares against"
+                        >
+                          Available (ft)
+                        </th>
                         <th className="text-right px-2 py-1.5 font-medium" title="Reorder point — demand over the lead time + safety stock">
                           Min (ft)
                         </th>
@@ -1661,6 +1670,15 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}
+                          </td>
+                          <td
+                            className={cn(
+                              "px-2 py-1.5 text-right tabular-nums",
+                              l.minFootage > 0 && l.availableFootage < l.minFootage && "text-amber-700 dark:text-amber-400 font-medium",
+                            )}
+                            title="On hand + on order − open-ticket requirements"
+                          >
+                            {fmt(l.availableFootage)}
                           </td>
                           <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                             {l.minFootage > 0 ? fmt(l.minFootage) : "—"}
@@ -2921,13 +2939,14 @@ function CoveredByInboundCard({
           Below Min on hand — covered by inbound POs
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          On-hand is under the reorder point, but open POs already cover the gap, so ordering again would double-buy.
-          A stock reappears in Suggested POs the moment on-hand + on-order drops below its Min.
+          On-hand is under the reorder point, but available stock (on hand + on order − open-ticket requirements)
+          still clears the Min, so ordering again would double-buy. A stock reappears in Suggested POs the moment
+          available drops below its Min.
         </p>
       </CardHeader>
       <CardContent className="space-y-2 text-xs">
         {covered.map((r) => {
-          const position = r.onHandFootage + r.openPoFootage;
+          const available = r.availableFootage;
           const pos = purchByStock.get(r.stockId)?.openPos ?? [];
           return (
             <div key={r.stockId} className="rounded-md border px-3 py-2">
@@ -2951,11 +2970,12 @@ function CoveredByInboundCard({
                       )
                       .join(" · ")
                   : `${fmt(r.openPoFootage)} ft on order`}
-                {" → position "}
-                <span className="font-mono text-foreground">{fmt(position)} ft</span>
+                {r.openTicketFootage > 0 ? ` − ${fmt(r.openTicketFootage)} ft booked` : ""}
+                {" → available "}
+                <span className="font-mono text-foreground">{fmt(available)} ft</span>
                 {" ≥ Min. "}
-                <span title="Position must fall below Min to trigger a suggestion">
-                  To force another order now, set Min above {fmt(position)} ft.
+                <span title="Available must fall below Min to trigger a suggestion">
+                  To force another order now, set Min above {fmt(available)} ft.
                 </span>
               </div>
             </div>

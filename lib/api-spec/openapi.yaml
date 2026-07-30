@@ -2662,6 +2662,7 @@ components:
         - orderQtySource
         - discontinued
         - demandFromStockId
+        - availableFootage
         - suggestedOrderFootage
         - suggestedOrderRolls
         - belowMin
@@ -2731,6 +2732,7 @@ components:
         discontinued: { type: boolean, description: "End-of-life: still counted for on-hand but never suggested for reorder." }
         inactive: { type: boolean, description: "Label Traxx marks the stock inactive — shown for sell-through, never reordered." }
         demandFromStockId: { type: string, nullable: true, description: "Predecessor stock whose demand history is merged into this SKU (null = none)." }
+        availableFootage: { type: number, description: "on-hand + on-order − open-ticket book: the uncommitted stock Min/Max compare against." }
         suggestedOrderFootage: { type: number }
         suggestedOrderRolls: { type: integer }
         suggestedWidths:

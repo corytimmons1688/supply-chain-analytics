@@ -1519,6 +1519,11 @@ export const GetDemandSummaryResponse = zod.object({
         .describe(
           "Predecessor stock whose demand history is merged into this SKU (null = none).",
         ),
+      availableFootage: zod
+        .number()
+        .describe(
+          "on-hand + on-order − open-ticket book: the uncommitted stock Min\/Max compare against.",
+        ),
       suggestedOrderFootage: zod.number(),
       suggestedOrderRolls: zod.number(),
       suggestedWidths: zod
@@ -1825,6 +1830,11 @@ export const GetDemandStockDetailResponse = zod.object({
       .nullable()
       .describe(
         "Predecessor stock whose demand history is merged into this SKU (null = none).",
+      ),
+    availableFootage: zod
+      .number()
+      .describe(
+        "on-hand + on-order − open-ticket book: the uncommitted stock Min\/Max compare against.",
       ),
     suggestedOrderFootage: zod.number(),
     suggestedOrderRolls: zod.number(),

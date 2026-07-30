@@ -1117,6 +1117,8 @@ export interface StockMetrics {
   openPoCount: number;
   openPoRolls: number;
   openPoFootage: number;
+  /** on-hand + on-order − open-ticket book: the uncommitted stock Min/Max compare against. */
+  availableFootage: number;
   lastUsedDate: string | null;
   daysSinceLastUse: number | null;
   activityStatus: "active" | "slowing" | "dormant" | "never";
@@ -1228,17 +1230,18 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
     reorderMethod = "statistical";
   }
 
-  // Time-phase against the order book: committed footage due to ship within the
-  // lead-time horizon is firm, known demand that must be covered before a fresh
-  // PO could arrive. Lean on it — base demand-over-lead-time is the larger of
-  // the historical expectation and what's actually booked, plus safety on top.
+  // Committed footage due within the lead-time horizon — informational now.
+  // Since 2026-07-28 (Cory's call) the reorder comparison subtracts the WHOLE
+  // open-ticket book from the position side ("available"), so folding booked
+  // demand into the reorder point as well would count every booked foot twice.
+  // The auto ROP is therefore expected-demand-over-lead-time + safety only.
   const leadHorizonEnd = addDaysIso(todayIso(), Math.max(1, Math.round(avgLtDays)));
   const openTicketLines = input.openTicketLines ?? [];
   const committedWithinLead = openTicketLines.reduce(
     (s, t) => (t.shipByDate && t.shipByDate <= leadHorizonEnd ? s + t.footage : s),
     0,
   );
-  const autoReorderPoint = Math.max(expectedLtd, committedWithinLead) + safetyStock;
+  const autoReorderPoint = expectedLtd + safetyStock;
   // A manual reorder point wins over the calculation and drives everything
   // downstream (belowMin, suggested quantity, and the default max).
   const reorderPointOverridden =
@@ -1309,25 +1312,28 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   const openPoRolls = openPosForStock.reduce((s, p) => s + p.quantityRolls, 0);
   const openPoFootage = typicalRoll > 0 ? openPoRolls * typicalRoll : 0;
 
-  // Reorder against inventory POSITION (on-hand + on-order), not on-hand
-  // alone. Otherwise a material with a replenishment PO already inbound keeps
-  // triggering a reorder, and the suggested quantity double-counts what is
-  // already on the way.
+  // Inventory position = on-hand + on-order; inbound still counts so a
+  // replenishment PO already on the way is never double-bought.
   const inventoryPosition = input.onHandFootage + openPoFootage;
 
-  // Two reorder drivers:
-  //  1. Forecast — position below the reorder point. The ROP already folds in
-  //     committed demand due within the lead time, so this captures both the
-  //     steady-state replenishment need and near-term booked spikes.
-  //  2. Committed (beyond lead) — position can't cover the *entire* open-ticket
-  //     book, even demand booked past the lead-time horizon. Surfaces a large
-  //     order backlog early so one PO can cover it (1 material = 1 PO).
+  // AVAILABLE = position − the open-ticket book (net of consumption). Per
+  // Cory (2026-07-28), Min/Max are a floor on UNCOMMITTED stock: booked work
+  // is spoken for, so it subtracts from the supply side before comparing to
+  // the reorder point. The auto ROP correspondingly no longer folds
+  // committed-within-lead into itself (that would double-count the book).
   const openTicketFootage = input.openTicketFootage ?? 0;
+  const availableFootage = inventoryPosition - openTicketFootage;
+
+  // Two reorder drivers:
+  //  1. Forecast — AVAILABLE below the reorder point (expected lead-time
+  //     demand + safety, or the manual Min).
+  //  2. Committed — width-aware: demand at a width not covered by supply at
+  //     that width. Catches shortages the pooled stock-level numbers hide.
   // End-of-life SKUs — and anything Label Traxx marks inactive — still show
   // on-hand for sell-through but never reorder.
   const ltInactive = input.inactive ?? false;
   const discontinued = (input.discontinued ?? false) || ltInactive;
-  const forecastShort = !discontinued && reorderPoint > 0 && inventoryPosition < reorderPoint;
+  const forecastShort = !discontinued && reorderPoint > 0 && availableFootage < reorderPoint;
   // Width-aware committed shortage when supplied (demand at a width covered only
   // by supply at that width); else the pooled fallback.
   const committedShortageFootage =
@@ -1349,7 +1355,9 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
   if (belowMin) {
     // Order enough to reach the forecast max level, or to cover the (width-aware)
     // committed shortfall — whichever is larger.
-    const rawNeed = Math.max(maxFootage - inventoryPosition, committedShortageFootage);
+    // Order up to Max measured on AVAILABLE stock — the booked work stays
+    // funded and Max is the ceiling on what's left over.
+    const rawNeed = Math.max(maxFootage - availableFootage, committedShortageFootage);
     if (typicalRoll > 0) {
       // Never order below the economic batch — a (Q,r) policy places at least
       // EOQ each time, but a big committed backlog can push the quantity higher.
@@ -1451,6 +1459,7 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       openPoCount,
       openPoRolls,
       openPoFootage: Math.round(openPoFootage),
+      availableFootage: Math.round(availableFootage),
       lastUsedDate: lastUsedIso,
       daysSinceLastUse: daysSinceLastUse,
       activityStatus,
