@@ -1143,6 +1143,75 @@ export const SendMaterialPoTestResponse = zod.object({
 });
 
 /**
+ * @summary Excess & Obsolete review — every stock on hand ranked by months of supply
+ */
+export const GetEoReportResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      description: zod.string().nullish(),
+      inactive: zod.boolean().describe("Label Traxx marks the stock inactive."),
+      discontinued: zod
+        .boolean()
+        .describe("Flagged end-of-life in Configuration."),
+      onHandFootage: zod.number(),
+      rollCount: zod.number(),
+      valueUsd: zod.number().nullish(),
+      valueIsEstimate: zod
+        .boolean()
+        .describe(
+          "True when the $ is footage × CostMSI (gateway per-roll cost unavailable).",
+        ),
+      avgMonthlyFootage: zod
+        .number()
+        .describe("Average monthly consumption over the trailing 12 months."),
+      monthsOfSupply: zod
+        .number()
+        .nullish()
+        .describe(
+          "On hand ÷ avg monthly use; null = no usage in 12 months (infinite supply).",
+        ),
+      lastUsedIso: zod.string().nullish(),
+      notes: zod.string().nullish().describe("Buyer's disposition note."),
+    }),
+  ),
+  windowFrom: zod.string().describe("Start of the 12-month usage window."),
+});
+
+/**
+ * @summary Save a stock's E&O disposition note (empty clears)
+ */
+export const SetEoNotesBody = zod.object({
+  stockId: zod.string(),
+  notes: zod.string().nullish(),
+});
+
+export const SetEoNotesResponse = zod.object({
+  stockId: zod.string(),
+  saved: zod.boolean(),
+});
+
+/**
+ * @summary On-hand rolls (physical tag numbers) for a stock
+ */
+export const GetStockRollsParams = zod.object({
+  stockId: zod.coerce.string(),
+});
+
+export const GetStockRollsResponse = zod.object({
+  rolls: zod.array(
+    zod.object({
+      rollId: zod.string().describe("Physical roll tag number."),
+      footage: zod.number(),
+      width: zod.number().nullish(),
+      poNumber: zod.string().nullish(),
+      receivedIso: zod.string().nullish(),
+      location: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
  * @summary Agent work queue — pending follow-up drafts and POs flagged for a human
  */
 export const GetPoAgentQueueResponse = zod.object({

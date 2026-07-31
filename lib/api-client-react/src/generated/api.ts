@@ -36,6 +36,8 @@ import type {
   DemandStockDetail,
   DemandSummary,
   DismissPoAgentDraft200,
+  EoNotesInput,
+  EoReport,
   GatewayHealth,
   GetAdjustmentsByStock200,
   GetAdjustmentsByStockParams,
@@ -103,7 +105,9 @@ import type {
   SeedVendors200,
   SendMaterialPo409,
   SendMaterialPoTest409,
+  SetEoNotes200,
   StockGoal,
+  StockRolls,
   SyncLabeltraxxLeadTimesParams,
   VarianceInvestigation,
   VarianceInvestigationInput,
@@ -2752,6 +2756,252 @@ export const useSendMaterialPoTest = <
 > => {
   return useMutation(getSendMaterialPoTestMutationOptions(options));
 };
+
+/**
+ * @summary Excess & Obsolete review — every stock on hand ranked by months of supply
+ */
+export const getGetEoReportUrl = () => {
+  return `/api/demand/eo-report`;
+};
+
+export const getEoReport = async (options?: RequestInit): Promise<EoReport> => {
+  return customFetch<EoReport>(getGetEoReportUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetEoReportQueryKey = () => {
+  return [`/api/demand/eo-report`] as const;
+};
+
+export const getGetEoReportQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEoReport>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getEoReport>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetEoReportQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getEoReport>>> = ({
+    signal,
+  }) => getEoReport({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEoReport>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetEoReportQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEoReport>>
+>;
+export type GetEoReportQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Excess & Obsolete review — every stock on hand ranked by months of supply
+ */
+
+export function useGetEoReport<
+  TData = Awaited<ReturnType<typeof getEoReport>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getEoReport>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetEoReportQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Save a stock's E&O disposition note (empty clears)
+ */
+export const getSetEoNotesUrl = () => {
+  return `/api/demand/eo-report/notes`;
+};
+
+export const setEoNotes = async (
+  eoNotesInput: EoNotesInput,
+  options?: RequestInit,
+): Promise<SetEoNotes200> => {
+  return customFetch<SetEoNotes200>(getSetEoNotesUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(eoNotesInput),
+  });
+};
+
+export const getSetEoNotesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setEoNotes>>,
+    TError,
+    { data: BodyType<EoNotesInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setEoNotes>>,
+  TError,
+  { data: BodyType<EoNotesInput> },
+  TContext
+> => {
+  const mutationKey = ["setEoNotes"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setEoNotes>>,
+    { data: BodyType<EoNotesInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setEoNotes(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetEoNotesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setEoNotes>>
+>;
+export type SetEoNotesMutationBody = BodyType<EoNotesInput>;
+export type SetEoNotesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Save a stock's E&O disposition note (empty clears)
+ */
+export const useSetEoNotes = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setEoNotes>>,
+    TError,
+    { data: BodyType<EoNotesInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setEoNotes>>,
+  TError,
+  { data: BodyType<EoNotesInput> },
+  TContext
+> => {
+  return useMutation(getSetEoNotesMutationOptions(options));
+};
+
+/**
+ * @summary On-hand rolls (physical tag numbers) for a stock
+ */
+export const getGetStockRollsUrl = (stockId: string) => {
+  return `/api/demand/stocks/${stockId}/rolls`;
+};
+
+export const getStockRolls = async (
+  stockId: string,
+  options?: RequestInit,
+): Promise<StockRolls> => {
+  return customFetch<StockRolls>(getGetStockRollsUrl(stockId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetStockRollsQueryKey = (stockId: string) => {
+  return [`/api/demand/stocks/${stockId}/rolls`] as const;
+};
+
+export const getGetStockRollsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStockRolls>>,
+  TError = ErrorType<unknown>,
+>(
+  stockId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStockRolls>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetStockRollsQueryKey(stockId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getStockRolls>>> = ({
+    signal,
+  }) => getStockRolls(stockId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!stockId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStockRolls>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStockRollsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStockRolls>>
+>;
+export type GetStockRollsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary On-hand rolls (physical tag numbers) for a stock
+ */
+
+export function useGetStockRolls<
+  TData = Awaited<ReturnType<typeof getStockRolls>>,
+  TError = ErrorType<unknown>,
+>(
+  stockId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStockRolls>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStockRollsQueryOptions(stockId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Agent work queue — pending follow-up drafts and POs flagged for a human

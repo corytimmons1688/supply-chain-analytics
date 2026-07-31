@@ -542,6 +542,54 @@ paths:
                 type: object
                 properties:
                   error: { type: string }
+  /demand/eo-report:
+    get:
+      operationId: getEoReport
+      tags: [demand]
+      summary: Excess & Obsolete review — every stock on hand ranked by months of supply
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EoReport" }
+  /demand/eo-report/notes:
+    put:
+      operationId: setEoNotes
+      tags: [demand]
+      summary: Save a stock's E&O disposition note (empty clears)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EoNotesInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stockId, saved]
+                properties:
+                  stockId: { type: string }
+                  saved: { type: boolean }
+  /demand/stocks/{stockId}/rolls:
+    get:
+      operationId: getStockRolls
+      tags: [demand]
+      summary: On-hand rolls (physical tag numbers) for a stock
+      parameters:
+        - name: stockId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Rolls
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockRolls" }
   /demand/po-agent:
     get:
       operationId: getPoAgentQueue
@@ -2156,6 +2204,53 @@ components:
         vendorName: { type: string, nullable: true, description: "Vendor the lesson applies to; null = all vendors." }
         lesson: { type: string }
         createdAt: { type: string }
+    EoReportItem:
+      type: object
+      required: [stockId, inactive, discontinued, onHandFootage, rollCount, valueIsEstimate, avgMonthlyFootage]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        inactive: { type: boolean, description: "Label Traxx marks the stock inactive." }
+        discontinued: { type: boolean, description: "Flagged end-of-life in Configuration." }
+        onHandFootage: { type: number }
+        rollCount: { type: integer }
+        valueUsd: { type: number, nullable: true }
+        valueIsEstimate: { type: boolean, description: "True when the $ is footage × CostMSI (gateway per-roll cost unavailable)." }
+        avgMonthlyFootage: { type: number, description: "Average monthly consumption over the trailing 12 months." }
+        monthsOfSupply: { type: number, nullable: true, description: "On hand ÷ avg monthly use; null = no usage in 12 months (infinite supply)." }
+        lastUsedIso: { type: string, nullable: true }
+        notes: { type: string, nullable: true, description: "Buyer's disposition note." }
+    EoReport:
+      type: object
+      required: [items, windowFrom]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/EoReportItem" }
+        windowFrom: { type: string, description: "Start of the 12-month usage window." }
+    EoNotesInput:
+      type: object
+      required: [stockId]
+      properties:
+        stockId: { type: string }
+        notes: { type: string, nullable: true }
+    StockRoll:
+      type: object
+      required: [rollId, footage]
+      properties:
+        rollId: { type: string, description: "Physical roll tag number." }
+        footage: { type: number }
+        width: { type: number, nullable: true }
+        poNumber: { type: string, nullable: true }
+        receivedIso: { type: string, nullable: true }
+        location: { type: string, nullable: true }
+    StockRolls:
+      type: object
+      required: [rolls]
+      properties:
+        rolls:
+          type: array
+          items: { $ref: "#/components/schemas/StockRoll" }
     PoAgentDraft:
       type: object
       required: [id, poId, kind, toEmails, subject, body, createdAt]

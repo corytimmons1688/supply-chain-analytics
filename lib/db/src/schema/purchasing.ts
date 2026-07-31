@@ -166,3 +166,17 @@ export const agentLessonTable = pgTable("agent_lesson", {
 });
 
 export type AgentLessonRow = typeof agentLessonTable.$inferSelect;
+
+/**
+ * Excess & Obsolete review notes — the buyer's disposition decision per stock
+ * ("scrap Q3", "hold for GLOR rerun", "return to vendor"). Kept out of
+ * stock_goal deliberately: PUT /goals/stock is a full replace and a review
+ * note must never be able to clobber purchasing config (or vice versa).
+ */
+export const eoDispositionTable = pgTable("eo_disposition", {
+  stockId: text("stock_id").primaryKey(),
+  notes: text("notes"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type EoDispositionRow = typeof eoDispositionTable.$inferSelect;

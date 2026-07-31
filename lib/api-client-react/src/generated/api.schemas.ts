@@ -757,6 +757,52 @@ export interface AgentLesson {
   createdAt: string;
 }
 
+export interface EoReportItem {
+  stockId: string;
+  description?: string | null;
+  /** Label Traxx marks the stock inactive. */
+  inactive: boolean;
+  /** Flagged end-of-life in Configuration. */
+  discontinued: boolean;
+  onHandFootage: number;
+  rollCount: number;
+  valueUsd?: number | null;
+  /** True when the $ is footage × CostMSI (gateway per-roll cost unavailable). */
+  valueIsEstimate: boolean;
+  /** Average monthly consumption over the trailing 12 months. */
+  avgMonthlyFootage: number;
+  /** On hand ÷ avg monthly use; null = no usage in 12 months (infinite supply). */
+  monthsOfSupply?: number | null;
+  lastUsedIso?: string | null;
+  /** Buyer's disposition note. */
+  notes?: string | null;
+}
+
+export interface EoReport {
+  items: EoReportItem[];
+  /** Start of the 12-month usage window. */
+  windowFrom: string;
+}
+
+export interface EoNotesInput {
+  stockId: string;
+  notes?: string | null;
+}
+
+export interface StockRoll {
+  /** Physical roll tag number. */
+  rollId: string;
+  footage: number;
+  width?: number | null;
+  poNumber?: string | null;
+  receivedIso?: string | null;
+  location?: string | null;
+}
+
+export interface StockRolls {
+  rolls: StockRoll[];
+}
+
 export interface PoAgentDraft {
   id: string;
   poId: string;
@@ -1639,6 +1685,11 @@ export type SendMaterialPo409 = {
 
 export type SendMaterialPoTest409 = {
   error?: string;
+};
+
+export type SetEoNotes200 = {
+  stockId: string;
+  saved: boolean;
 };
 
 export type ApprovePoAgentDraft200 = {

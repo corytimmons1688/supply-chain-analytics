@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive } from "lucide-react";
 import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth } from "@workspace/api-client-react";
@@ -23,6 +23,11 @@ const INVENTORY_CONTROL_ITEMS = [
   { href: "/cycle-counts", label: "Cycle Count Schedule", icon: ListChecks },
 ] as const;
 
+const DEMAND_ITEMS = [
+  { href: "/demand", label: "Demand Planning", icon: TrendingUp },
+  { href: "/excess-obsolete", label: "Excess & Obsolete", icon: Archive },
+];
+
 const SUPPLIER_ITEMS = [
   { href: "/scorecards", label: "Vendor Score Cards", icon: Award },
   { href: "/asl", label: "Approved Supplier List", icon: ClipboardCheck },
@@ -34,7 +39,7 @@ export function Layout({ children }: LayoutProps) {
   const { data: health } = useGatewayHealth();
 
   const inventoryActive = INVENTORY_CONTROL_ITEMS.some((i) => i.href === location);
-  const demandActive = location === "/demand" || location.startsWith("/demand/");
+  const demandActive = location === "/demand" || location.startsWith("/demand/") || location === "/excess-obsolete";
   const supplierActive = SUPPLIER_ITEMS.some((i) => i.href === location);
 
   return (
@@ -101,19 +106,39 @@ export function Layout({ children }: LayoutProps) {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Link
-            href="/demand"
-            className={cn(
-              "flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium transition-colors outline-none whitespace-nowrap",
-              demandActive
-                ? "text-primary bg-primary/10"
-                : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
-            )}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span className="hidden sm:inline">Demand Planning</span>
-            <span className="sm:hidden">Demand</span>
-          </Link>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium transition-colors outline-none whitespace-nowrap",
+                  demandActive
+                    ? "text-primary bg-primary/10"
+                    : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                )}
+              >
+                <TrendingUp className="w-4 h-4" />
+                <span className="hidden sm:inline">Demand Planning</span>
+                <span className="sm:hidden">Demand</span>
+                <ChevronDown className="w-3.5 h-3.5 opacity-60" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              {DEMAND_ITEMS.map(({ href, label, icon: Icon }) => (
+                <Link key={href} href={href}>
+                  <DropdownMenuItem
+                    className={cn(
+                      "cursor-pointer",
+                      location === href && "bg-primary/10 text-primary focus:bg-primary/10 focus:text-primary"
+                    )}
+                  >
+                    <Icon className="w-4 h-4 mr-2" />
+                    {label}
+                  </DropdownMenuItem>
+                </Link>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, ltPoTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, agentLessonTable, type StockGoalRow } from "@workspace/db";
+import { db, stockGoalTable, globalGoalTable, materialPoTable, materialPoLineTable, ltStockTable, ltPoTable, ltRollTable, vendorContactTable, poEmailEventTable, poAgentDraftTable, poAttachmentTable, agentLessonTable, eoDispositionTable, type StockGoalRow } from "@workspace/db";
 import {
   fetchUsage,
   fetchOnHandByStock,
@@ -1664,6 +1664,114 @@ router.post(
       logger.error({ poId: id, err: message }, "PO send failed");
       res.status(502).json({ error: message });
     }
+  }),
+);
+
+// --- Excess & Obsolete review -------------------------------------------------
+
+/**
+ * Every stock holding inventory, ranked by months of supply: on-hand footage
+ * against average monthly consumption over the past 12 months (E&O wants a
+ * long window — slow movers are the whole point). Null monthsOfSupply = zero
+ * recorded usage in 12 months, the strongest obsolescence signal.
+ * $ value is the ODBC per-roll cost when the gateway is up, else estimated
+ * from footage × Label Traxx CostMSI (flagged so the buyer knows which).
+ */
+router.get(
+  "/demand/eo-report",
+  asyncHandler(async (_req, res) => {
+    const windowFrom = new Date();
+    windowFrom.setMonth(windowFrom.getMonth() - 12);
+    const from = windowFrom.toISOString().slice(0, 10);
+    const [onHand, usage, stockInfo, goalRows, notes] = await Promise.all([
+      fetchOnHandByStock(),
+      fetchUsage({ from, to: new Date().toISOString().slice(0, 10) }),
+      fetchStockInfo(),
+      db.select().from(stockGoalTable),
+      db.select().from(eoDispositionTable),
+    ]);
+    const usedByStock = new Map<string, { footage: number; lastUsed: string | null }>();
+    for (const u of usage) {
+      const e = usedByStock.get(u.stockId) ?? { footage: 0, lastUsed: null };
+      e.footage += u.footage;
+      if (!e.lastUsed || u.dateUsed > e.lastUsed) e.lastUsed = u.dateUsed;
+      usedByStock.set(u.stockId, e);
+    }
+    const goalByStock = new Map(goalRows.map((g) => [g.stockId, g]));
+    const notesByStock = new Map(notes.map((n) => [n.stockId, n.notes]));
+
+    const items = [];
+    for (const [stockId, oh] of onHand) {
+      if ((oh.footage ?? 0) <= 0) continue;
+      const info = stockInfo.get(stockId);
+      const used = usedByStock.get(stockId);
+      const avgMonthly = (used?.footage ?? 0) / 12;
+      const width = info?.masterWidth ?? 0;
+      const estValue =
+        info && info.costMsi > 0 && width > 0 ? ((oh.footage * 12 * width) / 1000) * (info.costMsi + (info.freightMsi ?? 0)) : null;
+      const odbcValue = oh.value && oh.value > 0 ? oh.value : null;
+      items.push({
+        stockId,
+        description: oh.description ?? info?.faceStock ?? null,
+        inactive: info?.inactive ?? false,
+        discontinued: goalByStock.get(stockId)?.discontinued ?? false,
+        onHandFootage: Math.round(oh.footage),
+        rollCount: oh.rollCount,
+        valueUsd: odbcValue ?? (estValue != null ? Math.round(estValue * 100) / 100 : null),
+        valueIsEstimate: odbcValue == null,
+        avgMonthlyFootage: Math.round(avgMonthly),
+        monthsOfSupply: avgMonthly > 0 ? Math.round((oh.footage / avgMonthly) * 10) / 10 : null,
+        lastUsedIso: used?.lastUsed ?? null,
+        notes: notesByStock.get(stockId) ?? null,
+      });
+    }
+    // Worst first: never-used (∞ supply) on top, then by months of supply.
+    items.sort((a, b) => {
+      if ((a.monthsOfSupply == null) !== (b.monthsOfSupply == null)) return a.monthsOfSupply == null ? -1 : 1;
+      if (a.monthsOfSupply == null && b.monthsOfSupply == null) return (b.valueUsd ?? 0) - (a.valueUsd ?? 0);
+      return (b.monthsOfSupply ?? 0) - (a.monthsOfSupply ?? 0);
+    });
+    res.json({ items, windowFrom: from });
+  }),
+);
+
+/** Save the disposition note for a stock (empty string clears it). */
+router.put(
+  "/demand/eo-report/notes",
+  asyncHandler(async (req, res) => {
+    const b = (req.body ?? {}) as { stockId?: string; notes?: string | null };
+    const stockId = (b.stockId ?? "").trim();
+    if (!stockId) return void res.status(400).json({ error: "stockId required" });
+    const notes = b.notes?.trim() || null;
+    await db
+      .insert(eoDispositionTable)
+      .values({ stockId, notes, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: eoDispositionTable.stockId, set: { notes, updatedAt: new Date() } });
+    res.json({ stockId, saved: true });
+  }),
+);
+
+/** On-hand rolls for a stock — the physical roll tag numbers on the floor. */
+router.get(
+  "/demand/stocks/:stockId/rolls",
+  asyncHandler(async (req, res) => {
+    const stockId = String(req.params["stockId"]);
+    const rolls = await db
+      .select()
+      .from(ltRollTable)
+      .where(and(eq(ltRollTable.stockId, stockId), eq(ltRollTable.used, false)));
+    res.json({
+      rolls: rolls
+        .sort((a, b) => (a.stockDate ?? "").localeCompare(b.stockDate ?? ""))
+        .map((r) => ({
+          rollId: r.rollId,
+          footage: Math.round(r.length ?? 0),
+          width: r.width,
+          poNumber: r.poNumber,
+          receivedIso: r.stockDate,
+          location: r.location,
+        })),
+    });
   }),
 );
 
