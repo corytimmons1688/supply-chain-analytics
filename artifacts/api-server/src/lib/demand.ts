@@ -2,7 +2,7 @@ import { runGatewaySql, pickString, pickNumber, type GatewayRow } from "./gatewa
 import { logger } from "./logger";
 import { ltGet, ltMapConcurrent, ltDate } from "./ltApi";
 import { bucketRange, eachBucket, type Bucket } from "./cc";
-import { db, ltRollTable, ltStockTable, ltTicketTable, ltPoTable } from "@workspace/db";
+import { db, ltRollTable, ltStockTable, ltTicketTable, ltPoTable, materialPoTable } from "@workspace/db";
 import { and, eq, gte, lte, isNull, isNotNull, inArray, sql as dsql } from "drizzle-orm";
 
 // ---------- Date helpers ----------
@@ -817,8 +817,15 @@ export interface OpenPoRow {
   poNumber: string;
   stockId: string;
   poDateIso: string | null;
-  /** Vendor-promised delivery (LT `dueDate`). */
+  /** Vendor-promised delivery as Label Traxx records it (LT `dueDate`). */
   dueDateIso: string | null;
+  /**
+   * Promised date the follow-up agent captured from the vendor's own email.
+   * Vendors commit by email long before (or instead of) anyone types the date
+   * into LT, so availability must treat this as a confirmation too — otherwise
+   * a PO the vendor has confirmed still reads "Ordered Not Confirmed".
+   */
+  agentPromisedIso: string | null;
   /** What Calyx asked for (ODBC RequestedDeliveryDate) — usually earlier than promised. */
   requestedDeliveryIso: string | null;
   quantityRolls: number;
@@ -833,6 +840,12 @@ export interface OpenPoRow {
   notes: string | null;
   description: string | null;
   daysOpen: number | null;
+  /**
+   * LT supplier on the PO. Authoritative for "is this a make-and-hold order?"
+   * — Dazpak's own feed omits some of their POs (308/318), so the vendor on
+   * the LT record is the only reliable signal.
+   */
+  supplierName: string | null;
 }
 
 /** Ordered MSI + master width → exact footage. Returns 0 when not derivable. */
@@ -863,6 +876,18 @@ export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
       ),
     );
   const today = todayIso();
+  // Dates the follow-up agent captured from vendor email, keyed by LT PO
+  // number — folded in below so a vendor's emailed commitment counts as a
+  // confirmation even when nobody has typed it into Label Traxx.
+  const agentPromised = new Map<string, string>();
+  for (const t of await db
+    .select({ lt: materialPoTable.ltPoNumbers, promised: materialPoTable.promisedDate })
+    .from(materialPoTable)) {
+    if (!t.promised) continue;
+    for (const n of (t.lt ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      agentPromised.set(n, t.promised);
+    }
+  }
   const out: OpenPoRow[] = [];
   for (const row of rows) {
     if (!row.stockNum) continue;
@@ -873,10 +898,12 @@ export async function fetchOpenPos(sinceIso?: string): Promise<OpenPoRow[]> {
       stockId: row.stockNum,
       poDateIso: row.poDate,
       dueDateIso: row.dueDate,
+      agentPromisedIso: agentPromised.get(row.poNumber) ?? null,
       requestedDeliveryIso: row.requestedDeliveryDate ?? null,
       quantityRolls,
       masterWidth: row.masterWidth ?? null,
       orderedFootage: Math.round(poFootageFromMsi(row.orderedMsi ?? null, row.masterWidth ?? null)),
+      supplierName: row.supplierName ?? null,
       notes: row.notes ?? null,
       description: row.description,
       daysOpen: row.poDate ? diffDays(row.poDate, today) : null,

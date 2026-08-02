@@ -828,6 +828,12 @@ export const GetDemandPurchasingResponse = zod.object({
                 .describe(
                   "Days past our requested date the vendor committed to.",
                 ),
+              supplierName: zod
+                .string()
+                .nullish()
+                .describe(
+                  "LT supplier on the PO — authoritative for identifying make-and-hold (Dazpak) orders.",
+                ),
               masterWidth: zod.number().optional(),
               rolls: zod.number().describe("Master rolls ordered."),
               totalFootage: zod

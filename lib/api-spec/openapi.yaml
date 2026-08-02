@@ -2117,6 +2117,7 @@ components:
         promisedFromAgent: { type: boolean, description: "True when the promise came from the agent's email capture rather than Label Traxx." }
         extendedLeadTime: { type: boolean, description: "Vendor confirmed a date after the delivery we requested — accepted as an extended lead time." }
         extendedLeadTimeDays: { type: number, nullable: true, description: "Days past our requested date the vendor committed to." }
+        supplierName: { type: string, nullable: true, description: "LT supplier on the PO — authoritative for identifying make-and-hold (Dazpak) orders." }
         masterWidth: { type: number }
         rolls: { type: number, description: "Master rolls ordered." }
         totalFootage: { type: number, description: "Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable." }

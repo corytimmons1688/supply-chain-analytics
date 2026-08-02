@@ -215,11 +215,16 @@ router.get(
             poNumber: (po.ltPoNumbers ?? "").split(",")[0]?.trim() || `DASH-${po.id.slice(0, 6).toUpperCase()}`,
             stockId: l.stockId,
             poDateIso: po.createdAt.toISOString().slice(0, 10),
-            dueDateIso: null, // nothing promised yet → unconfirmed supply
+            dueDateIso: null, // nothing in LT yet → unconfirmed there
+            // …but the vendor may already have committed by email.
+            agentPromisedIso: po.promisedDate,
             requestedDeliveryIso: po.requestedDeliveryDate,
             quantityRolls: l.rolls,
             masterWidth: l.width ?? stockInfo.get(l.stockId)?.masterWidth ?? null,
             orderedFootage: l.footage ?? 0,
+            // Dashboard-submitted PO not yet mirrored from LT — the vendor we
+            // sent it to is the supplier.
+            supplierName: po.vendorName,
             notes: po.notes,
             description: l.description,
             daysOpen: null,
@@ -246,7 +251,11 @@ router.get(
         openPos: (openPosByStock.get(stockId) ?? []).map((p) => ({
           masterWidth: p.masterWidth,
           quantityRolls: p.quantityRolls,
-          dueDateIso: p.dueDateIso,
+          // A vendor commitment by email counts as confirmed supply, even when
+
+          // Label Traxx has no dueDate typed in yet.
+
+          dueDateIso: p.dueDateIso ?? p.agentPromisedIso,
           orderedFootage: p.orderedFootage,
         })),
         lines: lines.map((l) => ({
@@ -707,7 +716,11 @@ router.get(
         openPos: (posListByStock.get(stockId) ?? []).map((p) => ({
           masterWidth: p.masterWidth,
           quantityRolls: p.quantityRolls,
-          dueDateIso: p.dueDateIso,
+          // A vendor commitment by email counts as confirmed supply, even when
+
+          // Label Traxx has no dueDate typed in yet.
+
+          dueDateIso: p.dueDateIso ?? p.agentPromisedIso,
           orderedFootage: p.orderedFootage,
         })),
         lines: agg.tickets.map((t) => ({
@@ -851,6 +864,7 @@ router.get(
                 promisedFromAgent: p.dueDateIso == null && agent?.promisedDate != null,
                 extendedLeadTime: extLead != null || agent?.extendedLeadTimeDays != null,
                 extendedLeadTimeDays: extLead,
+                supplierName: p.supplierName,
                 masterWidth: p.masterWidth ?? 0,
                 rolls: p.quantityRolls,
                 totalFootage: p.orderedFootage,

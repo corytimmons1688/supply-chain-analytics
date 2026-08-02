@@ -1330,7 +1330,8 @@ type PoStatus =
   | "past_due"
   | "release_planned"
   | "held_at_vendor"
-  | "in_production_at_vendor";
+  | "in_production_at_vendor"
+  | "make_and_hold_unknown";
 
 const PO_STATUS_LABEL: Record<PoStatus, string> = {
   pending_confirmation: "Pending vendor confirmation",
@@ -1341,6 +1342,7 @@ const PO_STATUS_LABEL: Record<PoStatus, string> = {
   release_planned: "Release planned",
   held_at_vendor: "Held at vendor",
   in_production_at_vendor: "In production at vendor",
+  make_and_hold_unknown: "Make & hold · status unknown",
 };
 
 const PO_STATUS_CLASS: Record<PoStatus, string> = {
@@ -1352,6 +1354,7 @@ const PO_STATUS_CLASS: Record<PoStatus, string> = {
   release_planned: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40",
   held_at_vendor: "bg-muted text-muted-foreground border-border",
   in_production_at_vendor: "bg-muted text-muted-foreground border-border",
+  make_and_hold_unknown: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/40",
 };
 
 function OpenPosTable({
@@ -1399,7 +1402,10 @@ function OpenPosTable({
         const date = p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null;
         const promised = Boolean(p.promisedDeliveryDate);
         const hasTracking = parseNoteTracking(p.notes).some((s) => s.kind === "track");
-        // Is this PO part of the make-and-hold program at Dazpak?
+        // Make-and-hold is identified from the LT supplier, not Dazpak's feed:
+        // their feed omits some of their own POs (stocks 308/318), so a
+        // feed-only check would show those as ordinary inbound orders.
+        const isMakeAndHold = /dazpak/i.test(p.supplierName ?? "");
         const dzLine = (dz?.lines ?? []).find((l) => l.poNumber === p.poNumber);
         const releasePlanned = (dz?.releaseFootage ?? 0) > 0;
 
@@ -1407,7 +1413,16 @@ function OpenPosTable({
         let statusNote: string | null = null;
         let atVendor = false;
 
-        if (dzLine && (dzLine.madeFootage > 0 || dzLine.outstandingFootage > 0)) {
+        if (isMakeAndHold && !dzLine) {
+          // Known make-and-hold, but Dazpak's feed doesn't report this PO — so
+          // we can't say whether the rolls are made or still in production.
+          // Kept visible (hiding unverified material is worse than labelling
+          // it) but never presented as a confirmed delivery.
+          status = releasePlanned ? "release_planned" : "make_and_hold_unknown";
+          statusNote = releasePlanned
+            ? `Release planned for this stock — confirm with Dazpak which order it comes from`
+            : `Make-and-hold order, but Dazpak's report doesn't cover it — ask them whether it's made or still running before planning around ${date ?? "this PO"}`;
+        } else if (dzLine && (dzLine.madeFootage > 0 || dzLine.outstandingFootage > 0)) {
           // Rolls already made and parked in Dazpak's warehouse aren't inbound
           // until someone calls them in — those hide until a release is
           // planned. Rolls still in production have a real ETA, so they stay
@@ -1419,7 +1434,10 @@ function OpenPosTable({
             statusNote = `${fmt(dz?.releaseFootage ?? 0)} ft to call in from ${fmt(dzLine.madeFootage)} ft held`;
           } else if (holding) {
             status = "held_at_vendor";
-            statusNote = `${fmt(dzLine.madeFootage)} ft made & waiting at Dazpak — no release needed yet`;
+            statusNote =
+              `${fmt(dzLine.madeFootage)} ft made & waiting at Dazpak — no release needed yet` +
+              // A single PO can be part-made, part-still-running.
+              (dzLine.outstandingFootage > 0 ? `; ${fmt(dzLine.outstandingFootage)} ft still in production` : "");
           } else {
             status = "in_production_at_vendor";
             statusNote = `${fmt(dzLine.outstandingFootage)} ft in production${dzLine.planAvailDate ? ` · available ${dzLine.planAvailDate}` : ""}`;
@@ -1472,8 +1490,9 @@ function OpenPosTable({
       in_transit: 3,
       extended: 4,
       confirmed: 5,
-      in_production_at_vendor: 6,
-      held_at_vendor: 7,
+      make_and_hold_unknown: 6,
+      in_production_at_vendor: 7,
+      held_at_vendor: 8,
     };
     return out.sort(
       (a, b) => rank[a.status] - rank[b.status] || (a.date ?? "9999").localeCompare(b.date ?? "9999"),

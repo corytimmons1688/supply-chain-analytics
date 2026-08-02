@@ -22,6 +22,8 @@ export interface StockOpenPo {
   extendedLeadTime?: boolean;
   /** Days past our requested date the vendor committed to. */
   extendedLeadTimeDays?: number | null;
+  /** LT supplier on the PO — authoritative for identifying make-and-hold (Dazpak) orders. */
+  supplierName?: string | null;
   masterWidth?: number;
   /** Master rolls ordered. */
   rolls: number;
