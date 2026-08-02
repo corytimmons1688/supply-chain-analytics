@@ -38,7 +38,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TicketCompareSection, SuggestedPosTab, EmailTab, DemandConfigTab, MakeAndHoldSection } from "@/pages/demand-purchasing";
+import { TicketCompareSection, SuggestedPosTab, EmailTab, DemandConfigTab, VendorContactsTab, MakeAndHoldSection } from "@/pages/demand-purchasing";
 
 function fmtFt(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -393,9 +393,11 @@ export default function DemandPlanning() {
   >("all");
   // `?tab=` lets an external redirect land on the right tab — the Gmail OAuth
   // callback comes back to ?tab=email so the connect card is on screen.
-  const [tab, setTab] = React.useState<"demand" | "pos" | "email" | "config">(() => {
+  const [tab, setTab] = React.useState<"demand" | "pos" | "email" | "config" | "vendors">(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
-    return requested === "pos" || requested === "email" || requested === "config" ? requested : "demand";
+    return requested === "pos" || requested === "email" || requested === "config" || requested === "vendors"
+      ? requested
+      : "demand";
   });
 
   const params: GetDemandSummaryParams = {
@@ -512,9 +514,10 @@ export default function DemandPlanning() {
         {(
           [
             ["demand", "Demand"],
-            ["pos", "Suggested POs"],
+            ["pos", "Material Control Tower"],
             ["email", "Email"],
             ["config", "Configuration"],
+            ["vendors", "Vendor PO Contacts"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -539,6 +542,7 @@ export default function DemandPlanning() {
       {tab === "pos" && <SuggestedPosTab rows={rows} />}
       {tab === "email" && <EmailTab />}
       {tab === "config" && <DemandConfigTab rows={rows} />}
+      {tab === "vendors" && <VendorContactsTab />}
 
       {tab === "demand" && (
         <>

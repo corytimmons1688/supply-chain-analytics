@@ -609,15 +609,31 @@ function parseEmails(raw: string | null | undefined): string[] {
 router.get(
   "/demand/purchasing",
   asyncHandler(async (_req, res) => {
-    const [stockInfo, tickets, goalRows, activeStockIds, widthsByStock, openPos] = await Promise.all([
+    const [stockInfo, tickets, goalRows, activeStockIds, widthsByStock, openPos, trackedPos] = await Promise.all([
       fetchStockInfo(),
       fetchOpenTickets(),
       db.select().from(stockGoalTable),
       fetchActiveStockIds(),
       fetchOnHandByWidth(),
       fetchOpenPos(),
+      db.select().from(materialPoTable),
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
+
+    // What the agent learned per LT PO number. A vendor's promise usually
+    // arrives by email (captured here) long before it lands on LT's dueDate,
+    // and the agent appends tracking references to its own notes — so the
+    // inbound view has to consult both sources or it shows stale dates.
+    const agentByLtPo = new Map<string, { promisedDate: string | null; notes: string | null }>();
+    for (const p of trackedPos) {
+      for (const n of (p.ltPoNumbers ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+        const prev = agentByLtPo.get(n);
+        agentByLtPo.set(n, {
+          promisedDate: p.promisedDate ?? prev?.promisedDate ?? null,
+          notes: [prev?.notes, p.notes].filter(Boolean).join("\n") || null,
+        });
+      }
+    }
 
     // Open POs grouped per stock (kept as full rows so we can bucket on-order by
     // the PO's master width for exact-width availability).
@@ -810,17 +826,23 @@ router.get(
                 b.requestedDeliveryIso ?? b.dueDateIso ?? "9999",
               ),
             )
-            .map((p) => ({
-              poNumber: p.poNumber,
-              poDate: p.poDateIso,
-              requestedDeliveryDate: p.requestedDeliveryIso,
-              promisedDeliveryDate: p.dueDateIso,
-              masterWidth: p.masterWidth ?? 0,
-              rolls: p.quantityRolls,
-              totalFootage: p.orderedFootage,
-              notes: p.notes,
-              daysOpen: p.daysOpen,
-            })),
+            .map((p) => {
+              const agent = agentByLtPo.get(p.poNumber);
+              return {
+                poNumber: p.poNumber,
+                poDate: p.poDateIso,
+                requestedDeliveryDate: p.requestedDeliveryIso,
+                // LT's dueDate first; otherwise the date the agent captured
+                // from the vendor's acknowledgement email.
+                promisedDeliveryDate: p.dueDateIso ?? agent?.promisedDate ?? null,
+                promisedFromAgent: p.dueDateIso == null && agent?.promisedDate != null,
+                masterWidth: p.masterWidth ?? 0,
+                rolls: p.quantityRolls,
+                totalFootage: p.orderedFootage,
+                notes: [p.notes, agent?.notes].filter(Boolean).join("\n") || null,
+                daysOpen: p.daysOpen,
+              };
+            }),
           tickets: (agg?.tickets ?? [])
             .sort((a, b) => (a.shipByDate ?? "9999").localeCompare(b.shipByDate ?? "9999"))
             .slice(0, 40)

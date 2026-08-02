@@ -65,7 +65,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -1314,6 +1314,142 @@ type SuggestionLine = {
   maxFootage: number;
 };
 
+/**
+ * Every open (unreceived) Stock PO across all materials, soonest arrival
+ * first. The date column shows the vendor's promised date when we have one and
+ * falls back to what Calyx requested (marked, so a promise is never implied).
+ * Tracking references are pulled out of the PO's notes and deep-linked to the
+ * carrier.
+ */
+function OpenPosTable({
+  rows: metricRows,
+  purch,
+}: {
+  rows: DemandStockMetrics[];
+  purch: { items: PurchasingItem[] } | undefined;
+}) {
+  // Descriptions live on the demand metrics, not the purchasing items.
+  const descByStock = React.useMemo(
+    () => new Map(metricRows.map((r) => [r.stockId, r.description ?? null])),
+    [metricRows],
+  );
+  const rows = React.useMemo(() => {
+    const out: {
+      key: string;
+      stockId: string;
+      description: string | null;
+      poNumber: string;
+      date: string | null;
+      dateIsPromised: boolean;
+      footage: number;
+      rolls: number;
+      width: number | null;
+      notes: string | null;
+    }[] = [];
+    for (const item of purch?.items ?? []) {
+      for (const p of item.openPos ?? []) {
+        out.push({
+          key: `${item.stockId}|${p.poNumber}`,
+          stockId: item.stockId,
+          description: descByStock.get(item.stockId) ?? null,
+          poNumber: p.poNumber,
+          date: p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null,
+          dateIsPromised: Boolean(p.promisedDeliveryDate),
+          footage: p.totalFootage ?? 0,
+          rolls: p.rolls ?? 0,
+          width: p.masterWidth ?? null,
+          notes: p.notes ?? null,
+        });
+      }
+    }
+    // Undated POs sort last — they're the ones with no commitment at all.
+    return out.sort((a, b) => (a.date ?? "9999").localeCompare(b.date ?? "9999"));
+  }, [purch, descByStock]);
+
+  if (rows.length === 0) return null;
+  const totalFt = rows.reduce((s, r) => s + r.footage, 0);
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Truck className="w-4 h-4 text-muted-foreground" /> Open POs
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          {rows.length} open purchase order{rows.length === 1 ? "" : "s"} · {fmt(totalFt)} ft inbound. Dates are the
+          vendor&apos;s promise where we have one; otherwise what we requested (shown as &ldquo;req&rdquo;). Past-due
+          dates are amber.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-md border overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40 text-muted-foreground">
+                <th className="text-left px-2 py-1.5 font-medium">Stock</th>
+                <th className="text-left px-2 py-1.5 font-medium">Description</th>
+                <th className="text-left px-2 py-1.5 font-medium">PO</th>
+                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Promised</th>
+                <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">On order</th>
+                <th className="text-left px-2 py-1.5 font-medium">Tracking</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const segs = parseNoteTracking(r.notes).filter((s) => s.kind === "track");
+                const late = r.date != null && r.date < today;
+                return (
+                  <tr key={r.key} className="border-b last:border-b-0 align-top">
+                    <td className="px-2 py-1.5 font-medium whitespace-nowrap">#{r.stockId}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground max-w-[22rem]">{r.description ?? "—"}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{r.poNumber}</td>
+                    <td className={cn("px-2 py-1.5 whitespace-nowrap", late && "text-amber-700 dark:text-amber-400 font-medium")}>
+                      {r.date ?? <span className="text-muted-foreground">—</span>}
+                      {r.date && !r.dateIsPromised && <span className="ml-1 text-[10px] text-muted-foreground">req</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                      {r.footage > 0 ? `${fmt(r.footage)} ft` : <span className="text-muted-foreground">—</span>}
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {r.rolls} roll{r.rolls === 1 ? "" : "s"}
+                        {r.width ? ` @${r.width}"` : ""}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {segs.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex flex-col gap-0.5">
+                          {segs.map((s, i) =>
+                            s.kind === "track" ? (
+                              <a
+                                key={`${r.key}-${i}`}
+                                href={s.url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                className="text-primary hover:underline inline-flex items-center gap-1 whitespace-nowrap"
+                                title={`Track with ${s.carrier}`}
+                              >
+                                {s.carrier} {s.number}
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            ) : null,
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function lineEstCost(l: SuggestionLine): number | null {
   // Cost at the width being ORDERED — a 30" roll is not priced like a 13" one.
   const w = l.width > 0 ? l.width : l.masterWidth;
@@ -1584,6 +1720,9 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           onSent={() => void queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() })}
         />
       )}
+
+      <AgentChatCard />
+
       {byVendor.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
@@ -1813,9 +1952,10 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
         })
       )}
 
+      <OpenPosTable rows={rows} purch={purch} />
+
       <CoveredByInboundCard rows={rows} purch={purch} />
 
-      <PoAgentQueueCard />
       {activityPo && <PoActivityDialog po={activityPo} onClose={() => setActivityPo(null)} />}
 
       {(poList?.items.length ?? 0) > 0 && (
@@ -2033,10 +2173,17 @@ function EditableCell({
 export function EmailTab() {
   return (
     <div className="space-y-4">
-      <AgentChatCard />
       <GmailCard />
       <PoAgentQueueCard />
       <AgentLessonsCard />
+    </div>
+  );
+}
+
+/** Vendor PO addressing + agent opt-in, on its own tab beside Configuration. */
+export function VendorContactsTab() {
+  return (
+    <div className="space-y-4">
       <VendorContactsCard />
     </div>
   );

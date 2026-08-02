@@ -504,8 +504,10 @@ export interface StockOpenPo {
   poDate?: string | null;
   /** Delivery Calyx asked for (ODBC RequestedDeliveryDate). */
   requestedDeliveryDate?: string | null;
-  /** Delivery the vendor promised (LT dueDate); usually later than requested. */
+  /** Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement. */
   promisedDeliveryDate?: string | null;
+  /** True when the promise came from the agent's email capture rather than Label Traxx. */
+  promisedFromAgent?: boolean;
   masterWidth?: number;
   /** Master rolls ordered. */
   rolls: number;

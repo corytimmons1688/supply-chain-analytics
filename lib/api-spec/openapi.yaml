@@ -2113,7 +2113,8 @@ components:
         poNumber: { type: string }
         poDate: { type: string, nullable: true }
         requestedDeliveryDate: { type: string, nullable: true, description: "Delivery Calyx asked for (ODBC RequestedDeliveryDate)." }
-        promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised (LT dueDate); usually later than requested." }
+        promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement." }
+        promisedFromAgent: { type: boolean, description: "True when the promise came from the agent's email capture rather than Label Traxx." }
         masterWidth: { type: number }
         rolls: { type: number, description: "Master rolls ordered." }
         totalFootage: { type: number, description: "Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable." }

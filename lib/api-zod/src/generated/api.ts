@@ -808,7 +808,13 @@ export const GetDemandPurchasingResponse = zod.object({
                 .string()
                 .nullish()
                 .describe(
-                  "Delivery the vendor promised (LT dueDate); usually later than requested.",
+                  "Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement.",
+                ),
+              promisedFromAgent: zod
+                .boolean()
+                .optional()
+                .describe(
+                  "True when the promise came from the agent's email capture rather than Label Traxx.",
                 ),
               masterWidth: zod.number().optional(),
               rolls: zod.number().describe("Master rolls ordered."),

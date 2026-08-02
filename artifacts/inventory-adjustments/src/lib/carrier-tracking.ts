@@ -95,6 +95,25 @@ const NUM_AFTER_CARRIER = new RegExp(
 );
 
 /**
+ * The same reference written BEFORE the carrier — the format Calyx buyers
+ * actually use in LT notes ("636-494132 XPO Shipping 7/29"). Anchored to the
+ * end of the preceding text, same filler vocabulary, and tolerant of the
+ * dashes LTL PROs carry (636-494132). Dashes are stripped before the number
+ * goes into a tracking URL.
+ */
+const NUM_BEFORE_CARRIER = new RegExp(
+  "((?:1Z[0-9A-Z]{16})|(?:\\d[\\d-]{6,20}\\d))" +
+    "(?:[\\s:#,.]|PRO\\b|TRACKING\\b|TRACK\\b|BOL\\b|NO\\.?\\b|NUMBERS?\\b|NUM\\b)*$",
+  "i",
+);
+
+/** "7-29-2026" is a ship date, not a PRO — don't link it. */
+function looksLikeDate(s: string): boolean {
+  return /^\d{1,2}-\d{1,2}-(\d{2}|\d{4})$/.test(s);
+}
+const digitCount = (s: string): number => s.replace(/\D/g, "").length;
+
+/**
  * Split a note into plain text and linkable carrier-tracking segments.
  * Non-destructive: anything not recognized stays as text.
  */
@@ -110,11 +129,29 @@ export function parseNoteTracking(note: string | null | undefined): NoteSegment[
     while ((m = global.exec(text)) !== null) {
       const after = text.slice(m.index + m[0].length);
       const numMatch = NUM_AFTER_CARRIER.exec(after);
-      if (!numMatch || !numMatch[1]) continue;
-      const number = numMatch[1];
-      const start = m.index;
-      const end = m.index + m[0].length + numMatch[0].length;
-      hits.push({ start, end, carrier: c.label, number, url: c.trackUrl(number) });
+      if (numMatch?.[1]) {
+        const number = numMatch[1];
+        hits.push({
+          start: m.index,
+          end: m.index + m[0].length + numMatch[0].length,
+          carrier: c.label,
+          number,
+          url: c.trackUrl(number.replace(/-/g, "")),
+        });
+        continue;
+      }
+      // Buyers also write the PRO first: "636-494132 XPO Shipping 7/29".
+      const preMatch = NUM_BEFORE_CARRIER.exec(text.slice(0, m.index));
+      if (preMatch?.[1] && !looksLikeDate(preMatch[1]) && digitCount(preMatch[1]) >= 8) {
+        const number = preMatch[1];
+        hits.push({
+          start: m.index - preMatch[0].length,
+          end: m.index + m[0].length,
+          carrier: c.label,
+          number,
+          url: c.trackUrl(number.replace(/-/g, "")),
+        });
+      }
     }
   }
   // Bare UPS 1Z numbers not already covered by a carrier match.
