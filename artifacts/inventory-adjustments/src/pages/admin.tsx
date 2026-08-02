@@ -97,8 +97,9 @@ export default function AdminPage() {
         <CardHeader>
           <CardTitle className="text-base">Users</CardTitle>
           <CardDescription>
-            Anyone who registers and verifies their email can sign in; they appear here as a member after their first
-            visit. Block an account to shut off its API and dashboard access immediately.
+            @calyxcontainers.com accounts become active members automatically on their first visit. Any other email
+            domain lands here as Pending approval and stays locked out until you approve it. Block an account to shut
+            off its access immediately.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -122,6 +123,7 @@ export default function AdminPage() {
                 {users.map((u: AppUser) => {
                   const self = u.email === me?.email?.toLowerCase();
                   const blocked = u.status === "blocked";
+                  const pending = u.status === "pending";
                   return (
                     <TableRow key={u.email} className={blocked ? "opacity-60" : undefined}>
                       <TableCell>
@@ -151,6 +153,10 @@ export default function AdminPage() {
                       <TableCell>
                         {blocked ? (
                           <Badge variant="destructive">Blocked</Badge>
+                        ) : pending ? (
+                          <Badge variant="outline" className="text-amber-700 border-amber-300 dark:text-amber-400 dark:border-amber-900">
+                            Pending approval
+                          </Badge>
                         ) : (
                           <Badge variant="outline" className="text-green-700 border-green-300 dark:text-green-400 dark:border-green-900">
                             Active
@@ -160,16 +166,30 @@ export default function AdminPage() {
                       <TableCell className="hidden md:table-cell text-muted-foreground">{fmtDate(u.firstSeenAt)}</TableCell>
                       <TableCell className="hidden md:table-cell text-muted-foreground">{fmtDate(u.lastSeenAt)}</TableCell>
                       <TableCell className="text-right">
-                        {blocked ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={save.isPending}
-                            onClick={() => apply(u.email, { status: "active" })}
-                          >
-                            <CircleCheck className="w-3.5 h-3.5 mr-1.5" />
-                            Unblock
-                          </Button>
+                        {blocked || pending ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              variant={pending ? "default" : "outline"}
+                              disabled={save.isPending}
+                              onClick={() => apply(u.email, { status: "active" })}
+                            >
+                              <CircleCheck className="w-3.5 h-3.5 mr-1.5" />
+                              {pending ? "Approve" : "Unblock"}
+                            </Button>
+                            {pending ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-destructive hover:text-destructive"
+                                disabled={save.isPending}
+                                onClick={() => apply(u.email, { status: "blocked" })}
+                              >
+                                <Ban className="w-3.5 h-3.5 mr-1.5" />
+                                Deny
+                              </Button>
+                            ) : null}
+                          </div>
                         ) : (
                           <Button
                             size="sm"

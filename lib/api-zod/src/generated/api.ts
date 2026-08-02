@@ -1369,6 +1369,9 @@ export const GetMeResponse = zod.object({
   appRole: zod
     .string()
     .describe("This app's role for the user: member | admin."),
+  appStatus: zod
+    .string()
+    .describe("This app's access status: active | pending | blocked."),
 });
 
 /**
@@ -1380,7 +1383,7 @@ export const GetAppUsersResponse = zod.object({
       email: zod.string(),
       name: zod.string().nullish(),
       role: zod.string().describe("member | admin"),
-      status: zod.string().describe("active | blocked"),
+      status: zod.string().describe("active | pending | blocked"),
       firstSeenAt: zod.string(),
       lastSeenAt: zod.string(),
     }),

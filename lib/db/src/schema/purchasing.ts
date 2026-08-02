@@ -185,15 +185,16 @@ export type EoDispositionRow = typeof eoDispositionTable.$inferSelect;
  * App-level user registry. Identity (who you are) comes from the shared
  * Better Auth server; authorization (what you may do HERE) lives in this
  * table, per the auth spec ("identity only — NOT used for tenancy or
- * authorization data"). Rows are auto-provisioned as 'member' on a user's
- * first authenticated request; admins promote/demote/block from /admin.
+ * authorization data"). Rows are auto-provisioned on a user's first
+ * authenticated request — company-domain emails as active members, external
+ * domains as 'pending' — and admins approve/promote/demote/block from /admin.
  */
 export const appUserTable = pgTable("app_user", {
   /** Lowercased email — the identity key the auth server verifies. */
   email: text("email").primaryKey(),
   name: text("name"),
   role: text("role").notNull().default("member"), // member | admin
-  status: text("status").notNull().default("active"), // active | blocked
+  status: text("status").notNull().default("active"), // active | pending | blocked
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
 });

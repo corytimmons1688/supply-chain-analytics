@@ -11,4 +11,6 @@ export interface Me {
   name?: string | null;
   /** This app's role for the user: member | admin. */
   appRole: string;
+  /** This app's access status: active | pending | blocked. */
+  appStatus: string;
 }

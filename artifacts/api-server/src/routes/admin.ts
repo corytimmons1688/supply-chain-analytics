@@ -13,12 +13,21 @@ function authed(req: Request): AuthedUser | undefined {
   return (req as Request & { user?: AuthedUser }).user;
 }
 
-/** Who am I, as far as THIS app is concerned — drives the Admin nav link. */
+/**
+ * Who am I, as far as THIS app is concerned. Drives the Admin nav link, and —
+ * uniquely — answers even for pending/blocked accounts so the frontend can
+ * show them an "awaiting approval" screen instead of a wall of API errors.
+ */
 router.get(
   "/me",
   asyncHandler(async (req, res) => {
     const u = authed(req);
-    res.json({ email: u?.email ?? "", name: u?.name ?? "", appRole: u?.appRole ?? "member" });
+    res.json({
+      email: u?.email ?? "",
+      name: u?.name ?? "",
+      appRole: u?.appRole ?? "member",
+      appStatus: u?.appStatus ?? "pending",
+    });
   }),
 );
 
@@ -37,9 +46,10 @@ router.get(
   asyncHandler(async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const users = await db.select().from(appUserTable);
+    const statusRank = (s: string) => (s === "pending" ? 0 : 1);
     res.json({
       users: users
-        .sort((a, b) => a.email.localeCompare(b.email))
+        .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.email.localeCompare(b.email))
         .map((u) => ({
           email: u.email,
           name: u.name,

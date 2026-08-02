@@ -19,7 +19,8 @@ import VendorNetwork from "@/pages/vendor-network";
 import ExcessObsolete from "@/pages/excess-obsolete";
 import AdminPage from "@/pages/admin";
 import { LoginPage, RegisterPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from "@/pages/auth";
-import { authClient, getAuthToken, clearAuthToken } from "@/lib/auth-client";
+import { authClient, getAuthToken, clearAuthToken, signOutEverywhere } from "@/lib/auth-client";
+import { useGetMe } from "@workspace/api-client-react";
 
 // Every generated API call carries the Better Auth bearer token.
 setAuthTokenGetter(() => getAuthToken());
@@ -52,7 +53,42 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
   if (!session?.user) return <Redirect to="/login" />;
-  return <>{children}</>;
+  return <AccessGate>{children}</AccessGate>;
+}
+
+/**
+ * App-level access check on top of the identity check: /me is the one API a
+ * pending/blocked account may call, so a non-active status renders a friendly
+ * holding screen instead of every page erroring with 403s. If /me itself
+ * fails, render the app anyway — the server still enforces access.
+ */
+function AccessGate({ children }: { children: React.ReactNode }) {
+  const { data: me, isPending, isError } = useGetMe();
+  if (isPending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
+        Checking your session…
+      </div>
+    );
+  }
+  if (isError || !me || me.appStatus === "active") return <>{children}</>;
+  const blocked = me.appStatus === "blocked";
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-md text-center space-y-3">
+        <h1 className="text-lg font-semibold">{blocked ? "Access disabled" : "Awaiting approval"}</h1>
+        <p className="text-sm text-muted-foreground">
+          {blocked
+            ? "Your access to this dashboard has been disabled by an administrator."
+            : "Your account was created, but an administrator needs to approve it before you can use this dashboard. Check back once you've been approved."}
+        </p>
+        <p className="text-xs text-muted-foreground">Signed in as {me.email}</p>
+        <button type="button" className="text-sm text-primary underline underline-offset-4" onClick={() => void signOutEverywhere()}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Router() {

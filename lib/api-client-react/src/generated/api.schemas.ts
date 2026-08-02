@@ -762,6 +762,8 @@ export interface Me {
   name?: string | null;
   /** This app's role for the user: member | admin. */
   appRole: string;
+  /** This app's access status: active | pending | blocked. */
+  appStatus: string;
 }
 
 export interface AppUser {
@@ -769,7 +771,7 @@ export interface AppUser {
   name?: string | null;
   /** member | admin */
   role: string;
-  /** active | blocked */
+  /** active | pending | blocked */
   status: string;
   firstSeenAt: string;
   lastSeenAt: string;

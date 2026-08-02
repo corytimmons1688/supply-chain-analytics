@@ -2243,11 +2243,12 @@ components:
         createdAt: { type: string }
     Me:
       type: object
-      required: [email, appRole]
+      required: [email, appRole, appStatus]
       properties:
         email: { type: string }
         name: { type: string, nullable: true }
         appRole: { type: string, description: "This app's role for the user: member | admin." }
+        appStatus: { type: string, description: "This app's access status: active | pending | blocked." }
     AppUser:
       type: object
       required: [email, role, status, firstSeenAt, lastSeenAt]
@@ -2255,7 +2256,7 @@ components:
         email: { type: string }
         name: { type: string, nullable: true }
         role: { type: string, description: "member | admin" }
-        status: { type: string, description: "active | blocked" }
+        status: { type: string, description: "active | pending | blocked" }
         firstSeenAt: { type: string }
         lastSeenAt: { type: string }
     AppUsers:

@@ -84,38 +84,51 @@ export interface AuthedUser {
   role: string | null;
   /** THIS app's role, from the app_user registry: member | admin. */
   appRole: string;
+  /** THIS app's access status: active | pending | blocked. */
+  appStatus: string;
 }
 
 // Throttle lastSeenAt writes — the dashboard fires many parallel requests and
 // one row-touch per minute per user is plenty.
 const lastSeenWrites = new Map<string, number>();
 
+/** Email domains whose accounts become active members on first sign-in. */
+function autoApproveDomains(): string[] {
+  return (process.env["AUTO_APPROVE_EMAIL_DOMAINS"]?.trim() || "calyxcontainers.com")
+    .split(",")
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean);
+}
+
 /**
  * App-level access record for a verified identity. First sight of an email
- * auto-provisions a 'member' row (matching pre-registry behavior: any
- * verified packos.ai account may use the app); admins manage roles and can
- * block from /admin. Returns null when the user is blocked.
+ * auto-provisions a row: company domains (AUTO_APPROVE_EMAIL_DOMAINS, default
+ * calyxcontainers.com) start as active members; any other domain starts
+ * 'pending' and stays locked out until an admin approves it from /admin.
  */
-async function ensureAppUser(email: string, name: string): Promise<{ role: string } | null> {
+async function ensureAppUser(email: string, name: string): Promise<{ role: string; status: string }> {
   const key = email.toLowerCase();
   const [existing] = await db.select().from(appUserTable).where(eq(appUserTable.email, key)).limit(1);
   if (existing) {
-    if (existing.status === "blocked") return null;
-    const last = lastSeenWrites.get(key) ?? 0;
-    if (Date.now() - last > 60_000) {
-      lastSeenWrites.set(key, Date.now());
-      await db
-        .update(appUserTable)
-        .set({ lastSeenAt: new Date(), ...(name && !existing.name ? { name } : {}) })
-        .where(eq(appUserTable.email, key));
+    if (existing.status === "active") {
+      const last = lastSeenWrites.get(key) ?? 0;
+      if (Date.now() - last > 60_000) {
+        lastSeenWrites.set(key, Date.now());
+        await db
+          .update(appUserTable)
+          .set({ lastSeenAt: new Date(), ...(name && !existing.name ? { name } : {}) })
+          .where(eq(appUserTable.email, key));
+      }
     }
-    return { role: existing.role };
+    return { role: existing.role, status: existing.status };
   }
+  const domain = key.split("@")[1] ?? "";
+  const status = autoApproveDomains().includes(domain) ? "active" : "pending";
   await db
     .insert(appUserTable)
-    .values({ email: key, name: name || null })
+    .values({ email: key, name: name || null, status })
     .onConflictDoNothing();
-  return { role: "member" };
+  return { role: "member", status };
 }
 
 /**
@@ -142,9 +155,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       return;
     }
     const email = String(user["email"] ?? "");
-    const app = email ? await ensureAppUser(email, String(user["name"] ?? "")) : { role: "member" };
-    if (!app) {
-      res.status(403).json({ error: "Your access to this dashboard has been disabled by an administrator." });
+    const app = email
+      ? await ensureAppUser(email, String(user["name"] ?? ""))
+      : { role: "member", status: "pending" };
+    // Non-active accounts may still call /me — the frontend uses it to show
+    // the "awaiting approval" / "access disabled" screen. Everything else 403s.
+    if (app.status !== "active" && req.path !== "/me") {
+      res.status(403).json({
+        error:
+          app.status === "blocked"
+            ? "Your access to this dashboard has been disabled by an administrator."
+            : "Your account is awaiting administrator approval for this dashboard.",
+      });
       return;
     }
     (req as Request & { user?: AuthedUser }).user = {
@@ -153,6 +175,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       name: String(user["name"] ?? ""),
       role: typeof user["role"] === "string" ? user["role"] : null,
       appRole: app.role,
+      appStatus: app.status,
     };
     next();
   } catch (e) {

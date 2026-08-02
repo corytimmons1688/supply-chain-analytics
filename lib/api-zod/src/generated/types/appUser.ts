@@ -11,7 +11,7 @@ export interface AppUser {
   name?: string | null;
   /** member | admin */
   role: string;
-  /** active | blocked */
+  /** active | pending | blocked */
   status: string;
   firstSeenAt: string;
   lastSeenAt: string;
