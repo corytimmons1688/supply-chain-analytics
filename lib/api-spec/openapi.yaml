@@ -2951,7 +2951,7 @@ components:
       description: Dazpak make-and-hold supply + release/make signals (only on program stocks).
       required: [heldFootage, inProductionFootage, releaseFootage, makeFootage]
       properties:
-        heldFootage: { type: number, description: "Made & waiting at Dazpak — releasable in ~5 business days." }
+        heldFootage: { type: number, description: "Made & holding at Dazpak (produced against an unreceived PO, plus explicit Held rows) — releasable in ~5 business days." }
         inProductionFootage: { type: number, description: "Authorised (in production), arriving by etaDate." }
         etaDate: { type: string, nullable: true, description: "Earliest Plan Avail date across in-production lines." }
         demandReleaseHorizon: { type: number, description: "Committed footage due within the release window (~15 biz days)." }
@@ -2962,12 +2962,13 @@ components:
           type: array
           items:
             type: object
-            required: [poNumber, status, outstandingFootage]
+            required: [poNumber, status, outstandingFootage, madeFootage]
             properties:
               poNumber: { type: string }
               custItemRef: { type: string, nullable: true }
               status: { type: string }
               outstandingFootage: { type: number }
+              madeFootage: { type: number, description: "Footage this run has produced into Dazpak's warehouse (holding until release)." }
               planAvailDate: { type: string, nullable: true }
     DemandSummary:
       type: object

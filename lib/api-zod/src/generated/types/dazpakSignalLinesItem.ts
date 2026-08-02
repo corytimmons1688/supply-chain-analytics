@@ -11,5 +11,7 @@ export type DazpakSignalLinesItem = {
   custItemRef?: string | null;
   status: string;
   outstandingFootage: number;
+  /** Footage this run has produced into Dazpak's warehouse (holding until release). */
+  madeFootage: number;
   planAvailDate?: string | null;
 };

@@ -11,7 +11,7 @@ import type { DazpakSignalLinesItem } from "./dazpakSignalLinesItem";
  * Dazpak make-and-hold supply + release/make signals (only on program stocks).
  */
 export interface DazpakSignal {
-  /** Made & waiting at Dazpak — releasable in ~5 business days. */
+  /** Made & holding at Dazpak (produced against an unreceived PO, plus explicit Held rows) — releasable in ~5 business days. */
   heldFootage: number;
   /** Authorised (in production), arriving by etaDate. */
   inProductionFootage: number;

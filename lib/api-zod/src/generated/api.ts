@@ -1726,7 +1726,7 @@ export const GetDemandSummaryResponse = zod.object({
           heldFootage: zod
             .number()
             .describe(
-              "Made & waiting at Dazpak — releasable in ~5 business days.",
+              "Made & holding at Dazpak (produced against an unreceived PO, plus explicit Held rows) — releasable in ~5 business days.",
             ),
           inProductionFootage: zod
             .number()
@@ -1758,6 +1758,11 @@ export const GetDemandSummaryResponse = zod.object({
                 custItemRef: zod.string().nullish(),
                 status: zod.string(),
                 outstandingFootage: zod.number(),
+                madeFootage: zod
+                  .number()
+                  .describe(
+                    "Footage this run has produced into Dazpak's warehouse (holding until release).",
+                  ),
                 planAvailDate: zod.string().nullish(),
               }),
             )
@@ -2038,7 +2043,7 @@ export const GetDemandStockDetailResponse = zod.object({
         heldFootage: zod
           .number()
           .describe(
-            "Made & waiting at Dazpak — releasable in ~5 business days.",
+            "Made & holding at Dazpak (produced against an unreceived PO, plus explicit Held rows) — releasable in ~5 business days.",
           ),
         inProductionFootage: zod
           .number()
@@ -2070,6 +2075,11 @@ export const GetDemandStockDetailResponse = zod.object({
               custItemRef: zod.string().nullish(),
               status: zod.string(),
               outstandingFootage: zod.number(),
+              madeFootage: zod
+                .number()
+                .describe(
+                  "Footage this run has produced into Dazpak's warehouse (holding until release).",
+                ),
               planAvailDate: zod.string().nullish(),
             }),
           )

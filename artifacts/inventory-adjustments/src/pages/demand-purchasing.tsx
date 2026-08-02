@@ -428,8 +428,10 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
                         <div className="mt-1 space-y-0.5">
                           {(d.lines ?? []).map((l, i) => (
                             <div key={`${l.poNumber}-${i}`} className="text-[10px] text-muted-foreground">
-                              PO {l.poNumber} · {l.status} · {fmt(l.outstandingFootage)} ft
-                              {l.planAvailDate ? ` · ETA ${l.planAvailDate}` : ""}
+                              PO {l.poNumber} · {l.status}
+                              {l.madeFootage > 0 ? ` · ${fmt(l.madeFootage)} ft made & holding` : ""}
+                              {l.outstandingFootage > 0 ? ` · ${fmt(l.outstandingFootage)} ft in production` : ""}
+                              {l.planAvailDate && l.outstandingFootage > 0 ? ` · ETA ${l.planAvailDate}` : ""}
                               {l.custItemRef ? ` · ${l.custItemRef}` : ""}
                             </div>
                           ))}

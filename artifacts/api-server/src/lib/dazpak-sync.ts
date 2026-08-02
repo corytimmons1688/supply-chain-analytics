@@ -62,12 +62,14 @@ export interface DazpakLine {
   custItemRef: string | null;
   status: string; // Held | Authorised | Complete | ...
   outstandingFootage: number;
+  /** Footage this run has produced into Dazpak's warehouse (their "Recd"). */
+  madeFootage: number;
   planAvailDate: string | null;
 }
 export interface DazpakStockSupply {
-  /** Made & waiting at Dazpak — releasable (~5 business days). */
+  /** Made & holding at Dazpak — releasable (~5 business days). */
   heldFootage: number;
-  /** In production (Authorised) — arrives by the earliest Plan Avail Date. */
+  /** Still in production — arrives by the earliest Plan Avail Date. */
   inProductionFootage: number;
   /** Earliest Plan Avail ETA across in-production lines. */
   etaDate: string | null;
@@ -77,7 +79,14 @@ export interface DazpakStockSupply {
 /**
  * Dazpak make-and-hold supply per Calyx stock, joined by
  * dazpak_job.custPo → lt_po.po_number (supplier "Dazpak") → lt_po.stock_num.
- * Only outstanding (not-yet-received) footage counts; Complete lines drop out.
+ *
+ * QUANTITY SEMANTICS (proven against POs 2387/2556/2535 on 2026-08-02):
+ * Dazpak's "Recd" is footage produced INTO THEIR warehouse, not footage we
+ * received — a job with recd>0 on an LT PO we have NOT yet received is the
+ * made-and-hold inventory sitting at Dazpak. Their "Held" status is rarely
+ * used (roll jobs stay "Authorised" through production and holding), so
+ * held = produced-on-unreceived-POs + explicit Held rows. Rows on POs LT has
+ * received (receivedDate set or closed) are delivered — excluded entirely.
  */
 export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSupply>> {
   const rows = await db
@@ -87,7 +96,10 @@ export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSuppl
       custItemRef: dazpakJobTable.custItemRef,
       status: dazpakJobTable.orderStatus,
       outst: dazpakJobTable.jobOutstQty,
+      made: dazpakJobTable.jobRecdQty,
       planAvail: dazpakJobTable.planAvailDate,
+      ltClosed: ltPoTable.closed,
+      ltReceivedDate: ltPoTable.receivedDate,
     })
     .from(dazpakJobTable)
     .innerJoin(
@@ -98,17 +110,20 @@ export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSuppl
   const out = new Map<string, DazpakStockSupply>();
   for (const r of rows) {
     const stockId = r.stockNum;
+    if (!stockId) continue;
+    if (r.ltClosed === true || r.ltReceivedDate != null) continue; // delivered to Calyx
     const outst = r.outst ?? 0;
-    if (!stockId || outst <= 0) continue; // Complete / delivered lines have 0 outstanding
+    const made = r.made ?? 0;
+    if (outst <= 0 && made <= 0) continue; // run not started, nothing produced
     const status = (r.status ?? "").trim();
     let entry = out.get(stockId);
     if (!entry) {
       entry = { heldFootage: 0, inProductionFootage: 0, etaDate: null, lines: [] };
       out.set(stockId, entry);
     }
-    if (status === "Held") entry.heldFootage += outst;
-    else entry.inProductionFootage += outst; // Authorised (and any other open state)
-    if (status !== "Held" && r.planAvail) {
+    entry.heldFootage += made + (status === "Held" ? outst : 0);
+    if (status !== "Held") entry.inProductionFootage += outst;
+    if (status !== "Held" && outst > 0 && r.planAvail) {
       if (!entry.etaDate || r.planAvail < entry.etaDate) entry.etaDate = r.planAvail;
     }
     entry.lines.push({
@@ -116,6 +131,7 @@ export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSuppl
       custItemRef: r.custItemRef,
       status: status || "Unknown",
       outstandingFootage: Math.round(outst),
+      madeFootage: Math.round(made),
       planAvailDate: r.planAvail,
     });
   }
