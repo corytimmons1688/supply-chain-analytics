@@ -18,4 +18,6 @@ export interface DemandConfigInput {
   discontinued?: boolean;
   /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
   demandFromStockId?: string | null;
+  /** Substitute stock numbers, comma/space separated. Null or empty clears. */
+  alternateStockIds?: string | null;
 }

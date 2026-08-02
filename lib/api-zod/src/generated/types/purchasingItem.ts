@@ -35,6 +35,8 @@ export interface PurchasingItem {
   orderQuantityRolls?: number | null;
   discontinued?: boolean;
   demandFromStockId?: string | null;
+  /** Comma-separated stock numbers that can substitute for this one on the floor. */
+  alternateStockIds?: string | null;
   openTicketFootage?: number;
   openTicketCount?: number;
   mfgSpecNum?: string | null;

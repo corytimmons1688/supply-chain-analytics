@@ -341,6 +341,10 @@ router.get(
         discontinued: goalRow?.discontinued ?? false,
         inactive: info ? info.inactive : true,
         demandFromStockId: predecessorId,
+        alternateStockIds: (goalRowByStock.get(stockId)?.alternateStockIds ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
         ...(vendorLeadTimeDays !== undefined ? { vendorLeadTimeDays } : {}),
         ...(goalRow?.orderQuantityRolls != null && goalRow.orderQuantityRolls > 0
           ? { orderQuantityRollsOverride: goalRow.orderQuantityRolls }
@@ -821,6 +825,7 @@ router.get(
           orderQuantityRolls: goal?.orderQuantityRolls ?? null,
           discontinued: goal?.discontinued ?? false,
           demandFromStockId: goal?.demandFromStockId ?? null,
+          alternateStockIds: goal?.alternateStockIds ?? null,
           openTicketFootage: agg ? Math.round(agg.requiredFootage) : 0,
           openTicketCount: agg?.ticketCount ?? 0,
           mfgSpecNum: info?.mfgSpecNum ?? null,
@@ -913,6 +918,15 @@ router.put(
     if ("demandFromStockId" in b) {
       const v = b["demandFromStockId"];
       patch.demandFromStockId = v == null || String(v).trim() === "" ? null : String(v).trim();
+    }
+    if ("alternateStockIds" in b) {
+      // Accept "296, 297" or "#296 297" — store a clean comma-separated list.
+      const raw = b["alternateStockIds"];
+      const ids = String(raw ?? "")
+        .split(/[,;\s]+/)
+        .map((s) => s.trim().replace(/^#/, ""))
+        .filter((s) => s.length > 0 && s !== stockId);
+      patch.alternateStockIds = ids.length ? [...new Set(ids)].join(",") : null;
     }
     if (Object.keys(patch).length === 0) {
       return void res.status(400).json({ error: "No config fields in body" });

@@ -565,6 +565,8 @@ export interface PurchasingItem {
   orderQuantityRolls?: number | null;
   discontinued?: boolean;
   demandFromStockId?: string | null;
+  /** Comma-separated stock numbers that can substitute for this one on the floor. */
+  alternateStockIds?: string | null;
   openTicketFootage?: number;
   openTicketCount?: number;
   mfgSpecNum?: string | null;
@@ -626,6 +628,8 @@ export interface DemandConfigInput {
   discontinued?: boolean;
   /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
   demandFromStockId?: string | null;
+  /** Substitute stock numbers, comma/space separated. Null or empty clears. */
+  alternateStockIds?: string | null;
 }
 
 export interface DemandConfigResult {
@@ -1129,6 +1133,8 @@ export interface StockGoal {
   orderQuantityRolls?: number | null;
   discontinued?: boolean;
   demandFromStockId?: string | null;
+  /** Comma-separated stock numbers that can substitute for this one on the floor. */
+  alternateStockIds?: string | null;
 }
 
 export type RootCauseItemStatus =
@@ -1520,6 +1526,8 @@ export interface DemandStockMetrics {
   inactive?: boolean;
   /** Predecessor stock whose demand history is merged into this SKU (null = none). */
   demandFromStockId: string | null;
+  /** Stocks that can be substituted for this one on the floor. Advisory only — supply and reorder math stay per-stock. */
+  alternateStockIds: string[];
   /** on-hand + on-order − open-ticket book: the uncommitted stock Min/Max compare against. */
   availableFootage: number;
   suggestedOrderFootage: number;

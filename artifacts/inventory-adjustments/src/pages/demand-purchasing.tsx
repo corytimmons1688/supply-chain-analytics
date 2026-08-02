@@ -1393,6 +1393,8 @@ function OpenPosTable({
       /** Sitting in the vendor's warehouse, not inbound to Calyx. */
       atVendor: boolean;
       onHandFootage: number;
+      /** Substitutes with material free right now — what to run while waiting. */
+      alternates: { stockId: string; description: string | null; availableFootage: number; onHandFootage: number }[];
     }[] = [];
     const nowIso = new Date().toISOString().slice(0, 10);
     for (const item of purch?.items ?? []) {
@@ -1478,6 +1480,20 @@ function OpenPosTable({
           statusNote,
           atVendor,
           onHandFootage: metrics?.onHandFootage ?? 0,
+          // Only substitutes with material genuinely free — an alternate whose
+          // own stock is fully committed is no help to production.
+          alternates: (metrics?.alternateStockIds ?? [])
+            .map((altId) => {
+              const alt = metricsByStock.get(altId);
+              return {
+                stockId: altId,
+                description: alt?.description ?? null,
+                availableFootage: alt?.availableFootage ?? 0,
+                onHandFootage: alt?.onHandFootage ?? 0,
+              };
+            })
+            .filter((a) => a.availableFootage > 0 || a.onHandFootage > 0)
+            .sort((a, b) => b.availableFootage - a.availableFootage),
         });
       }
     }
@@ -1542,6 +1558,12 @@ function OpenPosTable({
                 <th className="text-left px-2 py-1.5 font-medium">Status</th>
                 <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Expected</th>
                 <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">On order</th>
+                <th
+                  className="text-left px-2 py-1.5 font-medium whitespace-nowrap"
+                  title="Substitute stocks with material free now — run these instead of waiting. Set them per stock under Setup › Configuration."
+                >
+                  Can run instead
+                </th>
                 <th className="text-left px-2 py-1.5 font-medium">Tracking</th>
               </tr>
             </thead>
@@ -1584,6 +1606,39 @@ function OpenPosTable({
                         · {r.rolls} roll{r.rolls === 1 ? "" : "s"}
                         {r.width ? ` @${r.width}"` : ""}
                       </span>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {r.alternates.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex flex-col gap-0.5">
+                          {r.alternates.map((a) => (
+                            <div key={`${r.key}-alt-${a.stockId}`} className="whitespace-nowrap">
+                              <span className="font-medium">#{a.stockId}</span>{" "}
+                              <span
+                                className={cn(
+                                  "tabular-nums",
+                                  a.availableFootage > 0
+                                    ? "text-emerald-700 dark:text-emerald-400"
+                                    : "text-muted-foreground",
+                                )}
+                                title={
+                                  a.availableFootage > 0
+                                    ? `${fmt(a.availableFootage)} ft free after that stock's own commitments (${fmt(a.onHandFootage)} ft on hand)`
+                                    : `${fmt(a.onHandFootage)} ft on hand but all of it is committed to that stock's own tickets`
+                                }
+                              >
+                                {a.availableFootage > 0 ? `${fmt(a.availableFootage)} ft free` : "committed"}
+                              </span>
+                              {a.description && (
+                                <div className="text-[10px] text-muted-foreground max-w-[14rem] truncate">
+                                  {a.description}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-1.5">
                       {segs.length === 0 ? (
@@ -2628,6 +2683,9 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                 <th className="text-right px-2 py-1.5 font-medium">MSI cost ($)</th>
                 <th className="text-right px-2 py-1.5 font-medium">Width (in)</th>
                 <th className="text-left px-2 py-1.5 font-medium">Demand from #</th>
+                <th className="text-left px-2 py-1.5 font-medium" title="Stocks that can be run instead of this one. Shown to production on the Open POs report when they have material available.">
+                  Alternates #
+                </th>
                 <th className="text-center px-2 py-1.5 font-medium" title="End of life — keep on-hand visible but stop reordering">EOL</th>
               </tr>
             </thead>
@@ -2688,6 +2746,13 @@ export function DemandConfigTab({ rows }: { rows: DemandStockMetrics[] }) {
                         value={it.demandFromStockId ?? ""}
                         placeholder="—"
                         onSave={(v) => save(it.stockId, { demandFromStockId: v })}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <EditableCell
+                        value={it.alternateStockIds ?? ""}
+                        placeholder="—"
+                        onSave={(v) => save(it.stockId, { alternateStockIds: v })}
                       />
                     </td>
                     <td className="px-2 py-1.5 text-center">

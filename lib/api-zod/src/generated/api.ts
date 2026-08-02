@@ -359,6 +359,12 @@ export const GetGoalsResponse = zod.object({
       orderQuantityRolls: zod.number().nullish(),
       discontinued: zod.boolean().optional(),
       demandFromStockId: zod.string().nullish(),
+      alternateStockIds: zod
+        .string()
+        .nullish()
+        .describe(
+          "Comma-separated stock numbers that can substitute for this one on the floor.",
+        ),
     }),
   ),
 });
@@ -524,6 +530,12 @@ export const SetStockGoalResponse = zod.object({
   orderQuantityRolls: zod.number().nullish(),
   discontinued: zod.boolean().optional(),
   demandFromStockId: zod.string().nullish(),
+  alternateStockIds: zod
+    .string()
+    .nullish()
+    .describe(
+      "Comma-separated stock numbers that can substitute for this one on the floor.",
+    ),
 });
 
 export const DeleteStockGoalParams = zod.object({
@@ -749,6 +761,12 @@ export const GetDemandPurchasingResponse = zod.object({
       orderQuantityRolls: zod.number().nullish(),
       discontinued: zod.boolean().optional(),
       demandFromStockId: zod.string().nullish(),
+      alternateStockIds: zod
+        .string()
+        .nullish()
+        .describe(
+          "Comma-separated stock numbers that can substitute for this one on the floor.",
+        ),
       openTicketFootage: zod.number().optional(),
       openTicketCount: zod.number().optional(),
       mfgSpecNum: zod.string().nullish(),
@@ -912,6 +930,12 @@ export const UpdateDemandConfigBody = zod.object({
     .nullish()
     .describe(
       "Predecessor stock number whose usage history this SKU inherits. Null clears.",
+    ),
+  alternateStockIds: zod
+    .string()
+    .nullish()
+    .describe(
+      "Substitute stock numbers, comma\/space separated. Null or empty clears.",
     ),
 });
 
@@ -1750,6 +1774,11 @@ export const GetDemandSummaryResponse = zod.object({
         .describe(
           "Predecessor stock whose demand history is merged into this SKU (null = none).",
         ),
+      alternateStockIds: zod
+        .array(zod.string())
+        .describe(
+          "Stocks that can be substituted for this one on the floor. Advisory only — supply and reorder math stay per-stock.",
+        ),
       availableFootage: zod
         .number()
         .describe(
@@ -2088,6 +2117,11 @@ export const GetDemandStockDetailResponse = zod.object({
       .nullable()
       .describe(
         "Predecessor stock whose demand history is merged into this SKU (null = none).",
+      ),
+    alternateStockIds: zod
+      .array(zod.string())
+      .describe(
+        "Stocks that can be substituted for this one on the floor. Advisory only — supply and reorder math stay per-stock.",
       ),
     availableFootage: zod
       .number()

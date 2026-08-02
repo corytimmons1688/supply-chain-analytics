@@ -72,6 +72,11 @@ export const stockGoalTable = pgTable("stock_goal", {
   // Predecessor stock number whose usage history this (successor) SKU inherits
   // for forecasting / reorder. NULL = none. Full history is merged in.
   demandFromStockId: text("demand_from_stock_id"),
+  // Comma-separated stock numbers that can be substituted for this one on the
+  // floor (e.g. #195 can run on #296). Purely advisory: on-order supply stays
+  // attributed to the stock actually ordered — this only tells production what
+  // else they could pull while waiting for it.
+  alternateStockIds: text("alternate_stock_ids"),
   // Purchasing config (Demand Planning → Configuration). NULL = fall back to
   // the Label Traxx stock record (SupplierName / CostMSI).
   vendorName: text("vendor_name"),

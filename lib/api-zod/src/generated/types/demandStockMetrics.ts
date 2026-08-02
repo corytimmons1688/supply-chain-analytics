@@ -89,6 +89,8 @@ export interface DemandStockMetrics {
   inactive?: boolean;
   /** Predecessor stock whose demand history is merged into this SKU (null = none). */
   demandFromStockId: string | null;
+  /** Stocks that can be substituted for this one on the floor. Advisory only — supply and reorder math stay per-stock. */
+  alternateStockIds: string[];
   /** on-hand + on-order − open-ticket book: the uncommitted stock Min/Max compare against. */
   availableFootage: number;
   suggestedOrderFootage: number;

@@ -24,4 +24,6 @@ export interface StockGoal {
   orderQuantityRolls?: number | null;
   discontinued?: boolean;
   demandFromStockId?: string | null;
+  /** Comma-separated stock numbers that can substitute for this one on the floor. */
+  alternateStockIds?: string | null;
 }

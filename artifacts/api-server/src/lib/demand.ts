@@ -1055,6 +1055,7 @@ export interface StockMetricsInput {
   inactive?: boolean;
   /** Predecessor stock whose usage history is merged into this SKU (echoed for display). */
   demandFromStockId?: string | null;
+  alternateStockIds?: string[];
   /** Landed value per foot ($/ft = (msiCost + freightMsi) × 12 × width / 1000) — drives EOQ holding cost. */
   unitValuePerFoot?: number;
   /** Fixed cost to place one PO ($) — the EOQ ordering-cost term. */
@@ -1127,6 +1128,12 @@ export interface StockMetrics {
   inactive: boolean;
   /** Predecessor stock whose demand history is merged into this SKU (null = none). */
   demandFromStockId: string | null;
+  /**
+   * Stocks that can be substituted for this one on the floor. Advisory only —
+   * supply and reorder math stay per-stock; this tells production what else
+   * they could run while an order is outstanding.
+   */
+  alternateStockIds: string[];
   /** Committed footage required by open tickets that list this material. */
   openTicketFootage: number;
   /** Committed footage due within the lead-time horizon (drives the ROP). */
@@ -1489,6 +1496,7 @@ export function computeStockMetrics(input: StockMetricsInput): { metrics: StockM
       discontinued,
       inactive: ltInactive,
       demandFromStockId: input.demandFromStockId ?? null,
+      alternateStockIds: input.alternateStockIds ?? [],
       suggestedOrderFootage: Math.round(suggestedOrderFootage),
       suggestedOrderRolls,
       suggestedWidths: [],
