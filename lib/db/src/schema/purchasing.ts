@@ -182,6 +182,29 @@ export const eoDispositionTable = pgTable("eo_disposition", {
 export type EoDispositionRow = typeof eoDispositionTable.$inferSelect;
 
 /**
+ * Conversation with the PO agent — the buyer asks questions ("what's late?")
+ * and gives directions ("set 2595 to 8/12", "stop nudging Mactac"). Persisted
+ * so the thread survives reloads and the model keeps context between turns.
+ * toolLog records what the agent actually did, so every write is auditable.
+ */
+export const agentChatMessageTable = pgTable(
+  "agent_chat_message",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    /** Who is talking to the agent (lowercased email) — threads are per user. */
+    userEmail: text("user_email").notNull(),
+    role: text("role").notNull(), // user | assistant
+    content: text("content").notNull(),
+    /** [{ tool, input, result }] for the actions this turn took. */
+    toolLog: jsonb("tool_log"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("agent_chat_user_idx").on(t.userEmail, t.createdAt)],
+);
+
+export type AgentChatMessageRow = typeof agentChatMessageTable.$inferSelect;
+
+/**
  * App-level user registry. Identity (who you are) comes from the shared
  * Better Auth server; authorization (what you may do HERE) lives in this
  * table, per the auth spec ("identity only — NOT used for tenancy or

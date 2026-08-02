@@ -1372,6 +1372,61 @@ export const GetPoTimelineResponse = zod.object({
 });
 
 /**
+ * @summary Conversation history with the PO agent (per signed-in user)
+ */
+export const GetAgentChatResponse = zod.object({
+  configured: zod
+    .boolean()
+    .describe("False when ANTHROPIC_API_KEY is missing — chat is unavailable."),
+  messages: zod.array(
+    zod.object({
+      id: zod.string(),
+      role: zod.string().describe("user | assistant"),
+      content: zod.string(),
+      at: zod.string(),
+      toolCalls: zod
+        .array(
+          zod.object({
+            tool: zod
+              .string()
+              .describe("Tool the agent invoked, e.g. set_promised_date."),
+            result: zod.string().describe("What the tool reported back."),
+          }),
+        )
+        .optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Ask the agent a question or give it an instruction
+ */
+export const SendAgentChatBody = zod.object({
+  message: zod.string(),
+});
+
+export const SendAgentChatResponse = zod.object({
+  reply: zod.string(),
+  toolCalls: zod
+    .array(
+      zod.object({
+        tool: zod
+          .string()
+          .describe("Tool the agent invoked, e.g. set_promised_date."),
+        result: zod.string().describe("What the tool reported back."),
+      }),
+    )
+    .optional(),
+});
+
+/**
+ * @summary Clear this user's conversation with the agent
+ */
+export const ClearAgentChatResponse = zod.object({
+  cleared: zod.boolean(),
+});
+
+/**
  * @summary The signed-in user's app-level identity and role
  */
 export const GetMeResponse = zod.object({

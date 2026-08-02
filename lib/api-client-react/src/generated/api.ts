@@ -18,6 +18,10 @@ import type {
 
 import type {
   AdjustmentTotals,
+  AgentChat,
+  AgentChatCleared,
+  AgentChatInput,
+  AgentChatReply,
   AppUsers,
   ApproveDraftInput,
   ApprovePoAgentDraft200,
@@ -3510,6 +3514,248 @@ export function useGetPoTimeline<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Conversation history with the PO agent (per signed-in user)
+ */
+export const getGetAgentChatUrl = () => {
+  return `/api/demand/agent-chat`;
+};
+
+export const getAgentChat = async (
+  options?: RequestInit,
+): Promise<AgentChat> => {
+  return customFetch<AgentChat>(getGetAgentChatUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAgentChatQueryKey = () => {
+  return [`/api/demand/agent-chat`] as const;
+};
+
+export const getGetAgentChatQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentChat>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentChat>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAgentChatQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentChat>>> = ({
+    signal,
+  }) => getAgentChat({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentChat>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAgentChatQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentChat>>
+>;
+export type GetAgentChatQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Conversation history with the PO agent (per signed-in user)
+ */
+
+export function useGetAgentChat<
+  TData = Awaited<ReturnType<typeof getAgentChat>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentChat>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAgentChatQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Ask the agent a question or give it an instruction
+ */
+export const getSendAgentChatUrl = () => {
+  return `/api/demand/agent-chat`;
+};
+
+export const sendAgentChat = async (
+  agentChatInput: AgentChatInput,
+  options?: RequestInit,
+): Promise<AgentChatReply> => {
+  return customFetch<AgentChatReply>(getSendAgentChatUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(agentChatInput),
+  });
+};
+
+export const getSendAgentChatMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendAgentChat>>,
+    TError,
+    { data: BodyType<AgentChatInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendAgentChat>>,
+  TError,
+  { data: BodyType<AgentChatInput> },
+  TContext
+> => {
+  const mutationKey = ["sendAgentChat"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendAgentChat>>,
+    { data: BodyType<AgentChatInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return sendAgentChat(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendAgentChatMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendAgentChat>>
+>;
+export type SendAgentChatMutationBody = BodyType<AgentChatInput>;
+export type SendAgentChatMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Ask the agent a question or give it an instruction
+ */
+export const useSendAgentChat = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendAgentChat>>,
+    TError,
+    { data: BodyType<AgentChatInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendAgentChat>>,
+  TError,
+  { data: BodyType<AgentChatInput> },
+  TContext
+> => {
+  return useMutation(getSendAgentChatMutationOptions(options));
+};
+
+/**
+ * @summary Clear this user's conversation with the agent
+ */
+export const getClearAgentChatUrl = () => {
+  return `/api/demand/agent-chat`;
+};
+
+export const clearAgentChat = async (
+  options?: RequestInit,
+): Promise<AgentChatCleared> => {
+  return customFetch<AgentChatCleared>(getClearAgentChatUrl(), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getClearAgentChatMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof clearAgentChat>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof clearAgentChat>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["clearAgentChat"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof clearAgentChat>>,
+    void
+  > = () => {
+    return clearAgentChat(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ClearAgentChatMutationResult = NonNullable<
+  Awaited<ReturnType<typeof clearAgentChat>>
+>;
+
+export type ClearAgentChatMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Clear this user's conversation with the agent
+ */
+export const useClearAgentChat = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof clearAgentChat>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof clearAgentChat>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getClearAgentChatMutationOptions(options));
+};
 
 /**
  * @summary The signed-in user's app-level identity and role

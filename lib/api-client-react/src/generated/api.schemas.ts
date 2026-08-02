@@ -757,6 +757,41 @@ export interface AgentLesson {
   createdAt: string;
 }
 
+export interface AgentChatToolCall {
+  /** Tool the agent invoked, e.g. set_promised_date. */
+  tool: string;
+  /** What the tool reported back. */
+  result: string;
+}
+
+export interface AgentChatMessage {
+  id: string;
+  /** user | assistant */
+  role: string;
+  content: string;
+  at: string;
+  toolCalls?: AgentChatToolCall[];
+}
+
+export interface AgentChat {
+  /** False when ANTHROPIC_API_KEY is missing — chat is unavailable. */
+  configured: boolean;
+  messages: AgentChatMessage[];
+}
+
+export interface AgentChatInput {
+  message: string;
+}
+
+export interface AgentChatReply {
+  reply: string;
+  toolCalls?: AgentChatToolCall[];
+}
+
+export interface AgentChatCleared {
+  cleared: boolean;
+}
+
 export interface Me {
   email: string;
   name?: string | null;

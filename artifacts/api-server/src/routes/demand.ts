@@ -1991,6 +1991,56 @@ router.post(
   }),
 );
 
+/**
+ * Conversation with the agent. The thread is per signed-in user, so two
+ * buyers don't read each other's chat; the agent's tools act on shared data.
+ */
+function chatUserEmail(req: Request): string {
+  return ((req as Request & { user?: { email?: string } }).user?.email ?? "").toLowerCase();
+}
+
+router.get(
+  "/demand/agent-chat",
+  asyncHandler(async (req, res) => {
+    const { getChatHistory } = await import("../lib/agent-chat");
+    const rows = await getChatHistory(chatUserEmail(req));
+    res.json({
+      configured: Boolean(process.env["ANTHROPIC_API_KEY"]?.trim()),
+      messages: rows.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        toolCalls: (m.toolLog ?? []) as { tool: string; result: string }[],
+        at: m.createdAt.toISOString(),
+      })),
+    });
+  }),
+);
+
+router.post(
+  "/demand/agent-chat",
+  asyncHandler(async (req, res) => {
+    const message = ((req.body ?? {}) as { message?: string }).message?.trim();
+    if (!message) return void res.status(400).json({ error: "message required" });
+    const { chatWithAgent } = await import("../lib/agent-chat");
+    const r = await chatWithAgent(chatUserEmail(req), message);
+    if (!r.ok) return void res.status(502).json({ error: r.error ?? "Agent chat failed" });
+    res.json({
+      reply: r.reply,
+      toolCalls: r.toolCalls.map((t) => ({ tool: t.tool, result: t.result })),
+    });
+  }),
+);
+
+router.delete(
+  "/demand/agent-chat",
+  asyncHandler(async (req, res) => {
+    const { clearChatHistory } = await import("../lib/agent-chat");
+    await clearChatHistory(chatUserEmail(req));
+    res.json({ cleared: true });
+  }),
+);
+
 /** Remove a learned lesson the buyer no longer wants applied. */
 router.delete(
   "/demand/po-agent/lessons/:id",

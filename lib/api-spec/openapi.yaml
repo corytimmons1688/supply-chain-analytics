@@ -712,6 +712,42 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PoTimeline" }
+  /demand/agent-chat:
+    get:
+      operationId: getAgentChat
+      tags: [demand]
+      summary: Conversation history with the PO agent (per signed-in user)
+      responses:
+        "200":
+          description: History
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentChat" }
+    post:
+      operationId: sendAgentChat
+      tags: [demand]
+      summary: Ask the agent a question or give it an instruction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentChatInput" }
+      responses:
+        "200":
+          description: Agent reply
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentChatReply" }
+    delete:
+      operationId: clearAgentChat
+      tags: [demand]
+      summary: Clear this user's conversation with the agent
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentChatCleared" }
   /me:
     get:
       operationId: getMe
@@ -2241,6 +2277,49 @@ components:
         vendorName: { type: string, nullable: true, description: "Vendor the lesson applies to; null = all vendors." }
         lesson: { type: string }
         createdAt: { type: string }
+    AgentChatToolCall:
+      type: object
+      required: [tool, result]
+      properties:
+        tool: { type: string, description: "Tool the agent invoked, e.g. set_promised_date." }
+        result: { type: string, description: "What the tool reported back." }
+    AgentChatMessage:
+      type: object
+      required: [id, role, content, at]
+      properties:
+        id: { type: string }
+        role: { type: string, description: "user | assistant" }
+        content: { type: string }
+        at: { type: string }
+        toolCalls:
+          type: array
+          items: { $ref: "#/components/schemas/AgentChatToolCall" }
+    AgentChat:
+      type: object
+      required: [configured, messages]
+      properties:
+        configured: { type: boolean, description: "False when ANTHROPIC_API_KEY is missing — chat is unavailable." }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/AgentChatMessage" }
+    AgentChatInput:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    AgentChatReply:
+      type: object
+      required: [reply]
+      properties:
+        reply: { type: string }
+        toolCalls:
+          type: array
+          items: { $ref: "#/components/schemas/AgentChatToolCall" }
+    AgentChatCleared:
+      type: object
+      required: [cleared]
+      properties:
+        cleared: { type: boolean }
     Me:
       type: object
       required: [email, appRole, appStatus]

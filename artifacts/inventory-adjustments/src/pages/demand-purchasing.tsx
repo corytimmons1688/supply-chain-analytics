@@ -19,6 +19,10 @@ import {
   useSendMaterialPo,
   useSendMaterialPoTest,
   useGetPoAgentQueue,
+  useGetAgentChat,
+  useSendAgentChat,
+  useClearAgentChat,
+  getGetAgentChatQueryKey,
   getGetPoAgentQueueQueryKey,
   useApprovePoAgentDraft,
   useDismissPoAgentDraft,
@@ -61,7 +65,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -2029,11 +2033,194 @@ function EditableCell({
 export function EmailTab() {
   return (
     <div className="space-y-4">
+      <AgentChatCard />
       <GmailCard />
       <PoAgentQueueCard />
       <AgentLessonsCard />
       <VendorContactsCard />
     </div>
+  );
+}
+
+/**
+ * The model writes light markdown (**bold**, `code`). Render just those two
+ * inline — a full markdown pipeline is overkill for chat bubbles, and raw
+ * asterisks look broken.
+ */
+function ChatText({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.startsWith("**") && p.endsWith("**") ? (
+          <strong key={i}>{p.slice(2, -2)}</strong>
+        ) : p.startsWith("`") && p.endsWith("`") ? (
+          <code key={i} className="font-mono text-[11px]">
+            {p.slice(1, -1)}
+          </code>
+        ) : (
+          <React.Fragment key={i}>{p}</React.Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
+const CHAT_EXAMPLES = [
+  "Which POs are late or need attention?",
+  "What's the status of PO 2595?",
+  "Check for new vendor email now",
+  "Do we need to order stock 174?",
+];
+
+/**
+ * Conversation with the PO agent: questions plus instructions it can act on
+ * (set a promised date, resolve a flag, teach a convention, queue a reply).
+ * Outbound email stays behind the approval queue — the agent composes, the
+ * buyer releases. Every action it takes is shown under its reply.
+ */
+function AgentChatCard() {
+  const { data, isLoading } = useGetAgentChat({
+    query: { queryKey: getGetAgentChatQueryKey(), staleTime: 30_000 },
+  });
+  const send = useSendAgentChat();
+  const clear = useClearAgentChat();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [input, setInput] = React.useState("");
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const messages = data?.messages ?? [];
+
+  // Keep the newest message in view as the thread grows.
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, send.isPending]);
+
+  const submit = async (text: string) => {
+    const message = text.trim();
+    if (!message || send.isPending) return;
+    setInput("");
+    try {
+      await send.mutateAsync({ data: { message } });
+    } catch (e) {
+      const msg = (e as { data?: { error?: string } })?.data?.error ?? (e instanceof Error ? e.message : "Chat failed");
+      toast({ title: "The agent couldn't answer", description: msg, variant: "destructive" });
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: getGetAgentChatQueryKey() });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessagesSquare className="w-4 h-4 text-muted-foreground" /> Ask the agent
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Ask about any PO, vendor or stock — or tell it what to do (&ldquo;set 2595&apos;s promised date to
+              2026-08-12&rdquo;, &ldquo;stop nudging Mactac&rdquo;, &ldquo;draft a tracking request for 2602&rdquo;). It
+              can never send email on its own: replies it writes land in the approval queue below.
+            </p>
+          </div>
+          {messages.length > 0 && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+              disabled={clear.isPending}
+              onClick={async () => {
+                await clear.mutateAsync();
+                await queryClient.invalidateQueries({ queryKey: getGetAgentChatQueryKey() });
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {data && !data.configured && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            Chat is unavailable: ANTHROPIC_API_KEY isn&apos;t set on this deployment.
+          </div>
+        )}
+        <div ref={scrollRef} className="max-h-[22rem] overflow-y-auto rounded-md border p-3 space-y-3">
+          {isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : messages.length === 0 ? (
+            <div className="text-xs text-muted-foreground space-y-2 py-2">
+              <p>No conversation yet. Try one of these:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {CHAT_EXAMPLES.map((ex) => (
+                  <button
+                    key={ex}
+                    type="button"
+                    className="rounded-full border px-2.5 py-1 hover:bg-accent"
+                    onClick={() => void submit(ex)}
+                  >
+                    {ex}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((m) => (
+              <div key={m.id} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+                <div
+                  className={cn(
+                    "rounded-lg px-3 py-2 text-xs max-w-[85%] whitespace-pre-wrap break-words",
+                    m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
+                  )}
+                >
+                  <ChatText text={m.content} />
+                  {(m.toolCalls ?? []).length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-current/15 space-y-1">
+                      {(m.toolCalls ?? []).map((t, i) => (
+                        <div key={`${m.id}-${i}`} className="text-[10px] opacity-75">
+                          <span className="font-mono">{t.tool}</span> — {t.result.split("\n")[0]?.slice(0, 140)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+          {send.isPending && (
+            <div className="flex justify-start">
+              <div className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">Thinking…</div>
+            </div>
+          )}
+        </div>
+        <form
+          className="flex items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit(input);
+          }}
+        >
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void submit(input);
+              }
+            }}
+            placeholder="Ask a question or give an instruction…  (Enter to send, Shift+Enter for a new line)"
+            className="min-h-[2.5rem] max-h-32 text-xs"
+            rows={1}
+            disabled={send.isPending || data?.configured === false}
+          />
+          <Button type="submit" size="sm" disabled={!input.trim() || send.isPending || data?.configured === false}>
+            <Send className="w-3.5 h-3.5" />
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
