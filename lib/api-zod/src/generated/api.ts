@@ -1747,10 +1747,32 @@ export const GetDemandSummaryResponse = zod.object({
             .describe("Demand over the make-coverage window (10 weeks)."),
           releaseFootage: zod
             .number()
-            .describe("Suggested footage to release from Held now."),
+            .describe(
+              "Suggested footage to release from Held now (sum of width-level releases).",
+            ),
           makeFootage: zod
             .number()
             .describe("Suggested new make-and-hold quantity (footage)."),
+          widths: zod
+            .array(
+              zod.object({
+                label: zod
+                  .string()
+                  .describe('Display label, e.g. ≤13\" or 30\".'),
+                width: zod.number(),
+                pooled: zod.boolean(),
+                onHandFootage: zod.number(),
+                heldFootage: zod.number(),
+                inProductionFootage: zod.number(),
+                etaDate: zod.string().nullish(),
+                demandReleaseHorizon: zod.number(),
+                releaseFootage: zod.number(),
+              }),
+            )
+            .optional()
+            .describe(
+              "Per-width break-out — supply at a width only covers demand at that width.",
+            ),
           lines: zod
             .array(
               zod.object({
@@ -2064,10 +2086,32 @@ export const GetDemandStockDetailResponse = zod.object({
           .describe("Demand over the make-coverage window (10 weeks)."),
         releaseFootage: zod
           .number()
-          .describe("Suggested footage to release from Held now."),
+          .describe(
+            "Suggested footage to release from Held now (sum of width-level releases).",
+          ),
         makeFootage: zod
           .number()
           .describe("Suggested new make-and-hold quantity (footage)."),
+        widths: zod
+          .array(
+            zod.object({
+              label: zod
+                .string()
+                .describe('Display label, e.g. ≤13\" or 30\".'),
+              width: zod.number(),
+              pooled: zod.boolean(),
+              onHandFootage: zod.number(),
+              heldFootage: zod.number(),
+              inProductionFootage: zod.number(),
+              etaDate: zod.string().nullish(),
+              demandReleaseHorizon: zod.number(),
+              releaseFootage: zod.number(),
+            }),
+          )
+          .optional()
+          .describe(
+            "Per-width break-out — supply at a width only covers demand at that width.",
+          ),
         lines: zod
           .array(
             zod.object({

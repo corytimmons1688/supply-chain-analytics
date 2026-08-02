@@ -1351,6 +1351,19 @@ export const DemandStockMetricsActivityStatus = {
   never: "never",
 } as const;
 
+export type DazpakSignalWidthsItem = {
+  /** Display label, e.g. ≤13" or 30". */
+  label: string;
+  width: number;
+  pooled: boolean;
+  onHandFootage: number;
+  heldFootage: number;
+  inProductionFootage: number;
+  etaDate?: string | null;
+  demandReleaseHorizon: number;
+  releaseFootage: number;
+};
+
 export type DazpakSignalLinesItem = {
   poNumber: string;
   custItemRef?: string | null;
@@ -1375,10 +1388,12 @@ export interface DazpakSignal {
   demandReleaseHorizon?: number;
   /** Demand over the make-coverage window (10 weeks). */
   demandMakeHorizon?: number;
-  /** Suggested footage to release from Held now. */
+  /** Suggested footage to release from Held now (sum of width-level releases). */
   releaseFootage: number;
   /** Suggested new make-and-hold quantity (footage). */
   makeFootage: number;
+  /** Per-width break-out — supply at a width only covers demand at that width. */
+  widths?: DazpakSignalWidthsItem[];
   lines?: DazpakSignalLinesItem[];
 }
 

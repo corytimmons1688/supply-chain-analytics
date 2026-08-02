@@ -411,8 +411,10 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
             <tbody>
               {program.map((r) => {
                 const d = r.dazpak!;
+                const widths = (d.widths ?? []).length >= 2 ? d.widths! : [];
                 return (
-                  <tr key={r.stockId} className="border-b last:border-b-0 align-top">
+                  <React.Fragment key={r.stockId}>
+                  <tr className="border-b last:border-b-0 align-top">
                     <td className="px-2 py-1.5">
                       <button
                         type="button"
@@ -472,6 +474,40 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
                       )}
                     </td>
                   </tr>
+                  {/* Per-width break-out: supply at a width only covers demand at that width. */}
+                  {widths.map((w) => (
+                    <tr key={`${r.stockId}-${w.label}`} className="border-b last:border-b-0 bg-muted/20 text-[11px]">
+                      <td className="px-2 py-1 pl-6 text-muted-foreground">
+                        <span className="font-medium text-foreground">{w.label}</span>
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{fmt(w.onHandFootage)} ft</td>
+                      <td className="px-2 py-1 text-right tabular-nums">
+                        {w.heldFootage > 0 ? (
+                          <span className="text-green-700 dark:text-green-400">{fmt(w.heldFootage)} ft</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
+                        {w.inProductionFootage > 0 ? `${fmt(w.inProductionFootage)} ft` : "—"}
+                      </td>
+                      <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">{w.etaDate ?? "—"}</td>
+                      <td className="px-2 py-1 text-right">
+                        {w.releaseFootage > 0 ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40"
+                            title={`On-hand at ${w.label} won't cover ${fmt(w.demandReleaseHorizon)} ft due in the next 15 business days`}
+                          >
+                            Release {fmt(w.releaseFootage)} ft
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">covered</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  </React.Fragment>
                 );
               })}
             </tbody>

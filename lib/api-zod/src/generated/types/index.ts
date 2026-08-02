@@ -31,6 +31,7 @@ export * from "./cycleCountTaskAbcClass";
 export * from "./cycleCountWeek";
 export * from "./dazpakSignal";
 export * from "./dazpakSignalLinesItem";
+export * from "./dazpakSignalWidthsItem";
 export * from "./deleteAgentLesson200";
 export * from "./deleteMaterialPo200";
 export * from "./deleteMaterialPo409";

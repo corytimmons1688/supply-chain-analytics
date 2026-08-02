@@ -604,7 +604,7 @@ export function vendorLeadTimeMedians(poLeadTimes: Map<string, PoLeadTime>): Map
  * key for the same reason.
  */
 const POOL_MAX_WIDTH = 14;
-function widthGroupKey(w: number): string {
+export function widthGroupKey(w: number): string {
   const r = Math.round((w || 0) * 100) / 100;
   return r > 0 && r <= POOL_MAX_WIDTH ? "le13" : String(r);
 }
@@ -1133,19 +1133,33 @@ export interface StockMetrics {
 
 /** Dazpak make-and-hold supply + release/make signals for one stock. */
 export interface DazpakSignal {
-  heldFootage: number; // made & waiting, releasable ~5 biz days
-  inProductionFootage: number; // Authorised, arriving by etaDate
+  heldFootage: number; // made & holding at Dazpak, releasable ~5 biz days
+  inProductionFootage: number; // still producing, arriving by etaDate
   etaDate: string | null;
   demandReleaseHorizon: number; // committed footage due within the release window
   demandMakeHorizon: number; // demand over the make-coverage window
-  releaseFootage: number; // suggested release from Held now
+  releaseFootage: number; // suggested release from Held now (sum of width-level)
   makeFootage: number; // suggested new make-and-hold quantity
+  /** Per-width break-out — supply at a width only covers demand at that width. */
+  widths?: {
+    label: string; // e.g. ≤13" or 30"
+    width: number;
+    pooled: boolean;
+    onHandFootage: number;
+    heldFootage: number;
+    inProductionFootage: number;
+    etaDate: string | null;
+    demandReleaseHorizon: number;
+    releaseFootage: number;
+  }[];
   lines: {
     poNumber: string;
     custItemRef: string | null;
     status: string;
     outstandingFootage: number;
+    madeFootage: number;
     planAvailDate: string | null;
+    width: number | null;
   }[];
 }
 

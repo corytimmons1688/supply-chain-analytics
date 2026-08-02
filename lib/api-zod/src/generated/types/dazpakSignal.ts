@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DazpakSignalLinesItem } from "./dazpakSignalLinesItem";
+import type { DazpakSignalWidthsItem } from "./dazpakSignalWidthsItem";
 
 /**
  * Dazpak make-and-hold supply + release/make signals (only on program stocks).
@@ -21,9 +22,11 @@ export interface DazpakSignal {
   demandReleaseHorizon?: number;
   /** Demand over the make-coverage window (10 weeks). */
   demandMakeHorizon?: number;
-  /** Suggested footage to release from Held now. */
+  /** Suggested footage to release from Held now (sum of width-level releases). */
   releaseFootage: number;
   /** Suggested new make-and-hold quantity (footage). */
   makeFootage: number;
+  /** Per-width break-out — supply at a width only covers demand at that width. */
+  widths?: DazpakSignalWidthsItem[];
   lines?: DazpakSignalLinesItem[];
 }

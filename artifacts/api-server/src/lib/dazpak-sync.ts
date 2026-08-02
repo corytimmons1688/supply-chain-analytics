@@ -65,6 +65,16 @@ export interface DazpakLine {
   /** Footage this run has produced into Dazpak's warehouse (their "Recd"). */
   madeFootage: number;
   planAvailDate: string | null;
+  /** Master width of the LT PO (fallback: parsed from the item ref's -NN" suffix). */
+  width: number | null;
+}
+
+/** "288-30\"" → 30; "307-13\"" → 13; plain "288" → null. */
+function widthFromItemRef(ref: string | null): number | null {
+  const m = ref?.match(/-(\d+(?:\.\d+)?)"?\s*$/);
+  if (!m?.[1]) return null;
+  const w = Number(m[1]);
+  return Number.isFinite(w) && w > 0 ? w : null;
 }
 export interface DazpakStockSupply {
   /** Made & holding at Dazpak — releasable (~5 business days). */
@@ -100,6 +110,7 @@ export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSuppl
       planAvail: dazpakJobTable.planAvailDate,
       ltClosed: ltPoTable.closed,
       ltReceivedDate: ltPoTable.receivedDate,
+      ltMasterWidth: ltPoTable.masterWidth,
     })
     .from(dazpakJobTable)
     .innerJoin(
@@ -133,6 +144,7 @@ export async function fetchDazpakByStock(): Promise<Map<string, DazpakStockSuppl
       outstandingFootage: Math.round(outst),
       madeFootage: Math.round(made),
       planAvailDate: r.planAvail,
+      width: r.ltMasterWidth ?? widthFromItemRef(r.custItemRef),
     });
   }
   for (const entry of out.values()) {

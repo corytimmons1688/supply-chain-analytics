@@ -2956,8 +2956,24 @@ components:
         etaDate: { type: string, nullable: true, description: "Earliest Plan Avail date across in-production lines." }
         demandReleaseHorizon: { type: number, description: "Committed footage due within the release window (~15 biz days)." }
         demandMakeHorizon: { type: number, description: "Demand over the make-coverage window (10 weeks)." }
-        releaseFootage: { type: number, description: "Suggested footage to release from Held now." }
+        releaseFootage: { type: number, description: "Suggested footage to release from Held now (sum of width-level releases)." }
         makeFootage: { type: number, description: "Suggested new make-and-hold quantity (footage)." }
+        widths:
+          type: array
+          description: "Per-width break-out — supply at a width only covers demand at that width."
+          items:
+            type: object
+            required: [label, width, pooled, onHandFootage, heldFootage, inProductionFootage, demandReleaseHorizon, releaseFootage]
+            properties:
+              label: { type: string, description: "Display label, e.g. ≤13\" or 30\"." }
+              width: { type: number }
+              pooled: { type: boolean }
+              onHandFootage: { type: number }
+              heldFootage: { type: number }
+              inProductionFootage: { type: number }
+              etaDate: { type: string, nullable: true }
+              demandReleaseHorizon: { type: number }
+              releaseFootage: { type: number }
         lines:
           type: array
           items:

@@ -15,6 +15,7 @@ import {
   computeStockMetrics,
   vendorLeadTimeMedians,
   computeWidthAvailability,
+  widthGroupKey,
   bucketHistory,
   defaultDemandWindow,
   type RollUsageRow,
@@ -363,7 +364,71 @@ router.get(
           0,
         );
         const demandMake = Math.max(metrics.avgWeeklyDemand * 10, committedMake);
-        const releaseFootage = Math.min(Math.max(0, demandRelease - onHandFt), dz.heldFootage);
+
+        // Width break-out: supply at a width only covers demand at that width
+        // (same pooling as everywhere else — ≤14" is one bucket, labeled ≤13").
+        // Unspecified widths fall back to the stock's master-width bucket.
+        const bucketOf = (w: number | null | undefined) => widthGroupKey(w && w > 0 ? w : width);
+        type WBucket = {
+          rep: number;
+          pooled: boolean;
+          onHandFootage: number;
+          heldFootage: number;
+          inProductionFootage: number;
+          etaDate: string | null;
+          demandReleaseHorizon: number;
+          releaseFootage: number;
+        };
+        const wb = new Map<string, WBucket>();
+        const bucket = (k: string): WBucket => {
+          let b = wb.get(k);
+          if (!b) {
+            b = { rep: 0, pooled: k === "le13", onHandFootage: 0, heldFootage: 0, inProductionFootage: 0, etaDate: null, demandReleaseHorizon: 0, releaseFootage: 0 };
+            wb.set(k, b);
+          }
+          return b;
+        };
+        for (const w of onHandByWidth.get(stockId) ?? []) {
+          const b = bucket(widthGroupKey(w.width));
+          b.onHandFootage += w.footage;
+          if (w.width > b.rep) b.rep = w.width;
+        }
+        for (const l of dz.lines) {
+          const b = bucket(bucketOf(l.width));
+          b.heldFootage += l.madeFootage + (l.status === "Held" ? l.outstandingFootage : 0);
+          if (l.status !== "Held") b.inProductionFootage += l.outstandingFootage;
+          if (l.status !== "Held" && l.outstandingFootage > 0 && l.planAvailDate) {
+            if (!b.etaDate || l.planAvailDate < b.etaDate) b.etaDate = l.planAvailDate;
+          }
+          if ((l.width ?? 0) > b.rep) b.rep = l.width ?? 0;
+        }
+        for (const l of lines) {
+          if (!l.shipByDate || l.shipByDate > dazpakReleaseEnd) continue;
+          const b = bucket(bucketOf(l.requiredWidth));
+          b.demandReleaseHorizon += l.footage;
+          if (l.requiredWidth > b.rep) b.rep = l.requiredWidth;
+        }
+        for (const b of wb.values()) {
+          b.releaseFootage = Math.min(Math.max(0, b.demandReleaseHorizon - b.onHandFootage), b.heldFootage);
+        }
+        const dazpakWidths = [...wb.values()]
+          .filter((b) => b.heldFootage > 0 || b.inProductionFootage > 0 || b.demandReleaseHorizon > 0)
+          .sort((a, b) => a.rep - b.rep)
+          .map((b) => ({
+            label: b.pooled ? `≤13"` : `${Math.round(b.rep * 100) / 100}"`,
+            width: Math.round(b.rep * 100) / 100,
+            pooled: b.pooled,
+            onHandFootage: Math.round(b.onHandFootage),
+            heldFootage: Math.round(b.heldFootage),
+            inProductionFootage: Math.round(b.inProductionFootage),
+            etaDate: b.etaDate,
+            demandReleaseHorizon: Math.round(b.demandReleaseHorizon),
+            releaseFootage: Math.round(b.releaseFootage),
+          }));
+
+        // Stock-level release = sum of the width-level releases (width-aware:
+        // held 30" can't cover a ≤13" shortfall, and vice versa).
+        const releaseFootage = dazpakWidths.reduce((s, b) => s + b.releaseFootage, 0);
         const coverage = onHandFt + dz.heldFootage + dz.inProductionFootage;
         const makeFootage = Math.max(0, demandMake - coverage);
         metrics.dazpak = {
@@ -374,6 +439,7 @@ router.get(
           demandMakeHorizon: Math.round(demandMake),
           releaseFootage: Math.round(releaseFootage),
           makeFootage: Math.round(makeFootage),
+          widths: dazpakWidths,
           lines: dz.lines,
         };
       }
