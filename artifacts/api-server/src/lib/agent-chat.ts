@@ -237,6 +237,21 @@ const TOOLS = [
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "revise_price",
+    description:
+      "Apply a vendor-confirmed unit price to a PO: updates the PO line, our stock cost override, and the Label Traxx stock master (CostMSI). Use when the buyer tells you a vendor confirmed a new price, or asks you to match a price from an acknowledgement. Label Traxx has no PO-edit API, so the PO's own dollar total still has to be revised by hand in LT — say so in your reply.",
+    input_schema: {
+      type: "object",
+      properties: {
+        po: { type: "string" },
+        unit_price: { type: "number", description: "Confirmed price as a number, e.g. 0.5963" },
+        unit: { type: "string", description: "Basis — 'MSI' applies automatically; anything else is reported back for manual conversion." },
+        source: { type: "string", description: "Where the price came from, e.g. 'Mactac ACK 22414417' — recorded on the timeline." },
+      },
+      required: ["po", "unit_price"],
+    },
+  },
+  {
     name: "run_agent",
     description:
       "Run the follow-up agent now: adopt new Label Traxx POs, pull vendor replies from Gmail, classify them, update states and queue nudge drafts. Takes ~10-60s. Use when the buyer asks to check for new vendor mail.",
@@ -460,11 +475,25 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<st
       await db.update(poAgentDraftTable).set({ status: "dismissed" }).where(eq(poAgentDraftTable.id, ds[0].id));
       return `Dismissed draft "${ds[0].subject}".`;
     }
+    case "revise_price": {
+      const po = await findPo(input["po"]);
+      if (!po) return `No tracked PO matches ${JSON.stringify(input["po"])}.`;
+      const price = Number(input["unit_price"]);
+      if (!Number.isFinite(price) || price <= 0) return "unit_price must be a positive number.";
+      const { applyConfirmedPrice } = await import("./po-price-revision");
+      const r = await applyConfirmedPrice({
+        poId: po.id,
+        confirmedUnitPrice: price,
+        priceUnit: typeof input["unit"] === "string" ? input["unit"] : "MSI",
+        source: String(input["source"] ?? "buyer instruction in chat"),
+      });
+      return r.detail;
+    }
     case "run_agent": {
       const r = await runPoAgent();
       return r.skipped
         ? `Agent did not run: ${r.skipped}`
-        : `Agent run complete — POs checked ${r.posChecked}, adopted ${r.adopted ?? 0}, inbound processed ${r.inboundProcessed}, reclassified ${r.reclassified}, acks detected ${r.acksDetected}, drafts queued ${r.draftsCreated}, closed ${r.closed}, flagged ${r.flagged}.`;
+        : `Agent run complete — POs checked ${r.posChecked}, adopted ${r.adopted ?? 0}, inbound processed ${r.inboundProcessed}, reclassified ${r.reclassified}, acks detected ${r.acksDetected}, prices revised ${r.pricesRevised}, drafts queued ${r.draftsCreated}, closed ${r.closed}, flagged ${r.flagged}.`;
     }
     default:
       return `Unknown tool ${name}.`;
@@ -485,6 +514,7 @@ function systemPrompt(): string {
     `- Availability = on hand + on order − footage committed to open production tickets, compared against the stock's Min.\n` +
     `- Widths up to 14" are interchangeable (they slit down); the dashboard labels that pooled bucket ≤13". Wider widths (e.g. 30") net separately.\n` +
     `- "Requested" delivery is what Calyx asked for; "promised" is what the vendor confirmed. Promised later than requested is worth flagging.\n` +
+    `- Material cost is quoted per MSI (thousand square inches). When a vendor confirms a different price, the PO line, our stock cost, and the Label Traxx stock master can all be updated — but Label Traxx has no PO-edit API, so a PO's own dollar total is always a manual edit in LT.\n` +
     `- Dazpak runs a make-and-hold program: they produce rolls and hold them in their warehouse until Calyx calls for release (~5 business days).\n\n` +
     `Rules:\n` +
     `- You CANNOT send email. draft_reply only queues a draft for the buyer to review and approve. Never say or imply you sent something.\n` +

@@ -75,6 +75,11 @@ export interface Classification {
   confirmedQuantity: string | null;
   /** Vendor's own order / sales-order number from the ACK (e.g. "22414417"). */
   vendorOrderNumber: string | null;
+  /** Unit price the vendor confirmed, with the basis it was quoted in. */
+  confirmedUnitPrice: number | null;
+  priceUnit: string | null;
+  /** Vendor is asking for an updated PO (usually to confirm a new price). */
+  requestsRevisedPo: boolean;
   /** Differences between the acknowledgement and our PO — quantity, width, price, dates. */
   discrepancies: string | null;
   summary: string;
@@ -114,6 +119,22 @@ const CLASSIFY_TOOL = {
       vendor_order_number: {
         type: ["string", "null"],
         description: "The vendor's own order / sales-order / confirmation number, e.g. '22414417'",
+      },
+      confirmed_unit_price: {
+        type: ["number", "null"],
+        description:
+          "The unit price the vendor confirmed for this material, as a number only (e.g. 0.5963). Read it from the acknowledgement/proforma document when attached. Null if no unit price is stated.",
+      },
+      price_unit: {
+        type: ["string", "null"],
+        enum: ["MSI", "MSF", "each", "lb", "kg", "linear_foot", "other", null],
+        description:
+          "The basis confirmed_unit_price is quoted in. 'MSI' = per thousand square inches (Calyx's standard). Use 'other' only when the document states a basis you can't map.",
+      },
+      requests_revised_po: {
+        type: "boolean",
+        description:
+          "True when the vendor is asking us to send an updated/revised purchase order — e.g. to confirm a new price, correct a quantity, or match their order entry. False otherwise.",
       },
       discrepancies: {
         type: ["string", "null"],
@@ -207,7 +228,8 @@ export async function classifyVendorEmail(input: {
         system:
           "You classify emails from label-stock vendors about purchase orders for Calyx Containers' buyer. " +
           "Be literal: only call something an acknowledgement if the vendor confirms the order or provides an order/sales-order confirmation. " +
-          "When an order acknowledgement PDF is attached, extract the promised/estimated delivery date, confirmed quantity, and the vendor's order number from it, and compare quantity, width, price, and dates against our PO context — report real differences in `discrepancies`. " +
+          "When an order acknowledgement PDF is attached, extract the promised/estimated delivery date, confirmed quantity, the vendor's order number, and the confirmed unit price (with its basis — MSI, each, lb) from it, and compare quantity, width, price, and dates against our PO context — report real differences in `discrepancies`. " +
+          "Set `requests_revised_po` when the vendor asks us to issue an updated or revised PO, whatever words they use ('please send a revised PO', 'we need an updated order to match this price', 'resend the PO reflecting…'). " +
           "Dates must come from the email or its documents, never invented. Treat marketing mail and unrelated threads as 'other'.",
         messages: [{ role: "user", content }],
         tools: [CLASSIFY_TOOL],
@@ -235,6 +257,12 @@ export async function classifyVendorEmail(input: {
           : [],
         confirmedQuantity: typeof i["confirmed_quantity"] === "string" ? i["confirmed_quantity"] : null,
         vendorOrderNumber: typeof i["vendor_order_number"] === "string" ? i["vendor_order_number"] : null,
+        confirmedUnitPrice:
+          typeof i["confirmed_unit_price"] === "number" && Number.isFinite(i["confirmed_unit_price"])
+            ? i["confirmed_unit_price"]
+            : null,
+        priceUnit: typeof i["price_unit"] === "string" ? i["price_unit"] : null,
+        requestsRevisedPo: i["requests_revised_po"] === true,
         discrepancies: typeof i["discrepancies"] === "string" && i["discrepancies"].trim() ? i["discrepancies"] : null,
         summary: String(i["summary"] ?? "Vendor email received"),
         needsHuman: Boolean(i["needs_human"]),
@@ -255,6 +283,8 @@ export interface AgentRunResult {
   inboundProcessed: number;
   reclassified: number;
   acksDetected: number;
+  /** Vendor-confirmed price changes written to the PO line + stock cost. */
+  pricesRevised: number;
   draftsCreated: number;
   closed: number;
   flagged: number;
@@ -324,7 +354,7 @@ async function adoptLtPos(vendorByName: Map<string, { toEmails: string | null }>
 }
 
 export async function runPoAgent(): Promise<AgentRunResult> {
-  const zero: AgentRunResult = { posChecked: 0, inboundProcessed: 0, reclassified: 0, acksDetected: 0, draftsCreated: 0, closed: 0, flagged: 0 };
+  const zero: AgentRunResult = { posChecked: 0, inboundProcessed: 0, reclassified: 0, acksDetected: 0, pricesRevised: 0, draftsCreated: 0, closed: 0, flagged: 0 };
   if (!gmailConfigured()) return { ...zero, skipped: "gmail not configured" };
   const connection = await gmailConnection();
   if (!connection) return { ...zero, skipped: "gmail not connected" };
@@ -409,6 +439,40 @@ export async function runPoAgent(): Promise<AgentRunResult> {
         const lineTxt = c.tracking.map((t) => `${t.carrier} ${t.number}`.trim()).join("; ");
         notes = `${notes?.trim() ? `${notes.trim()}\n` : ""}Tracking: ${lineTxt} (from vendor email ${stamp})`;
       }
+      // A confirmed price different from ours revises the PO line, our stock
+      // cost, and LT's stock master. The LT PO's own total can't be revised
+      // through the API, so that part always ends up in front of the buyer.
+      if (c.confirmedUnitPrice != null && ["ack", "ship_notice", "delay", "question"].includes(c.kind)) {
+        const { applyConfirmedPrice } = await import("./po-price-revision");
+        const r = await applyConfirmedPrice({
+          poId: po.id,
+          confirmedUnitPrice: c.confirmedUnitPrice,
+          priceUnit: c.priceUnit,
+          source: `vendor ${c.kind} email${c.vendorOrderNumber ? ` (their order ${c.vendorOrderNumber})` : ""}`,
+        });
+        if (r.applied) {
+          result.pricesRevised += 1;
+          if (r.ltPoNumbers) {
+            needsAttention = true;
+            attentionReason = `Price changed to $${r.newPrice}/MSI on #${r.stockId} — revise the amount on Label Traxx PO ${r.ltPoNumbers} (no PO-edit API).`;
+          }
+        } else if (/needs a manual conversion|too large a swing|multiple? lines|carries/i.test(r.detail)) {
+          // Couldn't be applied safely — surface the vendor's number instead.
+          needsAttention = true;
+          attentionReason = `Price needs review: ${r.detail.slice(0, 220)}`;
+          await appendEvent(po.id, { direction: "system", kind: "note", summary: r.detail });
+        }
+      }
+
+      // Vendor wants a revised PO document — the PDF regenerates from the
+      // (possibly just-updated) line price, so re-sending is a one-click job.
+      if (c.requestsRevisedPo) {
+        needsAttention = true;
+        attentionReason =
+          `Vendor asked for a revised PO — re-send it from PO History (the PDF picks up the current price)` +
+          (po.ltPoNumbers ? `, and check Label Traxx PO ${po.ltPoNumbers} reflects it.` : ".");
+      }
+
       if (c.discrepancies) {
         needsAttention = true;
         attentionReason = `ACK discrepancy: ${c.discrepancies.slice(0, 200)}`;
@@ -447,6 +511,7 @@ export async function runPoAgent(): Promise<AgentRunResult> {
           ? `Stock #${line.stockId} — ${line.description ?? ""} (${line.rolls} rolls` +
             (line.width ? ` @ ${line.width}" wide` : "") +
             (line.footage ? `, ${Math.round(line.footage).toLocaleString("en-US")} ft total` : "") +
+            (line.msiCost != null ? `, our price $${line.msiCost}/MSI` : "") +
             `)`
           : "unknown",
         requestedDelivery: po.requestedDeliveryDate,

@@ -89,6 +89,40 @@ export function ltPost<T>(path: string, body: unknown): Promise<T> {
   return ltRequest<T>("POST", path, { body });
 }
 
+export function ltPut<T>(path: string, body: unknown): Promise<T> {
+  return ltRequest<T>("PUT", path, { body });
+}
+
+/**
+ * Write a stock's material cost back to Label Traxx (PUT /stock-update).
+ *
+ * Only the fields we pass are changed — LT preserves omitted ones, and the
+ * stock number itself is the record key and can't be altered here. We stamp
+ * priceChange* so LT's own record shows who moved the price and when, which
+ * is what a buyer looking at the stock master expects to see.
+ *
+ * NOTE: there is NO PO-update endpoint in the LT Cloud API (verified across
+ * all 121 paths — only /stock-purchase-order-create). A PO's dollar amount
+ * therefore cannot be revised programmatically; that stays a human edit in LT.
+ */
+export async function updateLtStockCost(input: {
+  stockNumber: string;
+  costMsi: number;
+  freightMsi?: number | null;
+  changedBy?: string;
+}): Promise<void> {
+  const now = new Date();
+  const body: Record<string, unknown> = {
+    stockNumber: input.stockNumber,
+    costMSI: input.costMsi,
+    priceChangeDate: `${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}/${now.getFullYear()}`,
+    priceChangeTime: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+    priceChangeBy: input.changedBy ?? "SC Dashboard",
+  };
+  if (input.freightMsi != null) body["freightMSI"] = input.freightMsi;
+  await ltPut("/stock-update", body);
+}
+
 /** Count endpoints return a bare number (sometimes as text). */
 export async function ltCount(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<number> {
   const raw = await ltGet<unknown>(path, params);
