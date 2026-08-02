@@ -493,7 +493,9 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [selectedStock, setSelectedStock] = React.useState<string | null>(null);
   const [summaryView, setSummaryView] = React.useState<"bars" | "grid">("bars");
   // Full product descriptions: widen the label column and let text wrap.
-  const [wideLabels, setWideLabels] = React.useState(() => localStorage.getItem("sca-wide-labels") === "1");
+  // Default ON — only an explicit collapse ("0") turns it off, so the full
+  // name is visible without having to discover the toggle first.
+  const [wideLabels, setWideLabels] = React.useState(() => localStorage.getItem("sca-wide-labels") !== "0");
   const toggleWideLabels = () => {
     setWideLabels((v) => {
       localStorage.setItem("sca-wide-labels", v ? "0" : "1");
@@ -781,11 +783,12 @@ export function TicketCompareSection({ rows }: { rows: DemandStockMetrics[] }) {
                 onClick={toggleWideLabels}
                 title={wideLabels ? "Collapse descriptions" : "Expand descriptions — show the full product name"}
                 className={cn(
-                  "flex items-center rounded-md border px-2 py-1",
+                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] whitespace-nowrap",
                   wideLabels ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
                 )}
               >
                 <UnfoldHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Full descriptions</span>
               </button>
             </div>
           </div>
