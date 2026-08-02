@@ -391,14 +391,22 @@ export default function DemandPlanning() {
   const [showOnly, setShowOnly] = React.useState<
     "all" | "belowMin" | "review" | "dormant" | "activeOnHand" | "anyOnHand"
   >("all");
-  // `?tab=` lets an external redirect land on the right tab — the Gmail OAuth
-  // callback comes back to ?tab=email so the connect card is on screen.
-  const [tab, setTab] = React.useState<"demand" | "pos" | "email" | "config" | "vendors">(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    return requested === "pos" || requested === "email" || requested === "config" || requested === "vendors"
-      ? requested
-      : "demand";
-  });
+  // `?tab=` lets an external redirect land on the right place — the Gmail OAuth
+  // callback comes back to ?tab=email, which now resolves to Setup › Email.
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const SETUP_TABS = ["email", "vendors", "config"] as const;
+  const [tab, setTab] = React.useState<"demand" | "pos" | "setup">(() =>
+    requestedTab === "pos"
+      ? "pos"
+      : requestedTab === "setup" || (SETUP_TABS as readonly string[]).includes(requestedTab ?? "")
+      ? "setup"
+      : "demand",
+  );
+  const [setupTab, setSetupTab] = React.useState<(typeof SETUP_TABS)[number]>(() =>
+    (SETUP_TABS as readonly string[]).includes(requestedTab ?? "")
+      ? (requestedTab as (typeof SETUP_TABS)[number])
+      : "config",
+  );
 
   const params: GetDemandSummaryParams = {
     monthsBack,
@@ -515,9 +523,7 @@ export default function DemandPlanning() {
           [
             ["demand", "Demand"],
             ["pos", "Material Control Tower"],
-            ["email", "Email"],
-            ["config", "Configuration"],
-            ["vendors", "Vendor PO Contacts"],
+            ["setup", "Setup"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -540,9 +546,41 @@ export default function DemandPlanning() {
       </div>
 
       {tab === "pos" && <SuggestedPosTab rows={rows} />}
-      {tab === "email" && <EmailTab />}
-      {tab === "config" && <DemandConfigTab rows={rows} />}
-      {tab === "vendors" && <VendorContactsTab />}
+
+      {tab === "setup" && (
+        <div className="space-y-4">
+          {/* Sub-tabs, styled as a segmented control so they read as a level
+              below the page tabs rather than competing with them. */}
+          <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
+            {(
+              [
+                ["email", "Email"],
+                ["vendors", "Vendor PO Contacts"],
+                ["config", "Configuration"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSetupTab(key)}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium rounded-[5px] transition-colors outline-none",
+                  "focus-visible:ring-2 focus-visible:ring-ring",
+                  setupTab === key
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {setupTab === "email" && <EmailTab />}
+          {setupTab === "vendors" && <VendorContactsTab />}
+          {setupTab === "config" && <DemandConfigTab rows={rows} />}
+        </div>
+      )}
 
       {tab === "demand" && (
         <>
