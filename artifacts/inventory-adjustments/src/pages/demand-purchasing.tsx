@@ -1723,6 +1723,11 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
 
       <AgentChatCard />
 
+      {/* Approvals and flags first — this is what needs a decision today. Also
+          on the Email tab, where the Gmail connection and lessons live; the
+          two render the same query. */}
+      <PoAgentQueueCard />
+
       {byVendor.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
