@@ -619,18 +619,30 @@ router.get(
       db.select().from(materialPoTable),
     ]);
     const goalsByStock = new Map(goalRows.map((g) => [g.stockId, g]));
+    const trackedLines = trackedPos.length
+      ? await db.select().from(materialPoLineTable).where(inArray(materialPoLineTable.poId, trackedPos.map((p) => p.id)))
+      : [];
+    const extLeadByPoId = new Map(
+      trackedLines.filter((l) => l.extendedLeadTime).map((l) => [l.poId, l.extendedLeadTimeDays ?? null]),
+    );
 
     // What the agent learned per LT PO number. A vendor's promise usually
     // arrives by email (captured here) long before it lands on LT's dueDate,
     // and the agent appends tracking references to its own notes — so the
     // inbound view has to consult both sources or it shows stale dates.
-    const agentByLtPo = new Map<string, { promisedDate: string | null; notes: string | null }>();
+    const agentByLtPo = new Map<
+      string,
+      { promisedDate: string | null; notes: string | null; extendedLeadTimeDays: number | null }
+    >();
     for (const p of trackedPos) {
       for (const n of (p.ltPoNumbers ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
         const prev = agentByLtPo.get(n);
         agentByLtPo.set(n, {
           promisedDate: p.promisedDate ?? prev?.promisedDate ?? null,
           notes: [prev?.notes, p.notes].filter(Boolean).join("\n") || null,
+          extendedLeadTimeDays: extLeadByPoId.has(p.id)
+            ? extLeadByPoId.get(p.id) ?? null
+            : prev?.extendedLeadTimeDays ?? null,
         });
       }
     }
@@ -828,6 +840,7 @@ router.get(
             )
             .map((p) => {
               const agent = agentByLtPo.get(p.poNumber);
+              const extLead = agent?.extendedLeadTimeDays ?? null;
               return {
                 poNumber: p.poNumber,
                 poDate: p.poDateIso,
@@ -836,6 +849,8 @@ router.get(
                 // from the vendor's acknowledgement email.
                 promisedDeliveryDate: p.dueDateIso ?? agent?.promisedDate ?? null,
                 promisedFromAgent: p.dueDateIso == null && agent?.promisedDate != null,
+                extendedLeadTime: extLead != null || agent?.extendedLeadTimeDays != null,
+                extendedLeadTimeDays: extLead,
                 masterWidth: p.masterWidth ?? 0,
                 rolls: p.quantityRolls,
                 totalFootage: p.orderedFootage,
@@ -1108,6 +1123,8 @@ router.get(
             width: l.width,
             msiCost: l.msiCost,
             estCost: l.estCost,
+            extendedLeadTime: l.extendedLeadTime,
+            extendedLeadTimeDays: l.extendedLeadTimeDays,
           })),
         };
       });

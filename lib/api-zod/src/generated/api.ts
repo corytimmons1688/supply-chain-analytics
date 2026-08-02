@@ -816,6 +816,18 @@ export const GetDemandPurchasingResponse = zod.object({
                 .describe(
                   "True when the promise came from the agent's email capture rather than Label Traxx.",
                 ),
+              extendedLeadTime: zod
+                .boolean()
+                .optional()
+                .describe(
+                  "Vendor confirmed a date after the delivery we requested — accepted as an extended lead time.",
+                ),
+              extendedLeadTimeDays: zod
+                .number()
+                .nullish()
+                .describe(
+                  "Days past our requested date the vendor committed to.",
+                ),
               masterWidth: zod.number().optional(),
               rolls: zod.number().describe("Master rolls ordered."),
               totalFootage: zod
@@ -961,6 +973,18 @@ export const ListMaterialPosResponse = zod.object({
             ),
           msiCost: zod.number().nullish(),
           estCost: zod.number().nullish(),
+          extendedLeadTime: zod
+            .boolean()
+            .optional()
+            .describe(
+              "Vendor's confirmed date lands after the delivery we requested (order date + configured lead time). Accepted, not a problem.",
+            ),
+          extendedLeadTimeDays: zod
+            .number()
+            .nullish()
+            .describe(
+              "Days the vendor's promise runs past our requested date.",
+            ),
         }),
       ),
     }),
@@ -990,6 +1014,16 @@ export const CreateMaterialPoBody = zod.object({
         ),
       msiCost: zod.number().nullish(),
       estCost: zod.number().nullish(),
+      extendedLeadTime: zod
+        .boolean()
+        .optional()
+        .describe(
+          "Vendor's confirmed date lands after the delivery we requested (order date + configured lead time). Accepted, not a problem.",
+        ),
+      extendedLeadTimeDays: zod
+        .number()
+        .nullish()
+        .describe("Days the vendor's promise runs past our requested date."),
     }),
   ),
 });

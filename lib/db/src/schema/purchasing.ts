@@ -69,6 +69,12 @@ export const materialPoLineTable = pgTable("material_po_line", {
   width: doublePrecision("width"),
   msiCost: doublePrecision("msi_cost"),
   estCost: doublePrecision("est_cost"),
+  // Set when the vendor's confirmed date lands after the delivery we requested
+  // (which is itself today + the configured lead time). An accepted fact, not a
+  // problem — the line carries an "extended lead time" tag instead of a flag.
+  extendedLeadTime: boolean("extended_lead_time").default(false).notNull(),
+  /** Days the vendor's promise runs past our requested date. */
+  extendedLeadTimeDays: integer("extended_lead_time_days"),
 });
 
 export type MaterialPoRow = typeof materialPoTable.$inferSelect;

@@ -2115,6 +2115,8 @@ components:
         requestedDeliveryDate: { type: string, nullable: true, description: "Delivery Calyx asked for (ODBC RequestedDeliveryDate)." }
         promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement." }
         promisedFromAgent: { type: boolean, description: "True when the promise came from the agent's email capture rather than Label Traxx." }
+        extendedLeadTime: { type: boolean, description: "Vendor confirmed a date after the delivery we requested — accepted as an extended lead time." }
+        extendedLeadTimeDays: { type: number, nullable: true, description: "Days past our requested date the vendor committed to." }
         masterWidth: { type: number }
         rolls: { type: number, description: "Master rolls ordered." }
         totalFootage: { type: number, description: "Ordered footage (exact, from ordered MSI ÷ width); 0 when not derivable." }
@@ -2181,6 +2183,8 @@ components:
         width: { type: number, nullable: true, description: "Master width to order (inches); null = the stock's master width." }
         msiCost: { type: number, nullable: true }
         estCost: { type: number, nullable: true }
+        extendedLeadTime: { type: boolean, description: "Vendor's confirmed date lands after the delivery we requested (order date + configured lead time). Accepted, not a problem." }
+        extendedLeadTimeDays: { type: number, nullable: true, description: "Days the vendor's promise runs past our requested date." }
     MaterialPo:
       type: object
       required: [id, vendorName, status, lines, createdAt]

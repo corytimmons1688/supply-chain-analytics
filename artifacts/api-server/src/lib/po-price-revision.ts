@@ -1,4 +1,4 @@
-import { db, materialPoTable, materialPoLineTable, stockGoalTable, ltStockTable, poEmailEventTable } from "@workspace/db";
+import { db, materialPoTable, materialPoLineTable, stockGoalTable, ltStockTable, ltPoTable, poEmailEventTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { updateLtStockCost, ltApiConfigured } from "./ltApi";
 import { logger } from "./logger";
@@ -138,11 +138,29 @@ export async function applyConfirmedPrice(input: PriceRevisionInput): Promise<Pr
     }
   }
 
+  // Does the LT PO itself already carry this price? Its poItems hold the
+  // per-unit cost, so we can tell a real "go fix the PO" from a no-op and
+  // avoid sending the buyer to LT for nothing.
+  let ltPoNeedsEdit = false;
+  const ltPoNums = (po.ltPoNumbers ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  for (const n of ltPoNums) {
+    const [ltPo] = await db.select().from(ltPoTable).where(eq(ltPoTable.poNumber, n)).limit(1);
+    const costs = ((ltPo?.items ?? []) as { unitCost?: number; unit?: string }[])
+      .map((it) => it.unitCost)
+      .filter((c): c is number => typeof c === "number");
+    // No cost lines to compare → assume it needs a look rather than clearing it.
+    if (costs.length === 0 || costs.some((c) => Math.abs(c - newPrice) > PRICE_EPSILON)) ltPoNeedsEdit = true;
+  }
+
   const priceTxt = `${oldPrice != null ? `$${oldPrice}` : "(unpriced)"} → $${newPrice}/MSI`;
   const detail =
     `Price revised on stock #${line.stockId}: ${priceTxt} (${input.source}). ` +
     `PO line and our stock cost updated${ltStockUpdated ? "; Label Traxx stock master updated too" : "; Label Traxx stock master NOT updated — see logs"}.` +
-    (po.ltPoNumbers ? ` Label Traxx PO ${po.ltPoNumbers} still shows the old amount — LT has no PO-edit API, so revise the PO total in Label Traxx.` : "");
+    (ltPoNums.length
+      ? ltPoNeedsEdit
+        ? ` Label Traxx PO ${po.ltPoNumbers} shows a different amount — LT has no PO-edit API, so revise the PO total in Label Traxx.`
+        : ` Label Traxx PO ${po.ltPoNumbers} already carries this price — nothing to change there.`
+      : "");
 
   await db.insert(poEmailEventTable).values({
     poId: input.poId,
@@ -171,6 +189,7 @@ export async function applyConfirmedPrice(input: PriceRevisionInput): Promise<Pr
     oldPrice,
     newPrice,
     ltStockUpdated,
-    ...(po.ltPoNumbers ? { ltPoNumbers: po.ltPoNumbers } : {}),
+    // Only surfaced when LT's own PO total actually disagrees.
+    ...(ltPoNeedsEdit && po.ltPoNumbers ? { ltPoNumbers: po.ltPoNumbers } : {}),
   };
 }

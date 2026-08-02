@@ -139,7 +139,7 @@ const CLASSIFY_TOOL = {
       discrepancies: {
         type: ["string", "null"],
         description:
-          "Differences between the acknowledgement and our PO — quantity, width, price, or a promised date later than our requested delivery. Null when everything matches.",
+          "Differences between the acknowledgement and our PO — quantity, width, or price. Do NOT report a promised date later than our requested delivery: that is handled separately as an extended lead time and is accepted. Null when everything else matches.",
       },
       summary: { type: "string", description: "One factual sentence for the PO timeline, including key figures from attached documents" },
       needs_human: { type: "boolean", description: "True if a buyer should look at this message" },
@@ -228,7 +228,8 @@ export async function classifyVendorEmail(input: {
         system:
           "You classify emails from label-stock vendors about purchase orders for Calyx Containers' buyer. " +
           "Be literal: only call something an acknowledgement if the vendor confirms the order or provides an order/sales-order confirmation. " +
-          "When an order acknowledgement PDF is attached, extract the promised/estimated delivery date, confirmed quantity, the vendor's order number, and the confirmed unit price (with its basis — MSI, each, lb) from it, and compare quantity, width, price, and dates against our PO context — report real differences in `discrepancies`. " +
+          "When an order acknowledgement PDF is attached, extract the promised/estimated delivery date, confirmed quantity, the vendor's order number, and the confirmed unit price (with its basis — MSI, each, lb) from it, and compare quantity, width, and price against our PO context — report real differences in `discrepancies`. " +
+          "A promised date LATER than our requested delivery is normal and accepted — capture it in `promised_date` and do NOT report it as a discrepancy or set needs_human for it. " +
           "Set `requests_revised_po` when the vendor asks us to issue an updated or revised PO, whatever words they use ('please send a revised PO', 'we need an updated order to match this price', 'resend the PO reflecting…'). " +
           "Dates must come from the email or its documents, never invented. Treat marketing mail and unrelated threads as 'other'.",
         messages: [{ role: "user", content }],
@@ -428,6 +429,36 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       }
 
       if (c.promisedDate) promisedDate = c.promisedDate;
+
+      // A vendor date past our requested delivery is accepted, not a problem:
+      // record how far past and tag the PO line "extended lead time" rather
+      // than raising a flag. (Requested delivery = order date + the configured
+      // lead time, so this is precisely "the vendor needs longer than we
+      // planned for" — useful history, not an exception to chase.)
+      if (c.promisedDate && po.requestedDeliveryDate && c.promisedDate > po.requestedDeliveryDate) {
+        const days = Math.round(
+          (Date.parse(`${c.promisedDate}T00:00:00Z`) - Date.parse(`${po.requestedDeliveryDate}T00:00:00Z`)) / 864e5,
+        );
+        if (days > 0 && line && (!line.extendedLeadTime || line.extendedLeadTimeDays !== days)) {
+          await db
+            .update(materialPoLineTable)
+            .set({ extendedLeadTime: true, extendedLeadTimeDays: days })
+            .where(eq(materialPoLineTable.id, line.id));
+          line.extendedLeadTime = true;
+          line.extendedLeadTimeDays = days;
+          await appendEvent(po.id, {
+            direction: "system",
+            kind: "note",
+            summary: `Extended lead time: vendor committed ${c.promisedDate}, ${days} day${days === 1 ? "" : "s"} past our requested ${po.requestedDeliveryDate}. Promised date updated; line tagged.`,
+          });
+        }
+        // A flag raised for this same condition before it was accepted is now
+        // stale — the tag replaces it.
+        if (needsAttention && attentionReason && /promised|later than|delivery date/i.test(attentionReason)) {
+          needsAttention = false;
+          attentionReason = null;
+        }
+      }
       if (c.kind === "ack" && state === "awaiting_ack") {
         state = "acknowledged";
         ackAt = new Date(Number(msg.internalDate ?? Date.now()));

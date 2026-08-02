@@ -508,6 +508,10 @@ export interface StockOpenPo {
   promisedDeliveryDate?: string | null;
   /** True when the promise came from the agent's email capture rather than Label Traxx. */
   promisedFromAgent?: boolean;
+  /** Vendor confirmed a date after the delivery we requested — accepted as an extended lead time. */
+  extendedLeadTime?: boolean;
+  /** Days past our requested date the vendor committed to. */
+  extendedLeadTimeDays?: number | null;
   masterWidth?: number;
   /** Master rolls ordered. */
   rolls: number;
@@ -658,6 +662,10 @@ export interface MaterialPoLine {
   width?: number | null;
   msiCost?: number | null;
   estCost?: number | null;
+  /** Vendor's confirmed date lands after the delivery we requested (order date + configured lead time). Accepted, not a problem. */
+  extendedLeadTime?: boolean;
+  /** Days the vendor's promise runs past our requested date. */
+  extendedLeadTimeDays?: number | null;
 }
 
 export interface MaterialPo {

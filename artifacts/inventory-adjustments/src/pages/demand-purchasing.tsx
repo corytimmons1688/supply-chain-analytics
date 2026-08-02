@@ -65,7 +65,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -1345,6 +1345,8 @@ function OpenPosTable({
       rolls: number;
       width: number | null;
       notes: string | null;
+      extendedLeadTime: boolean;
+      extendedLeadTimeDays: number | null;
     }[] = [];
     for (const item of purch?.items ?? []) {
       for (const p of item.openPos ?? []) {
@@ -1359,6 +1361,8 @@ function OpenPosTable({
           rolls: p.rolls ?? 0,
           width: p.masterWidth ?? null,
           notes: p.notes ?? null,
+          extendedLeadTime: Boolean(p.extendedLeadTime),
+          extendedLeadTimeDays: p.extendedLeadTimeDays ?? null,
         });
       }
     }
@@ -1407,6 +1411,15 @@ function OpenPosTable({
                     <td className={cn("px-2 py-1.5 whitespace-nowrap", late && "text-amber-700 dark:text-amber-400 font-medium")}>
                       {r.date ?? <span className="text-muted-foreground">—</span>}
                       {r.date && !r.dateIsPromised && <span className="ml-1 text-[10px] text-muted-foreground">req</span>}
+                      {r.extendedLeadTime && (
+                        <span
+                          className="ml-1 inline-flex items-center gap-0.5 text-[10px] text-sky-700 dark:text-sky-300"
+                          title={`Vendor committed ${r.extendedLeadTimeDays ?? "?"} days past our requested date — accepted as an extended lead time`}
+                        >
+                          <Clock className="w-3 h-3" />
+                          ext{r.extendedLeadTimeDays ? ` +${r.extendedLeadTimeDays}d` : ""}
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                       {r.footage > 0 ? `${fmt(r.footage)} ft` : <span className="text-muted-foreground">—</span>}
@@ -1616,8 +1629,11 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       // One PO per material — POs are strictly 1-to-1 with a stock; materials
       // are never combined on a single PO.
       for (const l of selected) {
+        // Requested delivery = today + the lead time from Configuration
+        // (override → this stock's PO history → vendor median → global).
+        // 14 days only backstops a stock with no lead time at all.
         const due = new Date();
-        due.setDate(due.getDate() + Math.max(14, l.leadTimeDays || 0));
+        due.setDate(due.getDate() + (l.leadTimeDays > 0 ? l.leadTimeDays : 14));
         await createPo.mutateAsync({
           data: {
             vendorName,
@@ -1977,7 +1993,20 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                     · {po.lines.map((l) => `#${l.stockId}×${l.rolls}${l.width ? ` @ ${l.width}\u2033` : ""}`).join(", ")} ·{" "}
                     {new Date(po.createdAt).toLocaleDateString()}
                     {po.requestedDeliveryDate && ` · due ${po.requestedDeliveryDate}`}
+                    {po.promisedDate && ` · promised ${po.promisedDate}`}
                   </span>
+                  {/* Vendor needs longer than the configured lead time — an
+                      accepted fact recorded on the line, not a flag. */}
+                  {po.lines.some((l) => l.extendedLeadTime) && (
+                    <span className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300 align-middle">
+                      <Clock className="w-3 h-3" />
+                      Extended lead time
+                      {(() => {
+                        const d = po.lines.find((l) => l.extendedLeadTime)?.extendedLeadTimeDays;
+                        return d ? ` +${d}d` : "";
+                      })()}
+                    </span>
+                  )}
                   {po.status === "received" && (
                     <div className="mt-0.5 text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1">
                       <PackageCheck className="w-3.5 h-3.5" /> Received {po.receivedOn}

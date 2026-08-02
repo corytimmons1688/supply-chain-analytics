@@ -15,4 +15,8 @@ export interface MaterialPoLine {
   width?: number | null;
   msiCost?: number | null;
   estCost?: number | null;
+  /** Vendor's confirmed date lands after the delivery we requested (order date + configured lead time). Accepted, not a problem. */
+  extendedLeadTime?: boolean;
+  /** Days the vendor's promise runs past our requested date. */
+  extendedLeadTimeDays?: number | null;
 }
