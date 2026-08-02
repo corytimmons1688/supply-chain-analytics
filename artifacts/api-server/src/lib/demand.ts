@@ -596,10 +596,14 @@ export function vendorLeadTimeMedians(poLeadTimes: Map<string, PoLeadTime>): Map
 // ---------- Width-aware availability ----------
 
 /**
- * All widths ≤13" are one interchangeable pool (per Calyx: a 12.5/12.75/13"
- * requirement can be met by any ≤13" stock). Widths >13" each net exactly.
+ * All widths ≤14" are one interchangeable pool (per Cory 2026-08-01: a
+ * near-14" master like 13.88" slits down to cover 11.5–13" requirements, so
+ * it belongs with the narrow widths). Widths >14" each net exactly. NOTE: the
+ * UI deliberately still labels this bucket ≤13" — Cory asked for the wider
+ * pooling WITHOUT changing the displayed words; "le13" stays as the internal
+ * key for the same reason.
  */
-const POOL_MAX_WIDTH = 13;
+const POOL_MAX_WIDTH = 14;
 function widthGroupKey(w: number): string {
   const r = Math.round((w || 0) * 100) / 100;
   return r > 0 && r <= POOL_MAX_WIDTH ? "le13" : String(r);
