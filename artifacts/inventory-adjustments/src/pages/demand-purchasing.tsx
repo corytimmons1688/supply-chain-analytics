@@ -1321,6 +1321,39 @@ type SuggestionLine = {
  * Tracking references are pulled out of the PO's notes and deep-linked to the
  * carrier.
  */
+/** Where an open PO stands, for someone asking "when do I get this material?" */
+type PoStatus =
+  | "pending_confirmation"
+  | "confirmed"
+  | "extended"
+  | "in_transit"
+  | "past_due"
+  | "release_planned"
+  | "held_at_vendor"
+  | "in_production_at_vendor";
+
+const PO_STATUS_LABEL: Record<PoStatus, string> = {
+  pending_confirmation: "Pending vendor confirmation",
+  confirmed: "Confirmed",
+  extended: "Confirmed · extended lead time",
+  in_transit: "In transit",
+  past_due: "Past due",
+  release_planned: "Release planned",
+  held_at_vendor: "Held at vendor",
+  in_production_at_vendor: "In production at vendor",
+};
+
+const PO_STATUS_CLASS: Record<PoStatus, string> = {
+  pending_confirmation: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40",
+  confirmed: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
+  extended: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/40",
+  in_transit: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/40",
+  past_due: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
+  release_planned: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40",
+  held_at_vendor: "bg-muted text-muted-foreground border-border",
+  in_production_at_vendor: "bg-muted text-muted-foreground border-border",
+};
+
 function OpenPosTable({
   rows: metricRows,
   purch,
@@ -1333,6 +1366,10 @@ function OpenPosTable({
     () => new Map(metricRows.map((r) => [r.stockId, r.description ?? null])),
     [metricRows],
   );
+  const metricsByStock = React.useMemo(() => new Map(metricRows.map((r) => [r.stockId, r])), [metricRows]);
+  // Make-and-hold POs are "open" but the rolls sit in Dazpak's warehouse, so
+  // they aren't inbound until a release is planned. Hidden unless they are.
+  const [showHeld, setShowHeld] = React.useState(false);
   const rows = React.useMemo(() => {
     const out: {
       key: string;
@@ -1347,31 +1384,106 @@ function OpenPosTable({
       notes: string | null;
       extendedLeadTime: boolean;
       extendedLeadTimeDays: number | null;
+      status: PoStatus;
+      /** Extra context for the status cell — ETA, release footage, why. */
+      statusNote: string | null;
+      /** Sitting in the vendor's warehouse, not inbound to Calyx. */
+      atVendor: boolean;
+      onHandFootage: number;
     }[] = [];
+    const nowIso = new Date().toISOString().slice(0, 10);
     for (const item of purch?.items ?? []) {
+      const metrics = metricsByStock.get(item.stockId);
+      const dz = metrics?.dazpak;
       for (const p of item.openPos ?? []) {
+        const date = p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null;
+        const promised = Boolean(p.promisedDeliveryDate);
+        const hasTracking = parseNoteTracking(p.notes).some((s) => s.kind === "track");
+        // Is this PO part of the make-and-hold program at Dazpak?
+        const dzLine = (dz?.lines ?? []).find((l) => l.poNumber === p.poNumber);
+        const releasePlanned = (dz?.releaseFootage ?? 0) > 0;
+
+        let status: PoStatus;
+        let statusNote: string | null = null;
+        let atVendor = false;
+
+        if (dzLine && (dzLine.madeFootage > 0 || dzLine.outstandingFootage > 0)) {
+          // Rolls already made and parked in Dazpak's warehouse aren't inbound
+          // until someone calls them in — those hide until a release is
+          // planned. Rolls still in production have a real ETA, so they stay
+          // visible like any other vendor's order.
+          const holding = dzLine.madeFootage > 0;
+          atVendor = holding && !releasePlanned;
+          if (holding && releasePlanned) {
+            status = "release_planned";
+            statusNote = `${fmt(dz?.releaseFootage ?? 0)} ft to call in from ${fmt(dzLine.madeFootage)} ft held`;
+          } else if (holding) {
+            status = "held_at_vendor";
+            statusNote = `${fmt(dzLine.madeFootage)} ft made & waiting at Dazpak — no release needed yet`;
+          } else {
+            status = "in_production_at_vendor";
+            statusNote = `${fmt(dzLine.outstandingFootage)} ft in production${dzLine.planAvailDate ? ` · available ${dzLine.planAvailDate}` : ""}`;
+          }
+        } else if (hasTracking) {
+          status = "in_transit";
+          statusNote = "Tracking received — see link";
+        } else if (date && date < nowIso) {
+          status = "past_due";
+          statusNote = promised
+            ? `Vendor committed ${date} and it hasn't arrived`
+            : `Requested ${date}, still no vendor confirmation`;
+        } else if (!promised) {
+          status = "pending_confirmation";
+          statusNote = date ? `We asked for ${date}; vendor hasn't confirmed a date` : "No dates on this PO at all";
+        } else if (p.extendedLeadTime) {
+          status = "extended";
+          statusNote = `Vendor committed ${date}${p.extendedLeadTimeDays ? `, ${p.extendedLeadTimeDays} days past our request` : ""}`;
+        } else {
+          status = "confirmed";
+          statusNote = `Vendor committed ${date}`;
+        }
+
         out.push({
           key: `${item.stockId}|${p.poNumber}`,
           stockId: item.stockId,
           description: descByStock.get(item.stockId) ?? null,
           poNumber: p.poNumber,
-          date: p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null,
-          dateIsPromised: Boolean(p.promisedDeliveryDate),
+          date,
+          dateIsPromised: promised,
           footage: p.totalFootage ?? 0,
           rolls: p.rolls ?? 0,
           width: p.masterWidth ?? null,
           notes: p.notes ?? null,
           extendedLeadTime: Boolean(p.extendedLeadTime),
           extendedLeadTimeDays: p.extendedLeadTimeDays ?? null,
+          status,
+          statusNote,
+          atVendor,
+          onHandFootage: metrics?.onHandFootage ?? 0,
         });
       }
     }
-    // Undated POs sort last — they're the ones with no commitment at all.
-    return out.sort((a, b) => (a.date ?? "9999").localeCompare(b.date ?? "9999"));
-  }, [purch, descByStock]);
+    // Worst news first for production: past due, then pending confirmation,
+    // then by the date material actually shows up.
+    const rank: Record<PoStatus, number> = {
+      past_due: 0,
+      pending_confirmation: 1,
+      release_planned: 2,
+      in_transit: 3,
+      extended: 4,
+      confirmed: 5,
+      in_production_at_vendor: 6,
+      held_at_vendor: 7,
+    };
+    return out.sort(
+      (a, b) => rank[a.status] - rank[b.status] || (a.date ?? "9999").localeCompare(b.date ?? "9999"),
+    );
+  }, [purch, descByStock, metricsByStock]);
 
+  const heldRows = rows.filter((r) => r.atVendor);
+  const visible = showHeld ? rows : rows.filter((r) => !r.atVendor);
   if (rows.length === 0) return null;
-  const totalFt = rows.reduce((s, r) => s + r.footage, 0);
+  const totalFt = visible.reduce((s, r) => s + r.footage, 0);
   const today = new Date().toISOString().slice(0, 10);
 
   return (
@@ -1381,9 +1493,23 @@ function OpenPosTable({
           <Truck className="w-4 h-4 text-muted-foreground" /> Open POs
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          {rows.length} open purchase order{rows.length === 1 ? "" : "s"} · {fmt(totalFt)} ft inbound. Dates are the
-          vendor&apos;s promise where we have one; otherwise what we requested (shown as &ldquo;req&rdquo;). Past-due
-          dates are amber.
+          Where every open order stands, worst news first. {visible.length} inbound ·{" "}
+          {fmt(totalFt)} ft. Dates are the vendor&apos;s commitment where we have one; otherwise what we requested
+          (&ldquo;req&rdquo;), which is why the status reads pending confirmation.
+          {heldRows.length > 0 && (
+            <>
+              {" "}
+              {heldRows.length} make-and-hold order{heldRows.length === 1 ? "" : "s"} sitting at Dazpak with no release
+              planned {showHeld ? "are shown" : "are hidden"} — the rolls exist but aren&apos;t coming to us yet.{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => setShowHeld((v) => !v)}
+              >
+                {showHeld ? "Hide them" : "Show them"}
+              </button>
+            </>
+          )}
         </p>
       </CardHeader>
       <CardContent>
@@ -1394,32 +1520,43 @@ function OpenPosTable({
                 <th className="text-left px-2 py-1.5 font-medium">Stock</th>
                 <th className="text-left px-2 py-1.5 font-medium">Description</th>
                 <th className="text-left px-2 py-1.5 font-medium">PO</th>
-                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Promised</th>
+                <th className="text-left px-2 py-1.5 font-medium">Status</th>
+                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Expected</th>
                 <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">On order</th>
                 <th className="text-left px-2 py-1.5 font-medium">Tracking</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {visible.map((r) => {
                 const segs = parseNoteTracking(r.notes).filter((s) => s.kind === "track");
                 const late = r.date != null && r.date < today;
                 return (
                   <tr key={r.key} className="border-b last:border-b-0 align-top">
-                    <td className="px-2 py-1.5 font-medium whitespace-nowrap">#{r.stockId}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      <div className="font-medium">#{r.stockId}</div>
+                      <div className="text-[10px] text-muted-foreground">{fmt(r.onHandFootage)} ft on hand</div>
+                    </td>
                     <td className="px-2 py-1.5 text-muted-foreground max-w-[22rem]">{r.description ?? "—"}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{r.poNumber}</td>
+                    <td className="px-2 py-1.5">
+                      <span
+                        className={cn(
+                          "inline-block rounded-full border px-2 py-0.5 text-[10px] whitespace-nowrap",
+                          PO_STATUS_CLASS[r.status],
+                        )}
+                      >
+                        {PO_STATUS_LABEL[r.status]}
+                        {r.status === "extended" && r.extendedLeadTimeDays ? ` +${r.extendedLeadTimeDays}d` : ""}
+                      </span>
+                      {r.statusNote && (
+                        <div className="mt-0.5 text-[10px] text-muted-foreground max-w-[18rem]">{r.statusNote}</div>
+                      )}
+                    </td>
                     <td className={cn("px-2 py-1.5 whitespace-nowrap", late && "text-amber-700 dark:text-amber-400 font-medium")}>
                       {r.date ?? <span className="text-muted-foreground">—</span>}
+                      {/* "req" marks a date we asked for but the vendor has
+                          not confirmed — the status column says as much. */}
                       {r.date && !r.dateIsPromised && <span className="ml-1 text-[10px] text-muted-foreground">req</span>}
-                      {r.extendedLeadTime && (
-                        <span
-                          className="ml-1 inline-flex items-center gap-0.5 text-[10px] text-sky-700 dark:text-sky-300"
-                          title={`Vendor committed ${r.extendedLeadTimeDays ?? "?"} days past our requested date — accepted as an extended lead time`}
-                        >
-                          <Clock className="w-3 h-3" />
-                          ext{r.extendedLeadTimeDays ? ` +${r.extendedLeadTimeDays}d` : ""}
-                        </span>
-                      )}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                       {r.footage > 0 ? `${fmt(r.footage)} ft` : <span className="text-muted-foreground">—</span>}
