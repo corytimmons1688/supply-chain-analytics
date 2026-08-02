@@ -1,4 +1,6 @@
 import express, { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { db, appUserTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { logger } from "./logger";
 
 /**
@@ -78,7 +80,42 @@ export interface AuthedUser {
   id: string;
   email: string;
   name: string;
+  /** Role from the shared auth server (global, cross-app) — informational. */
   role: string | null;
+  /** THIS app's role, from the app_user registry: member | admin. */
+  appRole: string;
+}
+
+// Throttle lastSeenAt writes — the dashboard fires many parallel requests and
+// one row-touch per minute per user is plenty.
+const lastSeenWrites = new Map<string, number>();
+
+/**
+ * App-level access record for a verified identity. First sight of an email
+ * auto-provisions a 'member' row (matching pre-registry behavior: any
+ * verified packos.ai account may use the app); admins manage roles and can
+ * block from /admin. Returns null when the user is blocked.
+ */
+async function ensureAppUser(email: string, name: string): Promise<{ role: string } | null> {
+  const key = email.toLowerCase();
+  const [existing] = await db.select().from(appUserTable).where(eq(appUserTable.email, key)).limit(1);
+  if (existing) {
+    if (existing.status === "blocked") return null;
+    const last = lastSeenWrites.get(key) ?? 0;
+    if (Date.now() - last > 60_000) {
+      lastSeenWrites.set(key, Date.now());
+      await db
+        .update(appUserTable)
+        .set({ lastSeenAt: new Date(), ...(name && !existing.name ? { name } : {}) })
+        .where(eq(appUserTable.email, key));
+    }
+    return { role: existing.role };
+  }
+  await db
+    .insert(appUserTable)
+    .values({ email: key, name: name || null })
+    .onConflictDoNothing();
+  return { role: "member" };
 }
 
 /**
@@ -104,11 +141,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       res.status(401).json({ error: "Authentication required" });
       return;
     }
+    const email = String(user["email"] ?? "");
+    const app = email ? await ensureAppUser(email, String(user["name"] ?? "")) : { role: "member" };
+    if (!app) {
+      res.status(403).json({ error: "Your access to this dashboard has been disabled by an administrator." });
+      return;
+    }
     (req as Request & { user?: AuthedUser }).user = {
       id: String(user["id"]),
-      email: String(user["email"] ?? ""),
+      email,
       name: String(user["name"] ?? ""),
       role: typeof user["role"] === "string" ? user["role"] : null,
+      appRole: app.role,
     };
     next();
   } catch (e) {

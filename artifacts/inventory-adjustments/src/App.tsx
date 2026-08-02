@@ -17,6 +17,7 @@ import Scorecards from "@/pages/scorecards";
 import Asl from "@/pages/asl";
 import VendorNetwork from "@/pages/vendor-network";
 import ExcessObsolete from "@/pages/excess-obsolete";
+import AdminPage from "@/pages/admin";
 import { LoginPage, RegisterPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from "@/pages/auth";
 import { authClient, getAuthToken, clearAuthToken } from "@/lib/auth-client";
 
@@ -76,6 +77,7 @@ function Router() {
             <Route path="/demand" component={DemandPlanning} />
             <Route path="/demand/:stockId" component={DemandDetail} />
             <Route path="/excess-obsolete" component={ExcessObsolete} />
+            <Route path="/admin" component={AdminPage} />
             <Route path="/cycle-counts" component={CycleCounts} />
             <Route path="/scorecards" component={Scorecards} />
             <Route path="/asl" component={Asl} />

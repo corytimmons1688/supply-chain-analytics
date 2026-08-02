@@ -1361,6 +1361,53 @@ export const GetPoTimelineResponse = zod.object({
 });
 
 /**
+ * @summary The signed-in user's app-level identity and role
+ */
+export const GetMeResponse = zod.object({
+  email: zod.string(),
+  name: zod.string().nullish(),
+  appRole: zod
+    .string()
+    .describe("This app's role for the user: member | admin."),
+});
+
+/**
+ * @summary All app users with role and status (admin only)
+ */
+export const GetAppUsersResponse = zod.object({
+  users: zod.array(
+    zod.object({
+      email: zod.string(),
+      name: zod.string().nullish(),
+      role: zod.string().describe("member | admin"),
+      status: zod.string().describe("active | blocked"),
+      firstSeenAt: zod.string(),
+      lastSeenAt: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Change a user's role or status (admin only)
+ */
+export const SetAppUserBody = zod.object({
+  email: zod.string(),
+  role: zod
+    .string()
+    .optional()
+    .describe("member | admin. Omit to leave unchanged."),
+  status: zod
+    .string()
+    .optional()
+    .describe("active | blocked. Omit to leave unchanged."),
+});
+
+export const SetAppUserResponse = zod.object({
+  email: zod.string(),
+  saved: zod.boolean(),
+});
+
+/**
  * @summary Whether PO email can be sent, and from which mailbox
  */
 export const GetGmailStatusResponse = zod.object({

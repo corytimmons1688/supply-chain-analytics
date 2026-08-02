@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive, ShieldCheck } from "lucide-react";
 import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
-import { useGatewayHealth } from "@workspace/api-client-react";
+import { useGatewayHealth, useGetMe } from "@workspace/api-client-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -220,12 +220,27 @@ export function Layout({ children }: LayoutProps) {
 /** Signed-in identity + sign-out, fed by the Better Auth session. */
 function UserMenu() {
   const { data: session } = authClient.useSession();
+  const { data: me } = useGetMe();
+  const [location] = useLocation();
   if (!session?.user) return null;
   return (
     <div className="flex items-center gap-2 pl-2 border-l border-border">
       <span className="hidden md:inline text-muted-foreground max-w-[14rem] truncate" title={session.user.email}>
         {session.user.name || session.user.email}
       </span>
+      {me?.appRole === "admin" ? (
+        <Link
+          href="/admin"
+          className={cn(
+            "inline-flex items-center gap-1 hover:text-foreground",
+            location === "/admin" ? "text-primary" : "text-muted-foreground"
+          )}
+          title="Administration"
+        >
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span className="hidden lg:inline">Admin</span>
+        </Link>
+      ) : null}
       <button
         type="button"
         onClick={() => void signOutEverywhere()}

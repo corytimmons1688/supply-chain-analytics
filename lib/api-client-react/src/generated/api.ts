@@ -18,6 +18,7 @@ import type {
 
 import type {
   AdjustmentTotals,
+  AppUsers,
   ApproveDraftInput,
   ApprovePoAgentDraft200,
   AslEntry,
@@ -84,6 +85,7 @@ import type {
   MaterialPoSubmitResult,
   MaterialPoUpdateInput,
   MaterialPoUpdateResult,
+  Me,
   MonthlySnapshot,
   NetsuiteSyncResult,
   OnHandInventory,
@@ -105,6 +107,8 @@ import type {
   SeedVendors200,
   SendMaterialPo409,
   SendMaterialPoTest409,
+  SetAppUserInput,
+  SetAppUserResult,
   SetEoNotes200,
   StockGoal,
   StockRolls,
@@ -3506,6 +3510,228 @@ export function useGetPoTimeline<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary The signed-in user's app-level identity and role
+ */
+export const getGetMeUrl = () => {
+  return `/api/me`;
+};
+
+export const getMe = async (options?: RequestInit): Promise<Me> => {
+  return customFetch<Me>(getGetMeUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetMeQueryKey = () => {
+  return [`/api/me`] as const;
+};
+
+export const getGetMeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMe>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getMe>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetMeQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getMe>>> = ({
+    signal,
+  }) => getMe({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMe>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMeQueryResult = NonNullable<Awaited<ReturnType<typeof getMe>>>;
+export type GetMeQueryError = ErrorType<unknown>;
+
+/**
+ * @summary The signed-in user's app-level identity and role
+ */
+
+export function useGetMe<
+  TData = Awaited<ReturnType<typeof getMe>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getMe>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMeQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary All app users with role and status (admin only)
+ */
+export const getGetAppUsersUrl = () => {
+  return `/api/admin/users`;
+};
+
+export const getAppUsers = async (options?: RequestInit): Promise<AppUsers> => {
+  return customFetch<AppUsers>(getGetAppUsersUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAppUsersQueryKey = () => {
+  return [`/api/admin/users`] as const;
+};
+
+export const getGetAppUsersQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAppUsers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAppUsers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAppUsersQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAppUsers>>> = ({
+    signal,
+  }) => getAppUsers({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAppUsers>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAppUsersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAppUsers>>
+>;
+export type GetAppUsersQueryError = ErrorType<unknown>;
+
+/**
+ * @summary All app users with role and status (admin only)
+ */
+
+export function useGetAppUsers<
+  TData = Awaited<ReturnType<typeof getAppUsers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAppUsers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAppUsersQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Change a user's role or status (admin only)
+ */
+export const getSetAppUserUrl = () => {
+  return `/api/admin/users`;
+};
+
+export const setAppUser = async (
+  setAppUserInput: SetAppUserInput,
+  options?: RequestInit,
+): Promise<SetAppUserResult> => {
+  return customFetch<SetAppUserResult>(getSetAppUserUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(setAppUserInput),
+  });
+};
+
+export const getSetAppUserMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setAppUser>>,
+    TError,
+    { data: BodyType<SetAppUserInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setAppUser>>,
+  TError,
+  { data: BodyType<SetAppUserInput> },
+  TContext
+> => {
+  const mutationKey = ["setAppUser"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setAppUser>>,
+    { data: BodyType<SetAppUserInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setAppUser(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetAppUserMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setAppUser>>
+>;
+export type SetAppUserMutationBody = BodyType<SetAppUserInput>;
+export type SetAppUserMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Change a user's role or status (admin only)
+ */
+export const useSetAppUser = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setAppUser>>,
+    TError,
+    { data: BodyType<SetAppUserInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setAppUser>>,
+  TError,
+  { data: BodyType<SetAppUserInput> },
+  TContext
+> => {
+  return useMutation(getSetAppUserMutationOptions(options));
+};
 
 /**
  * @summary Whether PO email can be sent, and from which mailbox

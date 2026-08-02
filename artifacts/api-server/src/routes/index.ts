@@ -10,6 +10,7 @@ import demandRouter from "./demand";
 import cycleCountsRouter from "./cycle-counts";
 import vendorsRouter from "./vendors";
 import integrationsRouter from "./integrations";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(demandRouter);
 router.use(cycleCountsRouter);
 router.use(vendorsRouter);
 router.use(integrationsRouter);
+router.use(adminRouter);
 
 export default router;

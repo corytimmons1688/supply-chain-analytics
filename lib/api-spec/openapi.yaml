@@ -712,6 +712,43 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PoTimeline" }
+  /me:
+    get:
+      operationId: getMe
+      tags: [admin]
+      summary: The signed-in user's app-level identity and role
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+  /admin/users:
+    get:
+      operationId: getAppUsers
+      tags: [admin]
+      summary: All app users with role and status (admin only)
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUsers" }
+    put:
+      operationId: setAppUser
+      tags: [admin]
+      summary: Change a user's role or status (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetAppUserInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetAppUserResult" }
   /integrations/gmail:
     get:
       operationId: getGmailStatus
@@ -2204,6 +2241,43 @@ components:
         vendorName: { type: string, nullable: true, description: "Vendor the lesson applies to; null = all vendors." }
         lesson: { type: string }
         createdAt: { type: string }
+    Me:
+      type: object
+      required: [email, appRole]
+      properties:
+        email: { type: string }
+        name: { type: string, nullable: true }
+        appRole: { type: string, description: "This app's role for the user: member | admin." }
+    AppUser:
+      type: object
+      required: [email, role, status, firstSeenAt, lastSeenAt]
+      properties:
+        email: { type: string }
+        name: { type: string, nullable: true }
+        role: { type: string, description: "member | admin" }
+        status: { type: string, description: "active | blocked" }
+        firstSeenAt: { type: string }
+        lastSeenAt: { type: string }
+    AppUsers:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/AppUser" }
+    SetAppUserInput:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string }
+        role: { type: string, description: "member | admin. Omit to leave unchanged." }
+        status: { type: string, description: "active | blocked. Omit to leave unchanged." }
+    SetAppUserResult:
+      type: object
+      required: [email, saved]
+      properties:
+        email: { type: string }
+        saved: { type: boolean }
     EoReportItem:
       type: object
       required: [stockId, inactive, discontinued, onHandFootage, rollCount, valueIsEstimate, avgMonthlyFootage]

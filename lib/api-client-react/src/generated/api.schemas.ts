@@ -757,6 +757,41 @@ export interface AgentLesson {
   createdAt: string;
 }
 
+export interface Me {
+  email: string;
+  name?: string | null;
+  /** This app's role for the user: member | admin. */
+  appRole: string;
+}
+
+export interface AppUser {
+  email: string;
+  name?: string | null;
+  /** member | admin */
+  role: string;
+  /** active | blocked */
+  status: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface AppUsers {
+  users: AppUser[];
+}
+
+export interface SetAppUserInput {
+  email: string;
+  /** member | admin. Omit to leave unchanged. */
+  role?: string;
+  /** active | blocked. Omit to leave unchanged. */
+  status?: string;
+}
+
+export interface SetAppUserResult {
+  email: string;
+  saved: boolean;
+}
+
 export interface EoReportItem {
   stockId: string;
   description?: string | null;
