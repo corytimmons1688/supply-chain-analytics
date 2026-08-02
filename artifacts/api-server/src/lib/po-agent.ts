@@ -258,7 +258,69 @@ export interface AgentRunResult {
   draftsCreated: number;
   closed: number;
   flagged: number;
+  /** LT-created POs adopted into tracking this run. */
+  adopted?: number;
   skipped?: string;
+}
+
+/** Don't adopt LT POs older than this — their email trail is stale history. */
+const ADOPT_MAX_AGE_DAYS = 60;
+
+/**
+ * POs typed directly into Label Traxx (or emailed outside the dashboard) have
+ * no material_po row, so the watcher never saw them — e.g. PO 2595, whose
+ * proforma with a promised date sat unread in the mailbox. For agent-enabled
+ * vendors, create a tracking record for every open LT stock PO we don't
+ * already track. emailedAt is set to the LT PO date: it's the tracking start
+ * for the vendor-domain mail search, not a claim that the dashboard sent it
+ * (emailedTo stays null — the UI distinguishes on that).
+ */
+async function adoptLtPos(vendorByName: Map<string, { toEmails: string | null }>): Promise<number> {
+  const tracked = new Set<string>();
+  for (const po of await db.select({ lt: materialPoTable.ltPoNumbers }).from(materialPoTable)) {
+    for (const n of (po.lt ?? "").split(",").map((s) => s.trim()).filter(Boolean)) tracked.add(n);
+  }
+  const cutoff = new Date(Date.now() - ADOPT_MAX_AGE_DAYS * 864e5).toISOString().slice(0, 10);
+  const ltPos = await db.select().from(ltPoTable).where(and(eq(ltPoTable.poType, "Stock"), eq(ltPoTable.closed, false)));
+  let adopted = 0;
+  for (const lt of ltPos) {
+    if (lt.receivedDate) continue;
+    if (!lt.poDate || lt.poDate < cutoff) continue;
+    if (tracked.has(lt.poNumber)) continue;
+    const vendor = lt.supplierName ? vendorByName.get(lt.supplierName) : undefined;
+    if (!vendor) continue;
+    const [row] = await db
+      .insert(materialPoTable)
+      .values({
+        vendorName: lt.supplierName!,
+        vendorEmails: vendor.toEmails,
+        status: "submitted_lt",
+        ltPoNumbers: lt.poNumber,
+        requestedDeliveryDate: lt.requestedDeliveryDate,
+        emailedAt: new Date(`${lt.poDate}T12:00:00Z`),
+      })
+      .returning({ id: materialPoTable.id });
+    if (!row) continue;
+    const footage =
+      lt.orderedMsi && lt.masterWidth && lt.masterWidth > 0 ? (lt.orderedMsi * 1000) / (12 * lt.masterWidth) : null;
+    await db.insert(materialPoLineTable).values({
+      poId: row.id,
+      stockId: lt.stockNum ?? "?",
+      description: lt.description,
+      rolls: Math.round(lt.quantity ?? 0),
+      footage,
+      width: lt.masterWidth,
+    });
+    await db.insert(poEmailEventTable).values({
+      poId: row.id,
+      direction: "system",
+      kind: "note",
+      summary: `Adopted from Label Traxx (PO ${lt.poNumber}, created ${lt.poDate}) — the PO was created outside the dashboard; the agent will watch for vendor emails citing this number.`,
+    });
+    adopted += 1;
+    logger.info({ ltPo: lt.poNumber, vendor: lt.supplierName }, "Adopted LT-created PO for agent tracking");
+  }
+  return adopted;
 }
 
 export async function runPoAgent(): Promise<AgentRunResult> {
@@ -273,6 +335,9 @@ export async function runPoAgent(): Promise<AgentRunResult> {
   const vendorByName = new Map(enabledVendors.map((v) => [v.vendorName, v]));
   if (vendorByName.size === 0) return { ...zero, skipped: "no vendors enabled" };
 
+  // Pull in LT-created POs first so this same run processes their mail.
+  const adopted = await adoptLtPos(vendorByName);
+
   // Buyer-approved conventions, injected into every classification for the
   // matching vendor (null vendorName = applies everywhere).
   const allLessons = await db.select().from(agentLessonTable);
@@ -282,7 +347,7 @@ export async function runPoAgent(): Promise<AgentRunResult> {
   const pos = (
     await db.select().from(materialPoTable).where(isNotNull(materialPoTable.emailedAt))
   ).filter((po) => vendorByName.has(po.vendorName) && (po.agentState == null || (ACTIVE_STATES as readonly string[]).includes(po.agentState)));
-  if (pos.length === 0) return zero;
+  if (pos.length === 0) return { ...zero, adopted };
 
   const lines = await db
     .select()
@@ -290,7 +355,7 @@ export async function runPoAgent(): Promise<AgentRunResult> {
     .where(inArray(materialPoLineTable.poId, pos.map((p) => p.id)));
   const lineByPo = new Map(lines.map((l) => [l.poId, l]));
 
-  const result = { ...zero };
+  const result = { ...zero, adopted };
 
   for (const po of pos) {
     result.posChecked += 1;
@@ -486,9 +551,10 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       let sawInbound = events.some((e) => e.direction === "inbound");
       for (const msg of fresh) {
         const from = header(msg, "From") ?? "";
-        if (selfEmail && from.toLowerCase().includes(selfEmail)) {
-          // Our own message (original send from before events existed, or a
-          // manual reply Cory sent) — record it so we never re-fetch it.
+        if ((selfEmail && from.toLowerCase().includes(selfEmail)) || from.toLowerCase().includes("@calyxcontainers.com")) {
+          // Our own side of the conversation (the original send, a manual
+          // reply Cory sent, or an internal colleague like AP replying on the
+          // thread) — record it so we never re-fetch it, never classify it.
           await appendEvent(po.id, {
             direction: "outbound",
             kind: "sent",

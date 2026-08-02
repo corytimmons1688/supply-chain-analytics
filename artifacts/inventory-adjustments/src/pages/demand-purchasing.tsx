@@ -1835,7 +1835,7 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       {po.actualLeadDays != null && ` · ${po.actualLeadDays}d actual lead time`}
                     </div>
                   )}
-                  {po.emailedAt && (
+                  {po.emailedAt && po.emailedTo && (
                     <div className="mt-0.5 text-muted-foreground inline-flex items-center gap-1">
                       <Mail className="w-3.5 h-3.5" /> Emailed {new Date(po.emailedAt).toLocaleDateString()} to{" "}
                       {po.emailedTo}
