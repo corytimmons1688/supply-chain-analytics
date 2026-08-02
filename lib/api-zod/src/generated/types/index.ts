@@ -154,6 +154,7 @@ export * from "./stockRoll";
 export * from "./stockRolls";
 export * from "./suggestedWidth";
 export * from "./suggestedWidthReason";
+export * from "./syncAge";
 export * from "./syncLabeltraxxLeadTimesParams";
 export * from "./timeseriesPoint";
 export * from "./toParameter";

@@ -22,6 +22,17 @@ export const GatewayHealthResponse = zod.object({
   odbcConnected: zod.boolean().optional(),
   latencyMs: zod.number().optional(),
   error: zod.string().nullish(),
+  syncAges: zod
+    .array(
+      zod.object({
+        source: zod.string(),
+        label: zod.string(),
+        syncedAt: zod.string(),
+        minutesAgo: zod.number(),
+      }),
+    )
+    .optional()
+    .describe("Age of each data source's last successful sync, display order."),
 });
 
 /**

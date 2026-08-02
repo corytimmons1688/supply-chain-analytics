@@ -26,7 +26,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-async function recordLtSyncState(source: string, detail: unknown): Promise<void> {
+export async function recordLtSyncState(source: string, detail: unknown): Promise<void> {
   const detailJson = JSON.stringify(detail);
   await db
     .insert(syncStateTable)

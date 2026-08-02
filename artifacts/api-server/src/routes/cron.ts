@@ -3,7 +3,7 @@ import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
-import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates, syncLtPos } from "../lib/lt-sync";
+import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates, syncLtPos, recordLtSyncState } from "../lib/lt-sync";
 import { performDazpakSync } from "../lib/dazpak-sync";
 import { dazpakConfigured } from "../lib/dazpakApi";
 
@@ -81,6 +81,8 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
     } catch (err) {
       out["pos"] = { error: err instanceof Error ? err.message : String(err) };
     }
+    // Freshness bookkeeping — the header's data-age indicator reads this.
+    await recordLtSyncState("labeltraxx_rolls", out);
     logger.info({ out }, "LT frequent refresh ran");
     res.json(out);
   } catch (err) {

@@ -26,12 +26,27 @@ if (!basePath) {
   );
 }
 
+// Build identity for version-skew detection: the id is baked into the bundle
+// AND emitted as version.json next to index.html. A long-lived tab compares
+// the two on focus; a mismatch means a newer deploy exists.
+const buildId = process.env.BUILD_ID?.trim() || new Date().toISOString();
+
 export default defineConfig({
   base: basePath,
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId),
+  },
   plugins: [
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
+    {
+      name: "emit-version-json",
+      apply: "build",
+      generateBundle() {
+        this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ buildId }) });
+      },
+    },
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [

@@ -2446,6 +2446,18 @@ components:
         odbcConnected: { type: boolean }
         latencyMs: { type: number }
         error: { type: string, nullable: true }
+        syncAges:
+          type: array
+          description: "Age of each data source's last successful sync, display order."
+          items: { $ref: "#/components/schemas/SyncAge" }
+    SyncAge:
+      type: object
+      required: [source, label, syncedAt, minutesAgo]
+      properties:
+        source: { type: string }
+        label: { type: string }
+        syncedAt: { type: string }
+        minutesAgo: { type: number }
     BucketSize:
       type: string
       enum: [day, week, month, quarter, year]

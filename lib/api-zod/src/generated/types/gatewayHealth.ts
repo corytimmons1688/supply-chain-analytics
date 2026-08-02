@@ -5,10 +5,13 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { SyncAge } from "./syncAge";
 
 export interface GatewayHealth {
   reachable: boolean;
   odbcConnected?: boolean;
   latencyMs?: number;
   error?: string | null;
+  /** Age of each data source's last successful sync, display order. */
+  syncAges?: SyncAge[];
 }

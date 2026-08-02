@@ -934,11 +934,20 @@ export interface MaterialPoSubmitResult {
   email: PoEmail;
 }
 
+export interface SyncAge {
+  source: string;
+  label: string;
+  syncedAt: string;
+  minutesAgo: number;
+}
+
 export interface GatewayHealth {
   reachable: boolean;
   odbcConnected?: boolean;
   latencyMs?: number;
   error?: string | null;
+  /** Age of each data source's last successful sync, display order. */
+  syncAges?: SyncAge[];
 }
 
 export type BucketSize = (typeof BucketSize)[keyof typeof BucketSize];

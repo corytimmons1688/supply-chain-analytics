@@ -205,6 +205,7 @@ export function Layout({ children }: LayoutProps) {
             {health?.latencyMs ? `${health.latencyMs}ms` : "---"}
             <Activity className="w-3.5 h-3.5 ml-1.5" />
           </div>
+          <DataAge ages={health?.syncAges} />
           <UserMenu />
         </div>
       </header>
@@ -216,6 +217,33 @@ export function Layout({ children }: LayoutProps) {
   );
 }
 
+
+function fmtAge(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  return h < 48 ? `${h}h ${minutes % 60}m` : `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * How old the data behind the dashboard is. The headline number is the
+ * freshest Label Traxx pull (the 15-min roll refresh or the hourly full
+ * sync — whichever ran last); hovering lists every source. Makes "refreshing
+ * the page won't change this number" visible instead of silent.
+ */
+function DataAge({ ages }: { ages?: { source: string; label: string; minutesAgo: number }[] }) {
+  if (!ages?.length) return null;
+  const lt = ages.filter((a) => a.source === "labeltraxx_rolls" || a.source === "labeltraxx_api");
+  const headline = (lt.length ? lt : ages).reduce((a, b) => (b.minutesAgo < a.minutesAgo ? b : a));
+  const stale = headline.minutesAgo > 120;
+  return (
+    <div
+      className={cn("hidden md:flex items-center gap-1.5 font-mono", stale && "text-amber-600 dark:text-amber-500")}
+      title={ages.map((a) => `${a.label}: ${fmtAge(a.minutesAgo)} ago`).join("\n")}
+    >
+      <span>Data {fmtAge(headline.minutesAgo)}</span>
+    </div>
+  );
+}
 
 /** Signed-in identity + sign-out, fed by the Better Auth session. */
 function UserMenu() {

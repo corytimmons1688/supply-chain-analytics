@@ -21,6 +21,7 @@ import AdminPage from "@/pages/admin";
 import { LoginPage, RegisterPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from "@/pages/auth";
 import { authClient, getAuthToken, clearAuthToken, signOutEverywhere } from "@/lib/auth-client";
 import { useGetMe } from "@workspace/api-client-react";
+import { VersionWatcher } from "@/components/version-watcher";
 
 // Every generated API call carries the Better Auth bearer token.
 setAuthTokenGetter(() => getAuthToken());
@@ -36,6 +37,18 @@ function onAuthError(err: unknown): void {
 const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: onAuthError }),
   mutationCache: new MutationCache({ onError: onAuthError }),
+  // Global freshness policy: anything older than a minute refetches when the
+  // tab regains focus or the network comes back, and every mounted query
+  // silently re-pulls every 5 minutes while the tab stays visible (intervals
+  // pause for hidden tabs). Individual hooks may still override staleTime.
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      refetchInterval: 5 * 60_000,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+    },
+  },
 });
 
 /**
@@ -133,6 +146,7 @@ function App() {
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Router />
         </WouterRouter>
+        <VersionWatcher />
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
