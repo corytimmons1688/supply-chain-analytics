@@ -3,7 +3,14 @@ import { captureSnapshot } from "../lib/snapshot-service";
 import { captureMonthlySnapshot } from "../lib/monthly-snapshot-service";
 import { logger } from "../lib/logger";
 import { performNetsuiteSync, performQualitySync, performLabeltraxxSync } from "./vendors";
-import { performLtApiSync, syncLtOnHandRolls, syncLtRollDates, syncLtPos, recordLtSyncState } from "../lib/lt-sync";
+import {
+  performLtApiSync,
+  syncLtOnHandRolls,
+  syncLtRollDates,
+  syncLtPos,
+  syncLtTickets,
+  recordLtSyncState,
+} from "../lib/lt-sync";
 import { performDazpakSync } from "../lib/dazpak-sync";
 import { dazpakConfigured } from "../lib/dazpakApi";
 
@@ -80,6 +87,17 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
       out["pos"] = (await syncLtPos({})).pos;
     } catch (err) {
       out["pos"] = { error: err instanceof Error ? err.message : String(err) };
+    }
+    // Changed tickets: buyers edit stock allocations (e.g. swap to an
+    // alternative stock) and expect the demand donut to follow within minutes,
+    // not at the next hourly full sync. Incremental — details fetched only for
+    // tickets in the ModifyDateSince list or new to the mirror. Isolated for
+    // the same reason as POs.
+    try {
+      const t = await syncLtTickets({ sinceDays: 1 });
+      out["tickets"] = { synced: t.tickets, deleted: t.deleted, refreshed: t.refreshed };
+    } catch (err) {
+      out["tickets"] = { error: err instanceof Error ? err.message : String(err) };
     }
     // Freshness bookkeeping — the header's data-age indicator reads this.
     await recordLtSyncState("labeltraxx_rolls", out);
