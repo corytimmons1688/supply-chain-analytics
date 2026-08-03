@@ -18,6 +18,17 @@ export const vendorContactTable = pgTable("vendor_contact", {
   // Per-vendor opt-in for the PO follow-up agent. Off by default so the agent
   // never watches or nudges a vendor Cory hasn't explicitly enabled.
   agentEnabled: boolean("agent_enabled").default(false).notNull(),
+  /**
+   * Draft kinds this vendor may receive WITHOUT a human approving each one,
+   * comma-separated (e.g. "tracking_request"). Empty/null = approve everything,
+   * which stays the default.
+   *
+   * Deliberately per-vendor AND per-kind: chasing a tracking number is tedium
+   * worth automating, whereas anything touching price, quantity or a dispute
+   * should never leave without someone reading it. The server also enforces its
+   * own allowlist, so a bad value here can't widen what's sendable.
+   */
+  autoSendKinds: text("auto_send_kinds"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -41,6 +52,16 @@ export const materialPoTable = pgTable("material_po", {
   kind: text("kind").notNull().default("po"),
   /** For a release: the make-and-hold PO number(s) the material is held under. */
   releaseFromPoNumbers: text("release_from_po_numbers"),
+  /**
+   * Who raised it: "buyer" (Suggested POs or the New PO dialog) or "mrp" (drafted
+   * automatically from the plan's planned-order releases). Recorded because a
+   * machine-drafted PO deserves more scrutiny before it goes out, and because
+   * without it the auto-drafter can't tell its own work from a buyer's and would
+   * duplicate.
+   */
+  createdBy: text("created_by").notNull().default("buyer"),
+  /** Which plan week the auto-draft came from, for traceability. */
+  plannedForWeek: text("planned_for_week"),
   status: text("status").notNull().default("draft"), // draft | submitted | submitted_lt
   // Label Traxx PO numbers created for this order (comma-separated), once
   // LT submission is enabled.

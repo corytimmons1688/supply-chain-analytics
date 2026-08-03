@@ -156,6 +156,12 @@ export interface MrpRow {
    * flagged, because an estimate is not a vendor commitment.
    */
   undatedReceiptFootage: number;
+  /**
+   * How much of this row's incoming supply sits on a make-and-hold order. Real
+   * supply, but it only moves once a release is requested — so a plan that
+   * depends on it depends on someone calling it in.
+   */
+  makeAndHoldSupplyFootage: number;
 }
 
 export interface MrpResult {
@@ -433,13 +439,32 @@ export async function buildMrp(opts: { monthsBack?: number; weeks?: number } = {
       const receipts = new Array<number>(weeks.length).fill(0);
       /** On-order footage whose arrival week had to be estimated. */
       let undatedReceiptFootage = 0;
+      /**
+       * Footage on a make-and-hold order. Counted as supply, but it needs a
+       * release request before it ships — so a row leaning on it is not the same
+       * as one with freight already booked.
+       */
+      let makeAndHoldSupplyFootage = 0;
       for (const p of posByStock.get(stockId) ?? []) {
         const w = p.masterWidth && p.masterWidth > 0 ? p.masterWidth : masterWidth;
         if (widthGroupKey(w) !== widthKey) continue;
-        // Make-and-hold rolls sit in the vendor's warehouse; nothing arrives
-        // until a release is requested, so they are not scheduled receipts.
-        if (isMakeAndHoldPo(p.supplierName)) continue;
+        /**
+         * Make-and-hold material DOES count as a scheduled receipt.
+         *
+         * It was excluded on the reasoning that nothing arrives until a release
+         * is requested — true of the final leg, but it made the plan believe no
+         * supply existed and plan orders for material we already own. Caught when
+         * the auto-drafter proposed ordinary POs to Dazpak for #288, #307 and
+         * #278 while 470,000 / 480,000 / 160,000 ft sat on their make-and-hold
+         * orders. Same failure as dropping undated POs: discarded supply becomes
+         * a double-buy.
+         *
+         * The difference from an ordinary PO is only who initiates the last leg,
+         * so the footage counts and the row is flagged instead — a release is
+         * still needed to move it, which the Make & Hold panel drives.
+         */
         const ft = p.orderedFootage > 0 ? p.orderedFootage : p.quantityRolls * typicalRoll;
+        if (isMakeAndHoldPo(p.supplierName)) makeAndHoldSupplyFootage += ft;
         let date = p.dueDateIso ?? p.agentPromisedIso ?? p.requestedDeliveryIso;
         if (!date) {
           // A PO with no date on it at all is still real supply — #195 has
@@ -596,6 +621,7 @@ export async function buildMrp(opts: { monthsBack?: number; weeks?: number } = {
         lateReleaseFootage: Math.round(lateReleaseFootage),
         orderQuantityIgnored: orderQtyImplausible ? rawOrderQty : null,
         undatedReceiptFootage: Math.round(undatedReceiptFootage),
+        makeAndHoldSupplyFootage: Math.round(makeAndHoldSupplyFootage),
       });
     }
   }

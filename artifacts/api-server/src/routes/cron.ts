@@ -161,8 +161,34 @@ router.get("/cron/daily-digest", async (req, res, next) => {
     if (!isWeekday && !force) {
       return void res.json({ sent: false, skipped: `${weekday} — digest runs Mon-Fri` });
     }
+    /**
+     * Draft the plan's due purchase orders BEFORE building the digest, so the
+     * morning mail reflects what's waiting. Draft-only — nothing reaches Label
+     * Traxx or a vendor without someone approving it.
+     *
+     * Isolated: a drafting failure must not cost the digest, which is the part
+     * people actually read.
+     */
+    const out: Record<string, unknown> = {};
+    try {
+      const { draftPlannedPos } = await import("../lib/mrp-autodraft");
+      const d = await draftPlannedPos();
+      out["autoDraft"] = {
+        considered: d.rowsConsidered,
+        drafted: d.drafted,
+        skipped: {
+          existingDraft: d.skippedExistingDraft,
+          makeAndHold: d.skippedMakeAndHold,
+          discontinued: d.skippedDiscontinued,
+          noVendor: d.skippedNoVendor,
+          badConfig: d.skippedBadConfig,
+        },
+      };
+    } catch (err) {
+      out["autoDraft"] = { error: err instanceof Error ? err.message : String(err) };
+    }
     const { sendDigest } = await import("../lib/daily-digest");
-    const out = await sendDigest();
+    out["digest"] = await sendDigest();
     logger.info({ out }, "Daily digest cron ran");
     res.json(out);
   } catch (err) {
