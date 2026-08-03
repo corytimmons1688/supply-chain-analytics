@@ -83,6 +83,7 @@ import type {
   ListVendorShipmentsParams,
   ListVendors200,
   ListWeeklySnapshots200,
+  MaterialForecast,
   MaterialPoCreateResult,
   MaterialPoInput,
   MaterialPoList,
@@ -3507,6 +3508,81 @@ export function useGetPoTimeline<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetPoTimelineQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Material forecast from NetSuite orders still Pending Approval
+ */
+export const getGetMaterialForecastUrl = () => {
+  return `/api/demand/forecast`;
+};
+
+export const getMaterialForecast = async (
+  options?: RequestInit,
+): Promise<MaterialForecast> => {
+  return customFetch<MaterialForecast>(getGetMaterialForecastUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetMaterialForecastQueryKey = () => {
+  return [`/api/demand/forecast`] as const;
+};
+
+export const getGetMaterialForecastQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMaterialForecast>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMaterialForecast>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetMaterialForecastQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMaterialForecast>>
+  > = ({ signal }) => getMaterialForecast({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMaterialForecast>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMaterialForecastQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMaterialForecast>>
+>;
+export type GetMaterialForecastQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Material forecast from NetSuite orders still Pending Approval
+ */
+
+export function useGetMaterialForecast<
+  TData = Awaited<ReturnType<typeof getMaterialForecast>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMaterialForecast>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMaterialForecastQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

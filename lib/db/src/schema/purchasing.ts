@@ -188,6 +188,54 @@ export const eoDispositionTable = pgTable("eo_disposition", {
 export type EoDispositionRow = typeof eoDispositionTable.$inferSelect;
 
 /**
+ * Material forecast from NetSuite sales orders that are still Pending Approval
+ * — demand that exists commercially but hasn't reached Label Traxx yet.
+ *
+ * One row per SO line carrying a label or flexpack item. The line's SKU
+ * resolves to a Label Traxx product (LT product.description === the NS item
+ * id), whose construction (repeat, no-across, stock numbers + widths) drives
+ * the footage calculation. `stockDemand` holds the per-material result.
+ *
+ * A line leaves the forecast the moment NetSuite's "LT Ticket" field
+ * (custcollt_ticket_num) is populated: at that point a real ticket exists in
+ * LT and the demand is already counted as committed open-ticket footage, so
+ * keeping it here would double-count.
+ */
+export const nsForecastLineTable = pgTable(
+  "ns_forecast_line",
+  {
+    /** NetSuite transactionline.uniquekey — stable per line. */
+    id: text("id").primaryKey(),
+    soId: text("so_id").notNull(),
+    tranId: text("tran_id").notNull(), // e.g. SO15577
+    lineNo: integer("line_no"),
+    customerName: text("customer_name"),
+    /** NetSuite item id — also the Label Traxx product description. */
+    sku: text("sku").notNull(),
+    /** NetSuite item class: Labels | Flex Pack. */
+    itemClass: text("item_class"),
+    quantity: doublePrecision("quantity").notNull(),
+    expectedShipDate: text("expected_ship_date"), // ISO
+    orderDate: text("order_date"), // ISO
+    /** NetSuite's LT Ticket field. Non-null ⇒ excluded from the forecast. */
+    ltTicketNum: text("lt_ticket_num"),
+    /** LT product this SKU resolved to (null = unresolved, no construction). */
+    ltProductNumber: text("lt_product_number"),
+    ltUniqueProdId: integer("lt_unique_prod_id"),
+    /** True when the LT construction says flexpack rather than label. */
+    isFlexpack: boolean("is_flexpack").default(false).notNull(),
+    /** Why a line couldn't be forecast (no LT product, no repeat, etc.). */
+    unresolvedReason: text("unresolved_reason"),
+    /** [{ stockId, widthIn, footage }] — the forecast material requirement. */
+    stockDemand: jsonb("stock_demand"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("ns_forecast_sku_idx").on(t.sku), index("ns_forecast_ticket_idx").on(t.ltTicketNum)],
+);
+
+export type NsForecastLineRow = typeof nsForecastLineTable.$inferSelect;
+
+/**
  * Conversation with the PO agent — the buyer asks questions ("what's late?")
  * and gives directions ("set 2595 to 8/12", "stop nudging Mactac"). Persisted
  * so the thread survives reloads and the model keeps context between turns.

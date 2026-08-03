@@ -773,6 +773,48 @@ export interface AgentLesson {
   createdAt: string;
 }
 
+export interface ForecastStock {
+  stockId: string;
+  widthIn: number;
+  footage: number;
+}
+
+export interface ForecastLine {
+  id: string;
+  soNumber: string;
+  lineNo?: number | null;
+  customerName?: string | null;
+  sku: string;
+  itemClass?: string | null;
+  quantity: number;
+  expectedShipDate?: string | null;
+  orderDate?: string | null;
+  ltProductNumber?: string | null;
+  isFlexpack: boolean;
+  /** Set when the SKU has no Label Traxx construction, so no footage could be computed. */
+  unresolvedReason?: string | null;
+  /** Sellable web before the spoilage allowance. */
+  goodLengthFt?: number | null;
+  /** True when repeat/no-across were derived here rather than read off the LT product. */
+  geometryDerived: boolean;
+  stocks: ForecastStock[];
+}
+
+export interface ForecastStockRollup {
+  stockId: string;
+  footage: number;
+  lines: number;
+  earliestShipDate?: string | null;
+}
+
+export interface MaterialForecast {
+  /** Allowance added to good length for spoilage/make-ready. */
+  spoilagePct: number;
+  unresolvedCount: number;
+  items: ForecastLine[];
+  byStock: ForecastStockRollup[];
+}
+
 export interface AgentChatToolCall {
   /** Tool the agent invoked, e.g. set_promised_date. */
   tool: string;

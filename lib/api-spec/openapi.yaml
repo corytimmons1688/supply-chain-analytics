@@ -712,6 +712,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PoTimeline" }
+  /demand/forecast:
+    get:
+      operationId: getMaterialForecast
+      tags: [demand]
+      summary: Material forecast from NetSuite orders still Pending Approval
+      responses:
+        "200":
+          description: Forecast
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterialForecast" }
   /demand/agent-chat:
     get:
       operationId: getAgentChat
@@ -2285,6 +2296,54 @@ components:
         vendorName: { type: string, nullable: true, description: "Vendor the lesson applies to; null = all vendors." }
         lesson: { type: string }
         createdAt: { type: string }
+    ForecastStock:
+      type: object
+      required: [stockId, widthIn, footage]
+      properties:
+        stockId: { type: string }
+        widthIn: { type: number }
+        footage: { type: number }
+    ForecastLine:
+      type: object
+      required: [id, soNumber, sku, quantity, isFlexpack, geometryDerived, stocks]
+      properties:
+        id: { type: string }
+        soNumber: { type: string }
+        lineNo: { type: number, nullable: true }
+        customerName: { type: string, nullable: true }
+        sku: { type: string }
+        itemClass: { type: string, nullable: true }
+        quantity: { type: number }
+        expectedShipDate: { type: string, nullable: true }
+        orderDate: { type: string, nullable: true }
+        ltProductNumber: { type: string, nullable: true }
+        isFlexpack: { type: boolean }
+        unresolvedReason: { type: string, nullable: true, description: "Set when the SKU has no Label Traxx construction, so no footage could be computed." }
+        goodLengthFt: { type: number, nullable: true, description: "Sellable web before the spoilage allowance." }
+        geometryDerived: { type: boolean, description: "True when repeat/no-across were derived here rather than read off the LT product." }
+        stocks:
+          type: array
+          items: { $ref: "#/components/schemas/ForecastStock" }
+    ForecastStockRollup:
+      type: object
+      required: [stockId, footage, lines]
+      properties:
+        stockId: { type: string }
+        footage: { type: number }
+        lines: { type: integer }
+        earliestShipDate: { type: string, nullable: true }
+    MaterialForecast:
+      type: object
+      required: [spoilagePct, unresolvedCount, items, byStock]
+      properties:
+        spoilagePct: { type: number, description: "Allowance added to good length for spoilage/make-ready." }
+        unresolvedCount: { type: integer }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ForecastLine" }
+        byStock:
+          type: array
+          items: { $ref: "#/components/schemas/ForecastStockRollup" }
     AgentChatToolCall:
       type: object
       required: [tool, result]

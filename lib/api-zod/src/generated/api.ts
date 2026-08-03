@@ -1442,6 +1442,61 @@ export const GetPoTimelineResponse = zod.object({
 });
 
 /**
+ * @summary Material forecast from NetSuite orders still Pending Approval
+ */
+export const GetMaterialForecastResponse = zod.object({
+  spoilagePct: zod
+    .number()
+    .describe("Allowance added to good length for spoilage\/make-ready."),
+  unresolvedCount: zod.number(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      soNumber: zod.string(),
+      lineNo: zod.number().nullish(),
+      customerName: zod.string().nullish(),
+      sku: zod.string(),
+      itemClass: zod.string().nullish(),
+      quantity: zod.number(),
+      expectedShipDate: zod.string().nullish(),
+      orderDate: zod.string().nullish(),
+      ltProductNumber: zod.string().nullish(),
+      isFlexpack: zod.boolean(),
+      unresolvedReason: zod
+        .string()
+        .nullish()
+        .describe(
+          "Set when the SKU has no Label Traxx construction, so no footage could be computed.",
+        ),
+      goodLengthFt: zod
+        .number()
+        .nullish()
+        .describe("Sellable web before the spoilage allowance."),
+      geometryDerived: zod
+        .boolean()
+        .describe(
+          "True when repeat\/no-across were derived here rather than read off the LT product.",
+        ),
+      stocks: zod.array(
+        zod.object({
+          stockId: zod.string(),
+          widthIn: zod.number(),
+          footage: zod.number(),
+        }),
+      ),
+    }),
+  ),
+  byStock: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      footage: zod.number(),
+      lines: zod.number(),
+      earliestShipDate: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
  * @summary Conversation history with the PO agent (per signed-in user)
  */
 export const GetAgentChatResponse = zod.object({

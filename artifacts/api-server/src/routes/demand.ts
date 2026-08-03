@@ -2059,6 +2059,68 @@ router.post(
 );
 
 /**
+ * Material forecast from NetSuite orders still in Pending Approval — demand
+ * that exists commercially but hasn't reached Label Traxx as a ticket yet.
+ */
+router.get(
+  "/demand/forecast",
+  asyncHandler(async (_req, res) => {
+    const { nsForecastLineTable } = await import("@workspace/db");
+    const { forecastSpoilagePct } = await import("../lib/forecast-sync");
+    const rows = await db.select().from(nsForecastLineTable);
+    const open = rows.filter((r) => !r.ltTicketNum);
+    const items = open
+      .map((r) => {
+        const sd = r.stockDemand as
+          | { stocks?: { stockId: string; widthIn: number; footage: number }[]; goodLengthFt?: number; derived?: boolean }
+          | null;
+        return {
+          id: r.id,
+          soNumber: r.tranId,
+          lineNo: r.lineNo,
+          customerName: r.customerName,
+          sku: r.sku,
+          itemClass: r.itemClass,
+          quantity: r.quantity,
+          expectedShipDate: r.expectedShipDate,
+          orderDate: r.orderDate,
+          ltProductNumber: r.ltProductNumber,
+          isFlexpack: r.isFlexpack,
+          unresolvedReason: r.unresolvedReason,
+          goodLengthFt: sd?.goodLengthFt != null ? Math.round(sd.goodLengthFt) : null,
+          geometryDerived: Boolean(sd?.derived),
+          stocks: (sd?.stocks ?? []).map((s) => ({
+            stockId: s.stockId,
+            widthIn: s.widthIn,
+            footage: Math.round(s.footage),
+          })),
+        };
+      })
+      .sort((a, b) => (a.expectedShipDate ?? "9999").localeCompare(b.expectedShipDate ?? "9999"));
+
+    // Roll up per stock so a buyer sees the material impact, not just orders.
+    const byStock = new Map<string, { stockId: string; footage: number; lines: number; earliestShipDate: string | null }>();
+    for (const it of items) {
+      for (const s of it.stocks) {
+        const cur = byStock.get(s.stockId) ?? { stockId: s.stockId, footage: 0, lines: 0, earliestShipDate: null };
+        cur.footage += s.footage;
+        cur.lines += 1;
+        if (it.expectedShipDate && (!cur.earliestShipDate || it.expectedShipDate < cur.earliestShipDate)) {
+          cur.earliestShipDate = it.expectedShipDate;
+        }
+        byStock.set(s.stockId, cur);
+      }
+    }
+    res.json({
+      spoilagePct: forecastSpoilagePct(),
+      unresolvedCount: items.filter((i) => i.unresolvedReason).length,
+      items,
+      byStock: [...byStock.values()].sort((a, b) => b.footage - a.footage),
+    });
+  }),
+);
+
+/**
  * Conversation with the agent. The thread is per signed-in user, so two
  * buyers don't read each other's chat; the agent's tools act on shared data.
  */

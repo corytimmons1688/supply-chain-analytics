@@ -19,6 +19,8 @@ import {
   useSendMaterialPo,
   useSendMaterialPoTest,
   useGetPoAgentQueue,
+  useGetMaterialForecast,
+  getGetMaterialForecastQueryKey,
   useGetAgentChat,
   useSendAgentChat,
   useClearAgentChat,
@@ -65,7 +67,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck, Clock } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck, Clock, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -1321,6 +1323,165 @@ type SuggestionLine = {
  * Tracking references are pulled out of the PO's notes and deep-linked to the
  * carrier.
  */
+/**
+ * Material demand from NetSuite orders still in Pending Approval — commercially
+ * real, but not yet a Label Traxx ticket. A line leaves the forecast the moment
+ * NetSuite's LT Ticket field is filled in, because the demand is then counted
+ * as committed open-ticket footage.
+ */
+function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
+  const { data, isLoading } = useGetMaterialForecast({
+    query: { queryKey: getGetMaterialForecastQueryKey(), staleTime: 120_000 },
+  });
+  const [showLines, setShowLines] = React.useState(false);
+  const metricsByStock = React.useMemo(() => new Map(rows.map((r) => [r.stockId, r])), [rows]);
+  if (isLoading) return <Skeleton className="h-40 rounded-lg" />;
+  if (!data || (data.byStock.length === 0 && data.unresolvedCount === 0)) return null;
+
+  const totalFt = data.byStock.reduce((s, b) => s + b.footage, 0);
+  const unresolved = data.items.filter((i) => i.unresolvedReason);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-muted-foreground" /> Forecast material — orders pending approval
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          {fmt(totalFt)} ft across {data.byStock.length} material{data.byStock.length === 1 ? "" : "s"} from{" "}
+          {data.items.length - unresolved.length} order line{data.items.length - unresolved.length === 1 ? "" : "s"} that
+          haven&apos;t reached Label Traxx yet. Footage comes from each SKU&apos;s Label Traxx construction (repeat ×
+          no-across) plus a {data.spoilagePct}% spoilage allowance. A line drops off here the moment its LT Ticket field
+          is filled in — from then on it counts as committed ticket demand, so nothing is double-counted.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="rounded-md border overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40 text-muted-foreground">
+                <th className="text-left px-2 py-1.5 font-medium">Stock</th>
+                <th className="text-left px-2 py-1.5 font-medium">Description</th>
+                <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">Forecast ft</th>
+                <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">Available now</th>
+                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">First ship</th>
+                <th className="text-right px-2 py-1.5 font-medium">Lines</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byStock.map((b) => {
+                const m = metricsByStock.get(b.stockId);
+                // Forecast demand this stock can't cover from what's free today.
+                const short = m ? b.footage - m.availableFootage : null;
+                return (
+                  <tr key={b.stockId} className="border-b last:border-b-0">
+                    <td className="px-2 py-1.5 font-medium whitespace-nowrap">#{b.stockId}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground max-w-[22rem] truncate">
+                      {m?.description ?? "—"}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{fmt(b.footage)}</td>
+                    <td
+                      className={cn(
+                        "px-2 py-1.5 text-right tabular-nums",
+                        short != null && short > 0 && "text-amber-700 dark:text-amber-400 font-medium",
+                      )}
+                      title={
+                        short != null && short > 0
+                          ? `${fmt(short)} ft short of this forecast once current commitments are met`
+                          : undefined
+                      }
+                    >
+                      {m ? fmt(m.availableFootage) : "—"}
+                    </td>
+                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                      {b.earliestShipDate ?? "—"}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{b.lines}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {unresolved.length > 0 && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            <div className="font-medium">
+              {unresolved.length} line{unresolved.length === 1 ? "" : "s"} couldn&apos;t be forecast — no Label Traxx
+              construction for the SKU
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {unresolved.map((u) => (
+                <div key={u.id}>
+                  {u.soNumber}
+                  {u.lineNo != null ? ` line ${u.lineNo}` : ""} · {u.sku} · {fmt(u.quantity)} ea
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          onClick={() => setShowLines((v) => !v)}
+        >
+          {showLines ? "Hide order lines" : `Show all ${data.items.length} order lines`}
+        </button>
+        {showLines && (
+          <div className="rounded-md border overflow-x-auto max-h-80 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/60">
+                <tr className="border-b text-muted-foreground">
+                  <th className="text-left px-2 py-1.5 font-medium">SO</th>
+                  <th className="text-left px-2 py-1.5 font-medium">Customer</th>
+                  <th className="text-left px-2 py-1.5 font-medium">SKU</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Qty</th>
+                  <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Ship by</th>
+                  <th className="text-left px-2 py-1.5 font-medium">Material needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((it) => (
+                  <tr key={it.id} className="border-b last:border-b-0 align-top">
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {it.soNumber}
+                      {it.lineNo != null && <span className="text-muted-foreground">/{it.lineNo}</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-muted-foreground max-w-[12rem] truncate">
+                      {it.customerName ?? "—"}
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {it.sku}
+                      {it.isFlexpack && <span className="ml-1 text-[10px] text-muted-foreground">flex</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{fmt(it.quantity)}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                      {it.expectedShipDate ?? "—"}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {it.unresolvedReason ? (
+                        <span className="text-amber-700 dark:text-amber-400">{it.unresolvedReason}</span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          {it.stocks
+                            .map((s) => `#${s.stockId} @${s.widthIn}" ${fmt(s.footage)} ft`)
+                            .join(" · ")}
+                          {it.geometryDerived && " (geometry derived)"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Where an open PO stands, for someone asking "when do I get this material?" */
 type PoStatus =
   | "pending_confirmation"
@@ -2185,6 +2346,8 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
       )}
 
       <OpenPosTable rows={rows} purch={purch} />
+
+      <MaterialForecastCard rows={rows} />
 
       <CoveredByInboundCard rows={rows} purch={purch} />
 

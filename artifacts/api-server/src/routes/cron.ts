@@ -99,6 +99,14 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
     } catch (err) {
       out["tickets"] = { error: err instanceof Error ? err.message : String(err) };
     }
+    // Pending-approval material forecast: cheap (a few LT product lookups per
+    // new SKU) and buyers want it current, so it rides the 15-min refresh.
+    try {
+      const { performForecastSync } = await import("../lib/forecast-sync");
+      out["forecast"] = await performForecastSync();
+    } catch (err) {
+      out["forecast"] = { error: err instanceof Error ? err.message : String(err) };
+    }
     // Freshness bookkeeping — the header's data-age indicator reads this.
     await recordLtSyncState("labeltraxx_rolls", out);
     logger.info({ out }, "LT frequent refresh ran");
