@@ -372,34 +372,60 @@ export async function syncLtPos(opts: { sinceDays?: number; full?: boolean } = {
  * Requested-delivery dates for open Stock POs. The LT Cloud API only exposes the
  * vendor-PROMISED date (`dueDate`); what Calyx actually asked for lives in ODBC
  * as purchaseorder.RequestedDeliveryDate (verified distinct — promised is
- * typically later). Hybrid read, same rationale as per-roll cost.
+ * typically later), and there is no PO-update endpoint either, so this ODBC read
+ * is the ONLY way a requested-date edit made in Label Traxx reaches the
+ * dashboard. Runs on the 15-minute refresh for that reason.
+ *
+ * Writes only rows whose value actually changed. About 20 open Stock POs come
+ * back each time and nearly all are unchanged; at four runs an hour, updating
+ * every one would be ~2,000 pointless writes a day and would make the return
+ * count meaningless.
  */
-export async function syncLtPoRequestedDates(): Promise<{ requestedDates: number }> {
+export async function syncLtPoRequestedDates(): Promise<{
+  requestedDates: number;
+  checked: number;
+}> {
   const rows = await runGatewaySql(
     "SELECT PONumber, RequestedDeliveryDate FROM purchaseorder " +
       `WHERE POType = 'Stock' AND Received < {d '1900-01-01'}`,
   );
-  let updated = 0;
+  const wanted = new Map<string, string | null>();
   for (const row of rows) {
     const poNumber = pickString(row, "PONumber");
-    const raw = pickString(row, "RequestedDeliveryDate");
     if (!poNumber) continue;
-    // Gateway returns "M/D/YYYY HH:mm"; pre-1900 is LT's blank sentinel.
-    const iso = (() => {
-      if (!raw) return null;
-      const [datePart] = raw.split(" ");
-      const [m, d, y] = (datePart ?? "").split("/");
-      if (!m || !d || !y || Number(y) < 1900) return null;
-      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    })();
+    // ltDate, not a local parser: the gateway returns "M/D/YYYY HH:mm" and LT
+    // has TWO blank-date sentinels — pre-1900 over ODBC and 01/01/1970 through
+    // the API. A parser that only rejected pre-1900 stored 1970-01-01 as a real
+    // requested date, which reads as a PO that was due 56 years ago.
+    wanted.set(poNumber.trim(), ltDate(pickString(row, "RequestedDeliveryDate")));
+  }
+  if (wanted.size === 0) return { requestedDates: 0, checked: 0 };
+
+  const current = new Map(
+    (
+      await db
+        .select({ poNumber: ltPoTable.poNumber, requestedDeliveryDate: ltPoTable.requestedDeliveryDate })
+        .from(ltPoTable)
+        .where(inArray(ltPoTable.poNumber, [...wanted.keys()]))
+    ).map((r) => [r.poNumber, r.requestedDeliveryDate]),
+  );
+
+  let updated = 0;
+  for (const [poNumber, iso] of wanted) {
+    // Absent from the mirror = a PO the LT sync hasn't picked up yet; there's
+    // nothing to update, and inserting a bare row here would create a PO with
+    // no supplier or quantity.
+    if (!current.has(poNumber)) continue;
+    if ((current.get(poNumber) ?? null) === iso) continue;
     try {
       await db.update(ltPoTable).set({ requestedDeliveryDate: iso }).where(eq(ltPoTable.poNumber, poNumber));
       updated++;
+      logger.info({ poNumber, from: current.get(poNumber) ?? null, to: iso }, "lt_po requested date changed");
     } catch (err) {
       logger.warn({ err, poNumber }, "lt_po requested-date update failed");
     }
   }
-  return { requestedDates: updated };
+  return { requestedDates: updated, checked: wanted.size };
 }
 
 // ---------------------------------------------------------------------
@@ -570,9 +596,11 @@ export async function performLtApiSync(opts: { full?: boolean } = {}): Promise<R
   out["ticketsRefreshed"] = tix.refreshed;
   out["pos"] = (await syncLtPos({ full: opts.full })).pos;
   // Requested-delivery dates come from ODBC; never let a gateway blip stall the
-  // rest of the LT sync.
+  // rest of the LT sync. Also runs on the 15-minute refresh — this hourly pass
+  // is the backstop, so it usually finds nothing changed.
   try {
-    out["poRequestedDates"] = (await syncLtPoRequestedDates()).requestedDates;
+    const r = await syncLtPoRequestedDates();
+    out["poRequestedDates"] = { changed: r.requestedDates, checked: r.checked };
   } catch (err) {
     out["poRequestedDates"] = { error: err instanceof Error ? err.message : String(err) };
   }

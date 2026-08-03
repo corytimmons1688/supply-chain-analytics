@@ -9,6 +9,7 @@ import {
   syncLtRollDates,
   syncLtPos,
   syncLtTickets,
+  syncLtPoRequestedDates,
   recordLtSyncState,
 } from "../lib/lt-sync";
 import { performDazpakSync } from "../lib/dazpak-sync";
@@ -62,10 +63,10 @@ router.get("/cron/netsuite-sync", async (req, res, next) => {
 
 /**
  * Lightweight LabelTraxx refresh — on-hand rolls, roll-detail dates/used-ticket
- * numbers, and changed POs (notes, tracking references, promised dates). No
- * NetSuite/quality/ticket work, so it stays fast (~20-40s) and can run every
- * ~15 min to keep on-hand, consumption-netting and PO notes current through the
- * day without waiting on the hourly full sync.
+ * numbers, changed POs (notes, tracking references, promised dates) and their
+ * requested-delivery dates. No NetSuite/quality/ticket work, so it stays fast
+ * (~20-40s) and can run every ~15 min to keep on-hand, consumption-netting and
+ * PO dates current through the day without waiting on the hourly full sync.
  */
 router.get("/cron/lt-rolls", async (req, res, next) => {
   try {
@@ -98,6 +99,19 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
       out["tickets"] = { synced: t.tickets, deleted: t.deleted, refreshed: t.refreshed };
     } catch (err) {
       out["tickets"] = { error: err instanceof Error ? err.message : String(err) };
+    }
+    // Requested-delivery dates. The LT Cloud API has no requested-date field
+    // and no PO-update endpoint, so this ODBC read is the only way an edit made
+    // in Label Traxx ever reaches the Open POs report — waiting on the hourly
+    // sync meant a buyer could fix a date and watch it not change. ~20 open
+    // Stock POs, and only genuine changes are written. Isolated because the
+    // gateway is the least reliable dependency we have: it went down silently
+    // on 2026-08-03, and it must not be able to cost us the roll refresh.
+    try {
+      const r = await syncLtPoRequestedDates();
+      out["poRequestedDates"] = { changed: r.requestedDates, checked: r.checked };
+    } catch (err) {
+      out["poRequestedDates"] = { error: err instanceof Error ? err.message : String(err) };
     }
     // Pending-approval material forecast: cheap (a few LT product lookups per
     // new SKU) and buyers want it current, so it rides the 15-min refresh.
