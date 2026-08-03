@@ -69,7 +69,7 @@ function addMonthsIso(iso: string, months: number): string {
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
 
-function addDaysIso(iso: string, days: number): string {
+export function addDaysIso(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(Date.UTC(y!, m! - 1, d! + days));
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
@@ -90,14 +90,14 @@ function startsWithCc(s: string | null): boolean {
 
 // ---------- Stats ----------
 
-function mean(xs: number[]): number {
+export function mean(xs: number[]): number {
   if (xs.length === 0) return 0;
   let s = 0;
   for (const x of xs) s += x;
   return s / xs.length;
 }
 
-function stdDev(xs: number[]): number {
+export function stdDev(xs: number[]): number {
   if (xs.length < 2) return 0;
   const m = mean(xs);
   let s = 0;
@@ -117,7 +117,7 @@ function median(xs: number[]): number {
  * quantile straight off an empirical demand distribution — no normality
  * assumption, which is what makes it robust for lumpy label-stock demand.
  */
-function percentile(xs: number[], p: number): number {
+export function percentile(xs: number[], p: number): number {
   if (xs.length === 0) return 0;
   if (xs.length === 1) return xs[0]!;
   const sorted = [...xs].sort((a, b) => a - b);
@@ -136,7 +136,7 @@ function percentile(xs: number[], p: number): number {
  * normality. Returns the window sums, or null when history is too short to
  * form a meaningful number of windows (caller falls back to the σ model).
  */
-function leadTimeDemandSamples(dailyFootage: number[], leadTimeDays: number): number[] | null {
+export function leadTimeDemandSamples(dailyFootage: number[], leadTimeDays: number): number[] | null {
   const L = Math.max(1, Math.round(leadTimeDays));
   // Need at least ~20 windows for a stable service-level quantile.
   if (dailyFootage.length < L + 20) return null;
@@ -225,6 +225,13 @@ export interface RollUsageRow {
   usedTikNum: string | null;
   poNumber: string | null;
   description: string | null;
+  /**
+   * Width of the roll consumed, in inches. Carried because demand isn't
+   * fungible across widths above the ≤14" pool: a stock can sit above its
+   * aggregate reorder point while one width is starving, which is precisely
+   * what a stock-level ROP hides. Null when the mirror has no width.
+   */
+  widthIn: number | null;
 }
 
 /**
@@ -253,7 +260,31 @@ export async function fetchUsage(opts: { from: string; to: string; stockId?: str
       usedTikNum: row.usedTikNum,
       poNumber: row.poNumber,
       description: row.description,
+      widthIn: row.width ?? null,
     });
+  }
+  return out;
+}
+
+/**
+ * Split a stock's consumption history into the same width buckets everything
+ * else in the app uses (≤14" pools into one, wider widths stay distinct).
+ *
+ * Rolls with no width on the mirror fall into the stock's master-width bucket:
+ * dropping them would understate demand, and they were almost certainly master
+ * width anyway. `masterWidthFallback` of 0 puts them in the pooled bucket.
+ */
+export function usageByWidthGroup(
+  usage: RollUsageRow[],
+  masterWidthFallback: number,
+): Map<string, RollUsageRow[]> {
+  const out = new Map<string, RollUsageRow[]>();
+  for (const u of usage) {
+    const w = u.widthIn && u.widthIn > 0 ? u.widthIn : masterWidthFallback;
+    const key = widthGroupKey(w);
+    const arr = out.get(key) ?? [];
+    arr.push(u);
+    out.set(key, arr);
   }
   return out;
 }
