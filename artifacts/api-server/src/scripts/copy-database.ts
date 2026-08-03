@@ -48,15 +48,38 @@ async function tableNames(pool: Pool): Promise<string[]> {
   return r.rows.map((x) => x.tablename);
 }
 
-async function columnNames(pool: Pool, table: string): Promise<string[]> {
-  const r = await pool.query<{ column_name: string }>(
-    `select column_name from information_schema.columns
+interface ColumnDef {
+  name: string;
+  /** True for json/jsonb, which need explicit serialization — see toParam. */
+  isJson: boolean;
+}
+
+async function columnDefs(pool: Pool, table: string): Promise<ColumnDef[]> {
+  const r = await pool.query<{ column_name: string; data_type: string }>(
+    `select column_name, data_type from information_schema.columns
       where table_schema = 'public' and table_name = $1
         and is_generated = 'NEVER'
       order by ordinal_position`,
     [table],
   );
-  return r.rows.map((x) => x.column_name);
+  return r.rows.map((x) => ({
+    name: x.column_name,
+    isJson: x.data_type === "json" || x.data_type === "jsonb",
+  }));
+}
+
+/**
+ * node-postgres turns a JS array into a Postgres ARRAY literal — `{...}` — which
+ * a json/jsonb column rejects outright ("invalid input syntax for type json").
+ * Any jsonb column holding an array hits this: lt_ticket.stockAllocs, lt_po.items,
+ * ns_forecast_line.stockDemand, stock_goal.cycleCountCompletions. The driver reads
+ * jsonb back as parsed JS, so it has to be re-serialized on the way in.
+ */
+function toParam(value: unknown, col: ColumnDef): unknown {
+  if (!col.isJson || value == null) return value;
+  // Already a JSON string (some drivers/paths hand it back raw) — don't double-encode.
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
 }
 
 async function count(pool: Pool, table: string): Promise<number> {
@@ -121,11 +144,11 @@ async function main() {
 
   let copied = 0;
   for (const t of tables) {
-    const cols = await columnNames(source, t);
+    const cols = await columnDefs(source, t);
     if (cols.length === 0) continue;
     if (truncate) await target.query(`truncate table public."${t}"`);
 
-    const quoted = cols.map((c) => `"${c}"`).join(", ");
+    const quoted = cols.map((c) => `"${c.name}"`).join(", ");
     const res = await source.query(`select ${quoted} from public."${t}"`);
     if (res.rows.length === 0) {
       console.log(`  ${t.padEnd(30)} 0`);
@@ -136,12 +159,22 @@ async function main() {
       const params: unknown[] = [];
       const tuples = chunk.map((row) => {
         const ph = cols.map((c) => {
-          params.push((row as Record<string, unknown>)[c]);
+          params.push(toParam((row as Record<string, unknown>)[c.name], c));
           return `$${params.length}`;
         });
         return `(${ph.join(", ")})`;
       });
-      await target.query(`insert into public."${t}" (${quoted}) values ${tuples.join(", ")}`, params);
+      try {
+        await target.query(`insert into public."${t}" (${quoted}) values ${tuples.join(", ")}`, params);
+      } catch (e) {
+        // Name the table and column types — a bare driver error gives no clue
+        // which of 32 tables failed.
+        throw new Error(
+          `inserting into ${t} (rows ${i}-${i + chunk.length - 1}, json columns: ` +
+            `${cols.filter((c) => c.isJson).map((c) => c.name).join(", ") || "none"}): ` +
+            `${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
     copied += res.rows.length;
     console.log(`  ${t.padEnd(30)} ${String(res.rows.length).padStart(7)} copied`);
