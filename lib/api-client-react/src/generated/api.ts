@@ -55,6 +55,7 @@ import type {
   GetAdjustmentsTotalsParams,
   GetDemandStockDetailParams,
   GetDemandSummaryParams,
+  GetMrpParams,
   GetVendorContacts200,
   GetVendorLeadTimesParams,
   GetVendorScorecardsParams,
@@ -94,6 +95,7 @@ import type {
   MaterialPoUpdateResult,
   Me,
   MonthlySnapshot,
+  MrpResult,
   NetsuiteSyncResult,
   OnHandInventory,
   PoAgentQueue,
@@ -1935,6 +1937,92 @@ export const useUpdateDemandConfig = <
 > => {
   return useMutation(getUpdateDemandConfigMutationOptions(options));
 };
+
+/**
+ * Weekly MRP buckets per stock x width. Gross requirement is booked open tickets plus NetSuite pending-approval lines, then the greater of that and the statistical forecast from that width's own consumption history. Replaces the stock-level Stock-by-stock plan, whose reorder point and max could not describe a stock whose widths differ.
+
+ * @summary Time-phased purchase plan per stock and width
+ */
+export const getGetMrpUrl = (params?: GetMrpParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/demand/mrp?${stringifiedParams}`
+    : `/api/demand/mrp`;
+};
+
+export const getMrp = async (
+  params?: GetMrpParams,
+  options?: RequestInit,
+): Promise<MrpResult> => {
+  return customFetch<MrpResult>(getGetMrpUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetMrpQueryKey = (params?: GetMrpParams) => {
+  return [`/api/demand/mrp`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetMrpQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMrp>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetMrpParams,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getMrp>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetMrpQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getMrp>>> = ({
+    signal,
+  }) => getMrp(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMrp>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMrpQueryResult = NonNullable<Awaited<ReturnType<typeof getMrp>>>;
+export type GetMrpQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Time-phased purchase plan per stock and width
+ */
+
+export function useGetMrp<
+  TData = Awaited<ReturnType<typeof getMrp>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetMrpParams,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getMrp>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMrpQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Creates a draft release request against material the vendor has already made and is holding. Quantities are rounded up to the stock's configured roll size and capped at what's actually held, per width. Runs the same email → send → agent-follow-up path as a PO but is never submitted to Label Traxx, because the material is already on the make-and-hold PO.

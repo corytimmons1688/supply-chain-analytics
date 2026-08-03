@@ -949,6 +949,33 @@ router.put(
     if ("orderQuantityRolls" in b)
       patch.orderQuantityRolls = b["orderQuantityRolls"] == null ? null : Number(b["orderQuantityRolls"]);
     if ("discontinued" in b) patch.discontinued = b["discontinued"] === true;
+    // Reorder point / max / variability / seasonality overrides. These were only
+    // reachable from popovers on the Stock-by-stock plan; the MRP plan replaced
+    // that table, so the config panel is now the single place they live and the
+    // endpoint has to accept them.
+    if ("reorderPointFootage" in b)
+      patch.reorderPointFootage = b["reorderPointFootage"] == null ? null : Number(b["reorderPointFootage"]);
+    if ("maxFootage" in b) patch.maxFootage = b["maxFootage"] == null ? null : Number(b["maxFootage"]);
+    if ("demandCv" in b) patch.demandCv = b["demandCv"] == null ? null : Number(b["demandCv"]);
+    if ("leadTimeCv" in b) patch.leadTimeCv = b["leadTimeCv"] == null ? null : Number(b["leadTimeCv"]);
+    // The three quarterly seasonality weights move together or not at all — a
+    // partial set would silently renormalize to something nobody chose.
+    if ("seasonalityW1" in b || "seasonalityW2" in b || "seasonalityW3" in b) {
+      const w = [b["seasonalityW1"], b["seasonalityW2"], b["seasonalityW3"]];
+      if (w.every((v) => v == null)) {
+        patch.seasonalityW1 = null;
+        patch.seasonalityW2 = null;
+        patch.seasonalityW3 = null;
+      } else if (w.every((v) => v != null && Number.isFinite(Number(v)))) {
+        patch.seasonalityW1 = Number(w[0]);
+        patch.seasonalityW2 = Number(w[1]);
+        patch.seasonalityW3 = Number(w[2]);
+      } else {
+        return void res
+          .status(400)
+          .json({ error: "Seasonality needs all three weights, or all three null to clear" });
+      }
+    }
     if ("demandFromStockId" in b) {
       const v = b["demandFromStockId"];
       patch.demandFromStockId = v == null || String(v).trim() === "" ? null : String(v).trim();
@@ -1242,6 +1269,20 @@ router.post(
       lines: lineValues.map((l) => ({ ...l, mfgSpecNum: specs.get(l.stockId) ?? null })),
     });
     res.json({ id: po!.id, status: "draft", email });
+  }),
+);
+
+/**
+ * Time-phased purchase plan, per stock AND per width — replaces the
+ * Stock-by-stock plan, whose reorder point and max were stock-level.
+ */
+router.get(
+  "/demand/mrp",
+  asyncHandler(async (req, res) => {
+    const monthsBack = parseInt32(req.query["monthsBack"], 6);
+    const weeks = Math.min(26, Math.max(4, parseInt32(req.query["weeks"], 13)));
+    const { buildMrp } = await import("../lib/mrp");
+    res.json(await buildMrp({ monthsBack, weeks }));
   }),
 );
 

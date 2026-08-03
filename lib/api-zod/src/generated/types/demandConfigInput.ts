@@ -18,6 +18,18 @@ export interface DemandConfigInput {
   discontinued?: boolean;
   /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
   demandFromStockId?: string | null;
-  /** Substitute stock numbers, comma/space separated. Null or empty clears. */
+  /** Substitute stock numbers in preference order, comma/space separated. Null or empty clears. */
   alternateStockIds?: string | null;
+  /** Manual reorder point in footage. Null restores the computed value. */
+  reorderPointFootage?: number | null;
+  /** Manual order-up-to level in footage. Null restores the computed value. */
+  maxFootage?: number | null;
+  /** Demand coefficient of variation override. Null restores the observed value. */
+  demandCv?: number | null;
+  /** Lead-time coefficient of variation override. Null restores the observed value. */
+  leadTimeCv?: number | null;
+  /** Quarterly seasonality weight for month 1. All three move together; all three null clears. */
+  seasonalityW1?: number | null;
+  seasonalityW2?: number | null;
+  seasonalityW3?: number | null;
 }

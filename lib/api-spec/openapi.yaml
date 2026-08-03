@@ -352,6 +352,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DemandConfigResult" }
+  /demand/mrp:
+    get:
+      operationId: getMrp
+      tags: [demand]
+      summary: Time-phased purchase plan per stock and width
+      description: >
+        Weekly MRP buckets per stock x width. Gross requirement is booked open tickets
+        plus NetSuite pending-approval lines, then the greater of that and the
+        statistical forecast from that width's own consumption history. Replaces the
+        stock-level Stock-by-stock plan, whose reorder point and max could not describe
+        a stock whose widths differ.
+      parameters:
+        - { name: monthsBack, in: query, schema: { type: integer, default: 6 }, description: "History window for the statistical forecast and reorder point." }
+        - { name: weeks, in: query, schema: { type: integer, default: 13 }, description: "Horizon in weekly buckets (4-26)." }
+      responses:
+        "200":
+          description: Plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MrpResult" }
   /demand/mah-release:
     post:
       operationId: requestMahRelease
@@ -2187,6 +2207,102 @@ components:
           description: "Make-and-hold release requests — one entry per stock+width line. These are the inbound rows on the Open POs report; the parent make-and-hold PO is not inbound."
           items: { $ref: "#/components/schemas/MahRelease" }
         ltWriteEnabled: { type: boolean }
+    MrpWeek:
+      type: object
+      required: [weekStart, weekEnd, label]
+      properties:
+        weekStart: { type: string }
+        weekEnd: { type: string }
+        label: { type: string }
+    MrpCell:
+      type: object
+      required: [weekStart, weekEnd, label, bookedFootage, pendingFootage, statisticalFootage, grossRequirement, scheduledReceipts, projectedOnHand, plannedOrderRelease, plannedOrderRolls, plannedOrderReceipt]
+      properties:
+        weekStart: { type: string }
+        weekEnd: { type: string }
+        label: { type: string }
+        bookedFootage: { type: number, description: "Committed open-ticket footage due this week at this width." }
+        pendingFootage: { type: number, description: "NetSuite pending-approval forecast landing this week." }
+        statisticalFootage: { type: number, description: "Forecast from this width's own consumption history." }
+        grossRequirement: { type: number, description: "max(booked + pending, statistical) — the named sources are disjoint so they sum; the statistical forecast already contains demand of that kind so it is not additive." }
+        scheduledReceipts: { type: number, description: "Open-PO footage arriving this week. Excludes unreleased make-and-hold." }
+        projectedOnHand: { type: number, description: "Balance carried forward. NEGATIVE is the stockout." }
+        plannedOrderRelease: { type: number, description: "Order to place this week so it lands when needed." }
+        plannedOrderRolls: { type: integer }
+        plannedOrderReceipt: { type: number, description: "Planned order arriving this week — the receipt side of an earlier release, so the balance reads as arithmetic." }
+    MrpAlternate:
+      type: object
+      required: [stockId, onHandFootage]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        onHandFootage: { type: number, description: "What the substitute holds at THIS width." }
+    MrpDrivers:
+      type: object
+      required: [leadTimeDays, leadTimeSource, leadTimeOverridden, typicalRollFootage, typicalRollFootageOverridden, serviceLevel, reorderPointFootage, maxFootage, reorderBasis, observations, discontinued, alternates]
+      properties:
+        leadTimeDays: { type: number }
+        leadTimeSource: { type: string }
+        leadTimeOverridden: { type: boolean }
+        typicalRollFootage: { type: number }
+        typicalRollFootageOverridden: { type: boolean }
+        orderQuantityRolls: { type: number, nullable: true }
+        serviceLevel: { type: number }
+        reorderPointFootage: { type: number, description: "Per-width reorder point." }
+        maxFootage: { type: number, description: "Per-width order-up-to level." }
+        reorderBasis:
+          type: string
+          enum: [history, apportioned, none]
+          description: "history = measured at this width. apportioned = too little history here, so the stock-level figure was split by this width's share of committed demand (a guess, shown as one). none = no usable signal."
+        observations: { type: integer, description: "Rolls of consumption history at this width." }
+        discontinued: { type: boolean }
+        alternates:
+          type: array
+          description: "Substitutes in preference order, with availability at this width."
+          items: { $ref: "#/components/schemas/MrpAlternate" }
+    MrpRow:
+      type: object
+      required: [stockId, widthKey, widthLabel, width, pooled, openingOnHand, cells, drivers, plannedTotalFootage, lateReleaseFootage, undatedReceiptFootage]
+      properties:
+        stockId: { type: string }
+        description: { type: string, nullable: true }
+        widthKey: { type: string }
+        widthLabel: { type: string }
+        width: { type: number }
+        pooled: { type: boolean, description: "The interchangeable <=14\" bucket, labelled <=13\"." }
+        vendorName: { type: string, nullable: true }
+        openingOnHand: { type: number }
+        cells:
+          type: array
+          items: { $ref: "#/components/schemas/MrpCell" }
+        drivers: { $ref: "#/components/schemas/MrpDrivers" }
+        firstShortageWeek: { type: integer, nullable: true }
+        firstShortageDate: { type: string, nullable: true }
+        plannedTotalFootage: { type: number }
+        lateReleaseFootage: { type: number, description: "Footage whose release week fell before the horizon — given the lead time, already behind." }
+        orderQuantityIgnored: { type: number, nullable: true, description: "Configured order quantity was implausible (footage in a rolls field) and ignored." }
+        undatedReceiptFootage: { type: number, description: "On-order footage with no date on the PO, scheduled from PO date + lead time. Counted, because excluding it double-buys the material." }
+    MrpResult:
+      type: object
+      required: [generatedAt, weeks, rows, shortageCount, lateReleaseCount, configWarnings]
+      properties:
+        generatedAt: { type: string }
+        weeks:
+          type: array
+          items: { $ref: "#/components/schemas/MrpWeek" }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/MrpRow" }
+        shortageCount: { type: integer }
+        lateReleaseCount: { type: integer }
+        configWarnings:
+          type: array
+          items:
+            type: object
+            required: [stockId, orderQuantityRolls]
+            properties:
+              stockId: { type: string }
+              orderQuantityRolls: { type: number }
     MahRelease:
       type: object
       required: [id, stockId, vendorName, rolls, footage]
@@ -2273,7 +2389,14 @@ components:
         orderQuantityRolls: { type: number, nullable: true, description: "Manual order quantity (master rolls) overriding EOQ. Null clears." }
         discontinued: { type: boolean, description: "End-of-life: keep visible with on-hand, but never suggest a reorder." }
         demandFromStockId: { type: string, nullable: true, description: "Predecessor stock number whose usage history this SKU inherits. Null clears." }
-        alternateStockIds: { type: string, nullable: true, description: "Substitute stock numbers, comma/space separated. Null or empty clears." }
+        alternateStockIds: { type: string, nullable: true, description: "Substitute stock numbers in preference order, comma/space separated. Null or empty clears." }
+        reorderPointFootage: { type: number, nullable: true, description: "Manual reorder point in footage. Null restores the computed value." }
+        maxFootage: { type: number, nullable: true, description: "Manual order-up-to level in footage. Null restores the computed value." }
+        demandCv: { type: number, nullable: true, description: "Demand coefficient of variation override. Null restores the observed value." }
+        leadTimeCv: { type: number, nullable: true, description: "Lead-time coefficient of variation override. Null restores the observed value." }
+        seasonalityW1: { type: number, nullable: true, description: "Quarterly seasonality weight for month 1. All three move together; all three null clears." }
+        seasonalityW2: { type: number, nullable: true }
+        seasonalityW3: { type: number, nullable: true }
     DemandConfigResult:
       type: object
       required: [stockId, saved]

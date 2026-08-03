@@ -988,14 +988,190 @@ export const UpdateDemandConfigBody = zod.object({
     .string()
     .nullish()
     .describe(
-      "Substitute stock numbers, comma\/space separated. Null or empty clears.",
+      "Substitute stock numbers in preference order, comma\/space separated. Null or empty clears.",
     ),
+  reorderPointFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual reorder point in footage. Null restores the computed value.",
+    ),
+  maxFootage: zod
+    .number()
+    .nullish()
+    .describe(
+      "Manual order-up-to level in footage. Null restores the computed value.",
+    ),
+  demandCv: zod
+    .number()
+    .nullish()
+    .describe(
+      "Demand coefficient of variation override. Null restores the observed value.",
+    ),
+  leadTimeCv: zod
+    .number()
+    .nullish()
+    .describe(
+      "Lead-time coefficient of variation override. Null restores the observed value.",
+    ),
+  seasonalityW1: zod
+    .number()
+    .nullish()
+    .describe(
+      "Quarterly seasonality weight for month 1. All three move together; all three null clears.",
+    ),
+  seasonalityW2: zod.number().nullish(),
+  seasonalityW3: zod.number().nullish(),
 });
 
 export const UpdateDemandConfigResponse = zod.object({
   stockId: zod.string(),
   saved: zod.boolean(),
   ltUpdated: zod.boolean().optional(),
+});
+
+/**
+ * Weekly MRP buckets per stock x width. Gross requirement is booked open tickets plus NetSuite pending-approval lines, then the greater of that and the statistical forecast from that width's own consumption history. Replaces the stock-level Stock-by-stock plan, whose reorder point and max could not describe a stock whose widths differ.
+
+ * @summary Time-phased purchase plan per stock and width
+ */
+export const getMrpQueryMonthsBackDefault = 6;
+export const getMrpQueryWeeksDefault = 13;
+
+export const GetMrpQueryParams = zod.object({
+  monthsBack: zod.coerce
+    .number()
+    .default(getMrpQueryMonthsBackDefault)
+    .describe("History window for the statistical forecast and reorder point."),
+  weeks: zod.coerce
+    .number()
+    .default(getMrpQueryWeeksDefault)
+    .describe("Horizon in weekly buckets (4-26)."),
+});
+
+export const GetMrpResponse = zod.object({
+  generatedAt: zod.string(),
+  weeks: zod.array(
+    zod.object({
+      weekStart: zod.string(),
+      weekEnd: zod.string(),
+      label: zod.string(),
+    }),
+  ),
+  rows: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      description: zod.string().nullish(),
+      widthKey: zod.string(),
+      widthLabel: zod.string(),
+      width: zod.number(),
+      pooled: zod
+        .boolean()
+        .describe('The interchangeable <=14\" bucket, labelled <=13\".'),
+      vendorName: zod.string().nullish(),
+      openingOnHand: zod.number(),
+      cells: zod.array(
+        zod.object({
+          weekStart: zod.string(),
+          weekEnd: zod.string(),
+          label: zod.string(),
+          bookedFootage: zod
+            .number()
+            .describe(
+              "Committed open-ticket footage due this week at this width.",
+            ),
+          pendingFootage: zod
+            .number()
+            .describe("NetSuite pending-approval forecast landing this week."),
+          statisticalFootage: zod
+            .number()
+            .describe("Forecast from this width's own consumption history."),
+          grossRequirement: zod
+            .number()
+            .describe(
+              "max(booked + pending, statistical) — the named sources are disjoint so they sum; the statistical forecast already contains demand of that kind so it is not additive.",
+            ),
+          scheduledReceipts: zod
+            .number()
+            .describe(
+              "Open-PO footage arriving this week. Excludes unreleased make-and-hold.",
+            ),
+          projectedOnHand: zod
+            .number()
+            .describe("Balance carried forward. NEGATIVE is the stockout."),
+          plannedOrderRelease: zod
+            .number()
+            .describe("Order to place this week so it lands when needed."),
+          plannedOrderRolls: zod.number(),
+          plannedOrderReceipt: zod
+            .number()
+            .describe(
+              "Planned order arriving this week — the receipt side of an earlier release, so the balance reads as arithmetic.",
+            ),
+        }),
+      ),
+      drivers: zod.object({
+        leadTimeDays: zod.number(),
+        leadTimeSource: zod.string(),
+        leadTimeOverridden: zod.boolean(),
+        typicalRollFootage: zod.number(),
+        typicalRollFootageOverridden: zod.boolean(),
+        orderQuantityRolls: zod.number().nullish(),
+        serviceLevel: zod.number(),
+        reorderPointFootage: zod.number().describe("Per-width reorder point."),
+        maxFootage: zod.number().describe("Per-width order-up-to level."),
+        reorderBasis: zod
+          .enum(["history", "apportioned", "none"])
+          .describe(
+            "history = measured at this width. apportioned = too little history here, so the stock-level figure was split by this width's share of committed demand (a guess, shown as one). none = no usable signal.",
+          ),
+        observations: zod
+          .number()
+          .describe("Rolls of consumption history at this width."),
+        discontinued: zod.boolean(),
+        alternates: zod
+          .array(
+            zod.object({
+              stockId: zod.string(),
+              description: zod.string().nullish(),
+              onHandFootage: zod
+                .number()
+                .describe("What the substitute holds at THIS width."),
+            }),
+          )
+          .describe(
+            "Substitutes in preference order, with availability at this width.",
+          ),
+      }),
+      firstShortageWeek: zod.number().nullish(),
+      firstShortageDate: zod.string().nullish(),
+      plannedTotalFootage: zod.number(),
+      lateReleaseFootage: zod
+        .number()
+        .describe(
+          "Footage whose release week fell before the horizon — given the lead time, already behind.",
+        ),
+      orderQuantityIgnored: zod
+        .number()
+        .nullish()
+        .describe(
+          "Configured order quantity was implausible (footage in a rolls field) and ignored.",
+        ),
+      undatedReceiptFootage: zod
+        .number()
+        .describe(
+          "On-order footage with no date on the PO, scheduled from PO date + lead time. Counted, because excluding it double-buys the material.",
+        ),
+    }),
+  ),
+  shortageCount: zod.number(),
+  lateReleaseCount: zod.number(),
+  configWarnings: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      orderQuantityRolls: zod.number(),
+    }),
+  ),
 });
 
 /**

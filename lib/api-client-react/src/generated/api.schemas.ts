@@ -639,6 +639,112 @@ export interface PurchasingResponse {
   ltWriteEnabled: boolean;
 }
 
+export interface MrpWeek {
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+}
+
+export interface MrpCell {
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  /** Committed open-ticket footage due this week at this width. */
+  bookedFootage: number;
+  /** NetSuite pending-approval forecast landing this week. */
+  pendingFootage: number;
+  /** Forecast from this width's own consumption history. */
+  statisticalFootage: number;
+  /** max(booked + pending, statistical) — the named sources are disjoint so they sum; the statistical forecast already contains demand of that kind so it is not additive. */
+  grossRequirement: number;
+  /** Open-PO footage arriving this week. Excludes unreleased make-and-hold. */
+  scheduledReceipts: number;
+  /** Balance carried forward. NEGATIVE is the stockout. */
+  projectedOnHand: number;
+  /** Order to place this week so it lands when needed. */
+  plannedOrderRelease: number;
+  plannedOrderRolls: number;
+  /** Planned order arriving this week — the receipt side of an earlier release, so the balance reads as arithmetic. */
+  plannedOrderReceipt: number;
+}
+
+export interface MrpAlternate {
+  stockId: string;
+  description?: string | null;
+  /** What the substitute holds at THIS width. */
+  onHandFootage: number;
+}
+
+/**
+ * history = measured at this width. apportioned = too little history here, so the stock-level figure was split by this width's share of committed demand (a guess, shown as one). none = no usable signal.
+ */
+export type MrpDriversReorderBasis =
+  (typeof MrpDriversReorderBasis)[keyof typeof MrpDriversReorderBasis];
+
+export const MrpDriversReorderBasis = {
+  history: "history",
+  apportioned: "apportioned",
+  none: "none",
+} as const;
+
+export interface MrpDrivers {
+  leadTimeDays: number;
+  leadTimeSource: string;
+  leadTimeOverridden: boolean;
+  typicalRollFootage: number;
+  typicalRollFootageOverridden: boolean;
+  orderQuantityRolls?: number | null;
+  serviceLevel: number;
+  /** Per-width reorder point. */
+  reorderPointFootage: number;
+  /** Per-width order-up-to level. */
+  maxFootage: number;
+  /** history = measured at this width. apportioned = too little history here, so the stock-level figure was split by this width's share of committed demand (a guess, shown as one). none = no usable signal. */
+  reorderBasis: MrpDriversReorderBasis;
+  /** Rolls of consumption history at this width. */
+  observations: number;
+  discontinued: boolean;
+  /** Substitutes in preference order, with availability at this width. */
+  alternates: MrpAlternate[];
+}
+
+export interface MrpRow {
+  stockId: string;
+  description?: string | null;
+  widthKey: string;
+  widthLabel: string;
+  width: number;
+  /** The interchangeable <=14" bucket, labelled <=13". */
+  pooled: boolean;
+  vendorName?: string | null;
+  openingOnHand: number;
+  cells: MrpCell[];
+  drivers: MrpDrivers;
+  firstShortageWeek?: number | null;
+  firstShortageDate?: string | null;
+  plannedTotalFootage: number;
+  /** Footage whose release week fell before the horizon — given the lead time, already behind. */
+  lateReleaseFootage: number;
+  /** Configured order quantity was implausible (footage in a rolls field) and ignored. */
+  orderQuantityIgnored?: number | null;
+  /** On-order footage with no date on the PO, scheduled from PO date + lead time. Counted, because excluding it double-buys the material. */
+  undatedReceiptFootage: number;
+}
+
+export type MrpResultConfigWarningsItem = {
+  stockId: string;
+  orderQuantityRolls: number;
+};
+
+export interface MrpResult {
+  generatedAt: string;
+  weeks: MrpWeek[];
+  rows: MrpRow[];
+  shortageCount: number;
+  lateReleaseCount: number;
+  configWarnings: MrpResultConfigWarningsItem[];
+}
+
 export type MahReleaseRequestWidthsItem = {
   width: number;
   label?: string;
@@ -704,8 +810,20 @@ export interface DemandConfigInput {
   discontinued?: boolean;
   /** Predecessor stock number whose usage history this SKU inherits. Null clears. */
   demandFromStockId?: string | null;
-  /** Substitute stock numbers, comma/space separated. Null or empty clears. */
+  /** Substitute stock numbers in preference order, comma/space separated. Null or empty clears. */
   alternateStockIds?: string | null;
+  /** Manual reorder point in footage. Null restores the computed value. */
+  reorderPointFootage?: number | null;
+  /** Manual order-up-to level in footage. Null restores the computed value. */
+  maxFootage?: number | null;
+  /** Demand coefficient of variation override. Null restores the observed value. */
+  demandCv?: number | null;
+  /** Lead-time coefficient of variation override. Null restores the observed value. */
+  leadTimeCv?: number | null;
+  /** Quarterly seasonality weight for month 1. All three move together; all three null clears. */
+  seasonalityW1?: number | null;
+  seasonalityW2?: number | null;
+  seasonalityW3?: number | null;
 }
 
 export interface DemandConfigResult {
@@ -1951,6 +2069,17 @@ export type ListWeeklySnapshots200 = {
 
 export type ListMonthlySnapshots200 = {
   items: MonthlySnapshotSummary[];
+};
+
+export type GetMrpParams = {
+  /**
+   * History window for the statistical forecast and reorder point.
+   */
+  monthsBack?: number;
+  /**
+   * Horizon in weekly buckets (4-26).
+   */
+  weeks?: number;
 };
 
 export type GetVendorContacts200 = {
