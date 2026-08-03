@@ -93,6 +93,9 @@ importers:
       '@workspace/api-zod':
         specifier: workspace:*
         version: link:../../lib/api-zod
+      '@workspace/carrier-tracking':
+        specifier: workspace:*
+        version: link:../../lib/carrier-tracking
       '@workspace/db':
         specifier: workspace:*
         version: link:../../lib/db
@@ -151,6 +154,9 @@ importers:
 
   artifacts/inventory-adjustments:
     dependencies:
+      '@workspace/carrier-tracking':
+        specifier: workspace:*
+        version: link:../../lib/carrier-tracking
       better-auth:
         specifier: ^1.6.25
         version: 1.6.25(drizzle-kit@0.31.9)(drizzle-orm@0.45.2(@types/pg@8.18.0)(kysely@0.29.4)(pg@8.20.0))(pg@8.20.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -545,6 +551,8 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 3.25.76
+
+  lib/carrier-tracking: {}
 
   lib/db:
     dependencies:

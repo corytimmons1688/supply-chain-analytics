@@ -146,6 +146,30 @@ router.get("/cron/po-agent", async (req, res, next) => {
   }
 });
 
+/**
+ * Weekday morning material digest. Scheduled by GitHub Actions (Vercel Hobby
+ * allows only two crons and both slots are taken), so the weekday guard lives
+ * here too rather than trusting the caller — a manual hit at the weekend
+ * shouldn't mail the team. `?force=1` overrides for testing.
+ */
+router.get("/cron/daily-digest", async (req, res, next) => {
+  try {
+    if (!cronAuthorized(req, res)) return;
+    const { weekday } = mtParts(new Date());
+    const isWeekday = !["Sat", "Sun"].includes(weekday);
+    const force = req.query["force"] === "1";
+    if (!isWeekday && !force) {
+      return void res.json({ sent: false, skipped: `${weekday} — digest runs Mon-Fri` });
+    }
+    const { sendDigest } = await import("../lib/daily-digest");
+    const out = await sendDigest();
+    logger.info({ out }, "Daily digest cron ran");
+    res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
+
 function mtParts(d: Date): { month: string; weekday: string } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Denver",

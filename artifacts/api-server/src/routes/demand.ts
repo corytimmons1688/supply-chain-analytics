@@ -1246,6 +1246,45 @@ router.post(
 );
 
 /**
+ * Weekday digest — preview the exact HTML that goes out, or send a sample.
+ *
+ * The sample always goes to the signed-in user, never to the configured
+ * recipient list: a preview must not be able to mail the team.
+ */
+router.get(
+  "/demand/digest/preview",
+  asyncHandler(async (_req, res) => {
+    const { buildDigest, renderDigestHtml, renderDigestText, digestSubject, digestRecipients } = await import(
+      "../lib/daily-digest"
+    );
+    const { appBaseUrl } = await import("../lib/gmail");
+    const digest = await buildDigest();
+    res.json({
+      subject: digestSubject(digest),
+      html: renderDigestHtml(digest, appBaseUrl()),
+      text: renderDigestText(digest),
+      recipients: digestRecipients(),
+      stocks: digest.stocks.length,
+      pos: digest.pos.length,
+      totals: digest.totals,
+      pastDueCount: digest.pastDueCount,
+    });
+  }),
+);
+
+router.post(
+  "/demand/digest/send-sample",
+  asyncHandler(async (req, res) => {
+    const to = chatUserEmail(req);
+    if (!to) return void res.status(401).json({ error: "Not signed in" });
+    const { sendDigest } = await import("../lib/daily-digest");
+    const out = await sendDigest({ to: [to], subjectPrefix: "[SAMPLE] " });
+    if (!out.sent) return void res.status(409).json({ error: out.skipped ?? "Could not send" });
+    res.json(out);
+  }),
+);
+
+/**
  * Request a make-and-hold release: ask the vendor to ship material they've
  * already made and are holding.
  *

@@ -1,0 +1,40 @@
+name: Weekday material digest
+
+# Emails the material status digest (availability + open POs) to the buying
+# team on weekday mornings.
+#
+# 12:30 UTC = 06:30 MDT / 05:30 MST, so it's waiting in the inbox before the
+# shift starts. GitHub's cron is UTC-only and has no DST, so the delivery time
+# shifts an hour in winter; that's fine for a morning digest and better than
+# two schedules to keep in sync.
+#
+# Mon-Fri here AND in the endpoint: Actions can fire late or be replayed, and
+# the digest re-checks the Mountain-Time weekday before sending.
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Send even if it isn't a weekday in Mountain Time"
+        required: false
+        default: "false"
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Send digest
+        run: |
+          URL="https://supply-chain-analytics-delta.vercel.app/api/cron/daily-digest"
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then URL="$URL?force=1"; fi
+          curl --silent --show-error --fail --max-time 290 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$URL" | tee digest-result.json
+      - name: Summarize
+        run: |
+          echo "### Digest result" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat digest-result.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

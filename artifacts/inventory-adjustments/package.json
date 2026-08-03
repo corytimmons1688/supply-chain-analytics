@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "better-auth": "^1.6.25"
+    "better-auth": "^1.6.25",
+    "@workspace/carrier-tracking": "workspace:*"
   }
 }
