@@ -13,6 +13,8 @@ export interface MaterialForecast {
   /** Allowance added to good length for spoilage/make-ready. */
   spoilagePct: number;
   unresolvedCount: number;
+  /** Lines replanned into the current week because their NetSuite ship date had passed. */
+  shipDateAdjustedCount: number;
   linkage: ForecastLinkage;
   items: ForecastLine[];
   byStock: ForecastStockRollup[];

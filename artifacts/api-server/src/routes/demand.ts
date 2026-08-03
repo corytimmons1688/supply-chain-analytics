@@ -2066,7 +2066,7 @@ router.get(
   "/demand/forecast",
   asyncHandler(async (_req, res) => {
     const { nsForecastLineTable } = await import("@workspace/db");
-    const { forecastSpoilagePct, countsAsForecast } = await import("../lib/forecast-sync");
+    const { forecastSpoilagePct, countsAsForecast, planningShipDate } = await import("../lib/forecast-sync");
     const rows = await db.select().from(nsForecastLineTable);
     const open = rows.filter((r) => !r.ltTicketNum);
     const items = open
@@ -2074,6 +2074,9 @@ router.get(
         const sd = r.stockDemand as
           | { stocks?: { stockId: string; widthIn: number; footage: number }[]; goodLengthFt?: number; derived?: boolean }
           | null;
+        // A ship date already in the past means the line is still waiting on
+        // approval — plan it for the current week instead.
+        const plan = planningShipDate(r.expectedShipDate);
         return {
           id: r.id,
           soNumber: r.tranId,
@@ -2083,6 +2086,8 @@ router.get(
           itemClass: r.itemClass,
           quantity: r.quantity,
           expectedShipDate: r.expectedShipDate,
+          planningShipDate: plan.date,
+          shipDateAdjusted: plan.adjusted,
           orderDate: r.orderDate,
           ltProductNumber: r.ltProductNumber,
           isFlexpack: r.isFlexpack,
@@ -2102,7 +2107,7 @@ router.get(
           })),
         };
       })
-      .sort((a, b) => (a.expectedShipDate ?? "9999").localeCompare(b.expectedShipDate ?? "9999"));
+      .sort((a, b) => a.planningShipDate.localeCompare(b.planningShipDate));
 
     // Roll up per stock so a buyer sees the material impact, not just orders.
     // Lines already covered by a production ticket are excluded — their footage
@@ -2114,8 +2119,8 @@ router.get(
         const cur = byStock.get(s.stockId) ?? { stockId: s.stockId, footage: 0, lines: 0, earliestShipDate: null };
         cur.footage += s.footage;
         cur.lines += 1;
-        if (it.expectedShipDate && (!cur.earliestShipDate || it.expectedShipDate < cur.earliestShipDate)) {
-          cur.earliestShipDate = it.expectedShipDate;
+        if (!cur.earliestShipDate || it.planningShipDate < cur.earliestShipDate) {
+          cur.earliestShipDate = it.planningShipDate;
         }
         byStock.set(s.stockId, cur);
       }
@@ -2127,6 +2132,9 @@ router.get(
     res.json({
       spoilagePct: forecastSpoilagePct(),
       unresolvedCount: items.filter((i) => i.unresolvedReason).length,
+      // Lines replanned into the current week because their NetSuite ship date
+      // had already passed while the order waited for approval.
+      shipDateAdjustedCount: items.filter((i) => i.shipDateAdjusted).length,
       linkage: {
         // Suppressed: a production ticket already carries this demand.
         production: linked.filter((i) => i.inferredTicketConfidence === "high").length,

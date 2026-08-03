@@ -16,7 +16,12 @@ export interface ForecastLine {
   sku: string;
   itemClass?: string | null;
   quantity: number;
+  /** Raw NetSuite date, untouched — often already in the past while the order waits for approval. */
   expectedShipDate?: string | null;
+  /** The date the forecast plans against: the NetSuite date when it's still ahead of us, otherwise the end of the current week (a pending line with a past date is expected to be approved this week). */
+  planningShipDate: string;
+  /** True when the NetSuite ship date was past or missing and the line was replanned into the current week. */
+  shipDateAdjusted: boolean;
   orderDate?: string | null;
   ltProductNumber?: string | null;
   isFlexpack: boolean;

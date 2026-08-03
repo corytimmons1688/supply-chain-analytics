@@ -1449,6 +1449,11 @@ export const GetMaterialForecastResponse = zod.object({
     .number()
     .describe("Allowance added to good length for spoilage\/make-ready."),
   unresolvedCount: zod.number(),
+  shipDateAdjustedCount: zod
+    .number()
+    .describe(
+      "Lines replanned into the current week because their NetSuite ship date had passed.",
+    ),
   linkage: zod
     .object({
       production: zod
@@ -1471,7 +1476,22 @@ export const GetMaterialForecastResponse = zod.object({
       sku: zod.string(),
       itemClass: zod.string().nullish(),
       quantity: zod.number(),
-      expectedShipDate: zod.string().nullish(),
+      expectedShipDate: zod
+        .string()
+        .nullish()
+        .describe(
+          "Raw NetSuite date, untouched — often already in the past while the order waits for approval.",
+        ),
+      planningShipDate: zod
+        .string()
+        .describe(
+          "The date the forecast plans against: the NetSuite date when it's still ahead of us, otherwise the end of the current week (a pending line with a past date is expected to be approved this week).",
+        ),
+      shipDateAdjusted: zod
+        .boolean()
+        .describe(
+          "True when the NetSuite ship date was past or missing and the line was replanned into the current week.",
+        ),
       orderDate: zod.string().nullish(),
       ltProductNumber: zod.string().nullish(),
       isFlexpack: zod.boolean(),

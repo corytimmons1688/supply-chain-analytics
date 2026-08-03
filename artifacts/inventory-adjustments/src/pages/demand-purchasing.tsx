@@ -1347,6 +1347,9 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
   const linkedProduction = data.items.filter((i) => i.inferredTicketConfidence === "high");
   const linkedProof = data.items.filter((i) => i.inferredTicketConfidence === "proof");
   const linkedWeak = data.items.filter((i) => i.inferredTicketConfidence === "low");
+  // Where replanned lines land — the same Sunday the server used, so the copy
+  // matches the dates in the table.
+  const thisWeekEnd = data.items.find((i) => i.shipDateAdjusted)?.planningShipDate ?? "";
 
   return (
     <Card>
@@ -1361,6 +1364,14 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
           allowance. A line drops off here once its NetSuite LT Ticket field is filled in — or, because that field is
           usually written after the order leaves Pending Approval, as soon as a production ticket for the same SKU and
           customer turns up in Label Traxx. Either way the demand counts once.
+          {data.shipDateAdjustedCount > 0 && (
+            <>
+              {" "}
+              {data.shipDateAdjustedCount} line{data.shipDateAdjustedCount === 1 ? "" : "s"} had a ship date already in
+              the past while waiting for approval — those are planned for this week (through {thisWeekEnd}), not their
+              original date.
+            </>
+          )}
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1372,7 +1383,7 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                 <th className="text-left px-2 py-1.5 font-medium">Description</th>
                 <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">Forecast ft</th>
                 <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">Available now</th>
-                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">First ship</th>
+                <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Needed by</th>
                 <th className="text-right px-2 py-1.5 font-medium">Lines</th>
               </tr>
             </thead>
@@ -1401,7 +1412,10 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                     >
                       {m ? fmt(m.availableFootage) : "—"}
                     </td>
-                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                    <td
+                      className="px-2 py-1.5 text-muted-foreground whitespace-nowrap"
+                      title="Earliest planning date across this stock's forecast lines"
+                    >
                       {b.earliestShipDate ?? "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{b.lines}</td>
@@ -1510,7 +1524,7 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                   <th className="text-left px-2 py-1.5 font-medium">Customer</th>
                   <th className="text-left px-2 py-1.5 font-medium">SKU</th>
                   <th className="text-right px-2 py-1.5 font-medium">Qty</th>
-                  <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Ship by</th>
+                  <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Needed by</th>
                   <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">In LT</th>
                   <th className="text-left px-2 py-1.5 font-medium">Material needed</th>
                 </tr>
@@ -1538,7 +1552,19 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{fmt(it.quantity)}</td>
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
-                      {it.expectedShipDate ?? "—"}
+                      {it.planningShipDate}
+                      {it.shipDateAdjusted && (
+                        <span
+                          className="ml-1 text-[10px]"
+                          title={
+                            it.expectedShipDate
+                              ? `NetSuite says ${it.expectedShipDate} — already past, so planned for this week`
+                              : "No NetSuite ship date — planned for this week"
+                          }
+                        >
+                          this wk
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">
                       {it.inferredTicketNum ? (

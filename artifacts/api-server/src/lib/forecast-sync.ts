@@ -2,6 +2,7 @@ import { db, nsForecastLineTable, ltTicketTable } from "@workspace/db";
 import { isNull, notInArray } from "drizzle-orm";
 import { runSuiteQL, netsuiteConfigured } from "./netsuite";
 import { ltGet, ltApiConfigured } from "./ltApi";
+import { bucketRange } from "./cc";
 import { forecastLineFootage, type LtConstruction, type CopyPosition } from "./label-footage";
 import { logger } from "./logger";
 
@@ -58,6 +59,46 @@ interface NsLine {
   lt_ticket: string | null;
   expectedshipdate: string | null;
   trandate: string | null;
+}
+
+/**
+ * Today in Mountain Time, not UTC. "The current week" is a statement about the
+ * plant's week, and UTC rolls over at 5-6pm MT — which on a Sunday evening
+ * would push everything a full week out. Same convention the snapshot cron uses
+ * for its date-sensitive decisions.
+ */
+function todayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Denver",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+export interface PlanningShipDate {
+  /** The date the forecast plans against. */
+  date: string;
+  /** True when the NetSuite date was past (or missing) and we moved it. */
+  adjusted: boolean;
+}
+
+/**
+ * The date this line should be planned against.
+ *
+ * A pending-approval line whose expected ship date has already passed hasn't
+ * gone away — it's sitting in the approval queue, and the measured queue is
+ * mostly like this (median ship date 12 days in the past). Per Cory
+ * (2026-08-02) those are expected to be approved in the CURRENT week, so they
+ * plan against the end of this week rather than a stale date that would sort
+ * them ahead of live work and read as already-missed.
+ *
+ * Week boundaries come from bucketRange so this agrees with every other weekly
+ * view in the app (Monday start, Sunday end).
+ */
+export function planningShipDate(expected: string | null, today = todayIso()): PlanningShipDate {
+  if (expected && expected >= today) return { date: expected, adjusted: false };
+  return { date: bucketRange(today, "week").end, adjusted: true };
 }
 
 /** NetSuite hands dates back as M/D/YYYY; the rest of the app speaks ISO. */
@@ -474,8 +515,11 @@ export async function fetchForecastByStock(): Promise<Map<string, ForecastStockR
       };
       cur.footage += s.footage;
       cur.lines += 1;
-      if (r.expectedShipDate && (!cur.earliestShipDate || r.expectedShipDate < cur.earliestShipDate)) {
-        cur.earliestShipDate = r.expectedShipDate;
+      // Planning date, not the raw NetSuite date — a past ship date means the
+      // line is waiting on approval this week, not that it's already gone.
+      const plan = planningShipDate(r.expectedShipDate);
+      if (!cur.earliestShipDate || plan.date < cur.earliestShipDate) {
+        cur.earliestShipDate = plan.date;
       }
       perStock.set(widthKey, cur);
     }

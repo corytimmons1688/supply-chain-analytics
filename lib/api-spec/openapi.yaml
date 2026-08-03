@@ -2305,7 +2305,7 @@ components:
         footage: { type: number }
     ForecastLine:
       type: object
-      required: [id, soNumber, sku, quantity, isFlexpack, geometryDerived, countsInForecast, stocks]
+      required: [id, soNumber, sku, quantity, isFlexpack, geometryDerived, countsInForecast, planningShipDate, shipDateAdjusted, stocks]
       properties:
         id: { type: string }
         soNumber: { type: string }
@@ -2314,7 +2314,9 @@ components:
         sku: { type: string }
         itemClass: { type: string, nullable: true }
         quantity: { type: number }
-        expectedShipDate: { type: string, nullable: true }
+        expectedShipDate: { type: string, nullable: true, description: "Raw NetSuite date, untouched — often already in the past while the order waits for approval." }
+        planningShipDate: { type: string, description: "The date the forecast plans against: the NetSuite date when it's still ahead of us, otherwise the end of the current week (a pending line with a past date is expected to be approved this week)." }
+        shipDateAdjusted: { type: boolean, description: "True when the NetSuite ship date was past or missing and the line was replanned into the current week." }
         orderDate: { type: string, nullable: true }
         ltProductNumber: { type: string, nullable: true }
         isFlexpack: { type: boolean }
@@ -2356,10 +2358,11 @@ components:
         earliestShipDate: { type: string, nullable: true }
     MaterialForecast:
       type: object
-      required: [spoilagePct, unresolvedCount, linkage, items, byStock]
+      required: [spoilagePct, unresolvedCount, shipDateAdjustedCount, linkage, items, byStock]
       properties:
         spoilagePct: { type: number, description: "Allowance added to good length for spoilage/make-ready." }
         unresolvedCount: { type: integer }
+        shipDateAdjustedCount: { type: integer, description: "Lines replanned into the current week because their NetSuite ship date had passed." }
         linkage: { $ref: "#/components/schemas/ForecastLinkage" }
         items:
           type: array
