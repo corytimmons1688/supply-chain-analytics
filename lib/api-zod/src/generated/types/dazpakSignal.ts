@@ -24,6 +24,8 @@ export interface DazpakSignal {
   demandMakeHorizon?: number;
   /** Suggested footage to release from Held now (sum of width-level releases). */
   releaseFootage: number;
+  /** Demand inside the release window a release CANNOT cover because the vendor has not made the material yet. Distinct from releaseFootage being 0 because everything is covered — this means you need material and calling it in will not get it. */
+  unreleasableFootage?: number;
   /** Suggested new make-and-hold quantity (footage). */
   makeFootage: number;
   /** Per-width break-out — supply at a width only covers demand at that width. */

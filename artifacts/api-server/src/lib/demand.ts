@@ -1204,6 +1204,13 @@ export interface DazpakSignal {
   demandReleaseHorizon: number; // committed footage due within the release window
   demandMakeHorizon: number; // demand over the make-coverage window
   releaseFootage: number; // suggested release from Held now (sum of width-level)
+  /**
+   * Demand inside the release window that a release CANNOT satisfy, because the
+   * vendor hasn't made the material yet. Distinct from releaseFootage being 0
+   * for a happy reason: this says "you need material, and calling it in won't
+   * get it" — the panel used to render both as "covered".
+   */
+  unreleasableFootage: number;
   makeFootage: number; // suggested new make-and-hold quantity
   /** Per-width break-out — supply at a width only covers demand at that width. */
   widths?: {
@@ -1216,6 +1223,7 @@ export interface DazpakSignal {
     etaDate: string | null;
     demandReleaseHorizon: number;
     releaseFootage: number;
+    unreleasableFootage: number;
   }[];
   lines: {
     poNumber: string;

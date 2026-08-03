@@ -17,4 +17,6 @@ export type DazpakSignalWidthsItem = {
   etaDate?: string | null;
   demandReleaseHorizon: number;
   releaseFootage: number;
+  /** Shortfall at this width that no release can satisfy. */
+  unreleasableFootage?: number;
 };

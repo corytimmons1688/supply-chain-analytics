@@ -391,12 +391,19 @@ router.get(
           etaDate: string | null;
           demandReleaseHorizon: number;
           releaseFootage: number;
+          /**
+           * Demand inside the release window that on-hand doesn't cover — before
+           * capping at what the vendor actually holds. releaseFootage is this
+           * clamped to heldFootage, so the gap between them is the part no
+           * release can fix.
+           */
+          shortfallFootage: number;
         };
         const wb = new Map<string, WBucket>();
         const bucket = (k: string): WBucket => {
           let b = wb.get(k);
           if (!b) {
-            b = { rep: 0, pooled: k === "le13", onHandFootage: 0, heldFootage: 0, inProductionFootage: 0, etaDate: null, demandReleaseHorizon: 0, releaseFootage: 0 };
+            b = { rep: 0, pooled: k === "le13", onHandFootage: 0, heldFootage: 0, inProductionFootage: 0, etaDate: null, demandReleaseHorizon: 0, releaseFootage: 0, shortfallFootage: 0 };
             wb.set(k, b);
           }
           return b;
@@ -422,7 +429,8 @@ router.get(
           if (l.requiredWidth > b.rep) b.rep = l.requiredWidth;
         }
         for (const b of wb.values()) {
-          b.releaseFootage = Math.min(Math.max(0, b.demandReleaseHorizon - b.onHandFootage), b.heldFootage);
+          b.shortfallFootage = Math.max(0, b.demandReleaseHorizon - b.onHandFootage);
+          b.releaseFootage = Math.min(b.shortfallFootage, b.heldFootage);
         }
         const dazpakWidths = [...wb.values()]
           .filter((b) => b.heldFootage > 0 || b.inProductionFootage > 0 || b.demandReleaseHorizon > 0)
@@ -437,11 +445,21 @@ router.get(
             etaDate: b.etaDate,
             demandReleaseHorizon: Math.round(b.demandReleaseHorizon),
             releaseFootage: Math.round(b.releaseFootage),
+            // What the release can't reach — nothing (or not enough) is made.
+            unreleasableFootage: Math.round(Math.max(0, b.shortfallFootage - b.releaseFootage)),
           }));
 
         // Stock-level release = sum of the width-level releases (width-aware:
         // held 30" can't cover a ≤13" shortfall, and vice versa).
         const releaseFootage = dazpakWidths.reduce((s, b) => s + b.releaseFootage, 0);
+        /**
+         * Demand inside the release window that a release cannot satisfy because
+         * the vendor hasn't made it yet. #307 is the case this exists for: 95,231
+         * ft on hand against 228,010 ft committed, and every foot of its 440,000
+         * ft make-and-hold still in production — so the panel read "covered" when
+         * it meant "there is nothing to release", which are not the same thing.
+         */
+        const unreleasableFootage = dazpakWidths.reduce((s, b) => s + b.unreleasableFootage, 0);
         const coverage = onHandFt + dz.heldFootage + dz.inProductionFootage;
         const makeFootage = Math.max(0, demandMake - coverage);
         metrics.dazpak = {
@@ -451,6 +469,7 @@ router.get(
           demandReleaseHorizon: Math.round(demandRelease),
           demandMakeHorizon: Math.round(demandMake),
           releaseFootage: Math.round(releaseFootage),
+          unreleasableFootage: Math.round(unreleasableFootage),
           makeFootage: Math.round(makeFootage),
           widths: dazpakWidths,
           lines: dz.lines,

@@ -2357,6 +2357,12 @@ export const GetDemandSummaryResponse = zod.object({
             .describe(
               "Suggested footage to release from Held now (sum of width-level releases).",
             ),
+          unreleasableFootage: zod
+            .number()
+            .optional()
+            .describe(
+              "Demand inside the release window a release CANNOT cover because the vendor has not made the material yet. Distinct from releaseFootage being 0 because everything is covered — this means you need material and calling it in will not get it.",
+            ),
           makeFootage: zod
             .number()
             .describe("Suggested new make-and-hold quantity (footage)."),
@@ -2374,6 +2380,12 @@ export const GetDemandSummaryResponse = zod.object({
                 etaDate: zod.string().nullish(),
                 demandReleaseHorizon: zod.number(),
                 releaseFootage: zod.number(),
+                unreleasableFootage: zod
+                  .number()
+                  .optional()
+                  .describe(
+                    "Shortfall at this width that no release can satisfy.",
+                  ),
               }),
             )
             .optional()
@@ -2701,6 +2713,12 @@ export const GetDemandStockDetailResponse = zod.object({
           .describe(
             "Suggested footage to release from Held now (sum of width-level releases).",
           ),
+        unreleasableFootage: zod
+          .number()
+          .optional()
+          .describe(
+            "Demand inside the release window a release CANNOT cover because the vendor has not made the material yet. Distinct from releaseFootage being 0 because everything is covered — this means you need material and calling it in will not get it.",
+          ),
         makeFootage: zod
           .number()
           .describe("Suggested new make-and-hold quantity (footage)."),
@@ -2718,6 +2736,12 @@ export const GetDemandStockDetailResponse = zod.object({
               etaDate: zod.string().nullish(),
               demandReleaseHorizon: zod.number(),
               releaseFootage: zod.number(),
+              unreleasableFootage: zod
+                .number()
+                .optional()
+                .describe(
+                  "Shortfall at this width that no release can satisfy.",
+                ),
             }),
           )
           .optional()

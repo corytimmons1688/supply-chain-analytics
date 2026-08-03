@@ -545,6 +545,11 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
 
   const toRelease = program.filter((r) => (r.dazpak?.releaseFootage ?? 0) > 0);
   const toMake = program.filter((r) => (r.dazpak?.makeFootage ?? 0) > 0);
+  // Short inside the window with nothing made — a release can't fix these, so
+  // they need the incoming delivery date confirmed instead.
+  const atRisk = program.filter(
+    (r) => (r.dazpak?.releaseFootage ?? 0) === 0 && (r.dazpak?.unreleasableFootage ?? 0) > 0,
+  );
 
   return (
     <Card>
@@ -562,6 +567,12 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
           )}
           {toMake.length > 0 && (
             <span className="text-red-600 dark:text-red-400 font-medium"> · {toMake.length} to make</span>
+          )}
+          {atRisk.length > 0 && (
+            <span className="text-orange-700 dark:text-orange-400 font-medium">
+              {" "}
+              · {atRisk.length} short with nothing held — riding on the vendor&apos;s delivery date
+            </span>
           )}
         </p>
       </CardHeader>
@@ -642,7 +653,24 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
                           Make {fmt(d.makeFootage)} ft
                         </Badge>
                       )}
-                      {d.releaseFootage === 0 && d.makeFootage === 0 && (
+                      {/* Nothing to release is NOT the same as nothing wrong.
+                          #307 sat here reading "covered" while 132,779 ft short
+                          inside the release window, because every foot of its
+                          make-and-hold was still in production. */}
+                      {d.releaseFootage === 0 && d.makeFootage === 0 && (d.unreleasableFootage ?? 0) > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/40"
+                          title={`Short ${fmt(d.unreleasableFootage ?? 0)} ft inside the 15-business-day window and none of it is made yet, so a release can't help. ${
+                            d.etaDate
+                              ? `Depends on the ${d.etaDate} delivery holding — if that slips you're short with no fallback.`
+                              : "No ETA from the vendor on the material in production."
+                          }`}
+                        >
+                          Short {fmt(d.unreleasableFootage ?? 0)} ft · none held
+                        </Badge>
+                      )}
+                      {d.releaseFootage === 0 && d.makeFootage === 0 && (d.unreleasableFootage ?? 0) <= 0 && (
                         <span className="text-muted-foreground">covered</span>
                       )}
                     </td>
@@ -673,6 +701,16 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
                             title={`On-hand at ${w.label} won't cover ${fmt(w.demandReleaseHorizon)} ft due in the next 15 business days`}
                           >
                             Release {fmt(w.releaseFootage)} ft
+                          </Badge>
+                        ) : (w.unreleasableFootage ?? 0) > 0 ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/40"
+                            title={`${w.label}: ${fmt(w.demandReleaseHorizon)} ft due in the next 15 business days against ${fmt(w.onHandFootage)} ft on hand, and nothing made at this width to release.${
+                              w.etaDate ? ` Rides on the ${w.etaDate} delivery.` : ""
+                            }`}
+                          >
+                            Short {fmt(w.unreleasableFootage ?? 0)} ft
                           </Badge>
                         ) : (
                           <span className="text-muted-foreground">covered</span>

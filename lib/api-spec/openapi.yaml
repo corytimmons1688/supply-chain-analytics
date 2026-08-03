@@ -3376,6 +3376,7 @@ components:
         demandReleaseHorizon: { type: number, description: "Committed footage due within the release window (~15 biz days)." }
         demandMakeHorizon: { type: number, description: "Demand over the make-coverage window (10 weeks)." }
         releaseFootage: { type: number, description: "Suggested footage to release from Held now (sum of width-level releases)." }
+        unreleasableFootage: { type: number, description: "Demand inside the release window a release CANNOT cover because the vendor has not made the material yet. Distinct from releaseFootage being 0 because everything is covered — this means you need material and calling it in will not get it." }
         makeFootage: { type: number, description: "Suggested new make-and-hold quantity (footage)." }
         widths:
           type: array
@@ -3393,6 +3394,7 @@ components:
               etaDate: { type: string, nullable: true }
               demandReleaseHorizon: { type: number }
               releaseFootage: { type: number }
+              unreleasableFootage: { type: number, description: "Shortfall at this width that no release can satisfy." }
         lines:
           type: array
           items:
