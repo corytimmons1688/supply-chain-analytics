@@ -64,6 +64,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+import { Layout } from "@/components/layout";
 import {
   buildAllForecasts,
   doubleCountDelta,
@@ -73,7 +74,7 @@ import {
   unforecastableLines,
   type MaterialForecast,
   type PoolingClass,
-} from "./forecasting-data";
+} from "@/mocks/forecasting-data";
 
 /* ------------------------------------------------------------------ format */
 
@@ -281,12 +282,7 @@ function PositionChart({ f }: { f: MaterialForecast }) {
 
 /* ------------------------------------------------------------------ main */
 
-export default function ForecastingTab({
-  embedded = false,
-}: {
-  /** True when hosted inside the app shell, which already supplies chrome. */
-  embedded?: boolean;
-} = {}) {
+export default function ForecastingPage() {
   const [serviceLevel, setServiceLevel] = React.useState(0.95);
   const [selectedId, setSelectedId] = React.useState("73");
 
@@ -320,9 +316,9 @@ export default function ForecastingTab({
   const unforecastableUsd = unforecastable.reduce((a, l) => a + l.amountUsd, 0);
 
   return (
-    <TooltipProvider delayDuration={150}>
-      <div className="min-h-screen bg-background p-6 text-foreground">
-        <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
+    <Layout>
+      <TooltipProvider delayDuration={150}>
+        <div className="flex flex-col gap-5">
           {/* ---------------------------------------------------- header */}
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
@@ -1052,7 +1048,7 @@ export default function ForecastingTab({
             </Button>
           </div>
         </div>
-      </div>
-    </TooltipProvider>
+      </TooltipProvider>
+    </Layout>
   );
 }

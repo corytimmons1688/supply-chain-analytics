@@ -12,6 +12,7 @@ import RootCause from "@/pages/root-cause";
 import Snapshots from "@/pages/snapshots";
 import DemandPlanning from "@/pages/demand";
 import DemandDetail from "@/pages/demand-detail";
+import Forecasting from "@/pages/forecasting";
 import CycleCounts from "@/pages/cycle-counts";
 import Scorecards from "@/pages/scorecards";
 import Asl from "@/pages/asl";
@@ -57,6 +58,11 @@ const queryClient = new QueryClient({
  * (degrade to signed out) rather than hanging navigation.
  */
 function RequireAuth({ children }: { children: React.ReactNode }) {
+  // Mock mode has no auth server to talk to. better-auth holds its own fetch
+  // reference so it can't be intercepted, and signing in for real would write
+  // to app_user — so skip the gate entirely. Dev-only flag.
+  if (import.meta.env.VITE_MOCK_API) return <AccessGate>{children}</AccessGate>;
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { data: session, isPending } = authClient.useSession();
   if (isPending) {
     return (
@@ -123,6 +129,7 @@ function Router() {
             <Route path="/goals" component={Goals} />
             <Route path="/root-cause" component={RootCause} />
             <Route path="/snapshots" component={Snapshots} />
+            <Route path="/forecasting" component={Forecasting} />
             <Route path="/demand" component={DemandPlanning} />
             <Route path="/demand/:stockId" component={DemandDetail} />
             <Route path="/excess-obsolete" component={ExcessObsolete} />

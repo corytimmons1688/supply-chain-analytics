@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive, ShieldCheck } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive, ShieldCheck, LineChart } from "lucide-react";
 import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth, useGetMe } from "@workspace/api-client-react";
@@ -24,6 +24,9 @@ const INVENTORY_CONTROL_ITEMS = [
 ] as const;
 
 const DEMAND_ITEMS = [
+  // Forecasting owns the forward-looking demand signal; /demand keeps execution
+  // (suggested POs, vendor email, releases).
+  { href: "/forecasting", label: "Forecasting", icon: LineChart },
   { href: "/demand", label: "Demand Planning", icon: TrendingUp },
   { href: "/excess-obsolete", label: "Excess & Obsolete", icon: Archive },
 ];
@@ -39,7 +42,11 @@ export function Layout({ children }: LayoutProps) {
   const { data: health } = useGatewayHealth();
 
   const inventoryActive = INVENTORY_CONTROL_ITEMS.some((i) => i.href === location);
-  const demandActive = location === "/demand" || location.startsWith("/demand/") || location === "/excess-obsolete";
+  const demandActive =
+    location === "/demand" ||
+    location.startsWith("/demand/") ||
+    location === "/excess-obsolete" ||
+    location === "/forecasting";
   const supplierActive = SUPPLIER_ITEMS.some((i) => i.href === location);
 
   return (
@@ -266,11 +273,18 @@ function UserMenu() {
   const { data: session } = authClient.useSession();
   const { data: me } = useGetMe();
   const [location] = useLocation();
-  if (!session?.user) return null;
+  // Mock mode has no real session; fall back to /me so the header still reads
+  // as it does in production. Dev-only flag.
+  const user =
+    session?.user ??
+    (import.meta.env.VITE_MOCK_API && me
+      ? { email: me.email, name: me.name ?? me.email }
+      : null);
+  if (!user) return null;
   return (
     <div className="flex items-center gap-2 pl-2 border-l border-border">
-      <span className="hidden md:inline text-muted-foreground max-w-[14rem] truncate" title={session.user.email}>
-        {session.user.name || session.user.email}
+      <span className="hidden md:inline text-muted-foreground max-w-[14rem] truncate" title={user.email}>
+        {user.name || user.email}
       </span>
       {me?.appRole === "admin" ? (
         <Link
