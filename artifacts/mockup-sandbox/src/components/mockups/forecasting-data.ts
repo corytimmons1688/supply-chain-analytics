@@ -144,11 +144,11 @@ export const MATERIALS: Material[] = [
     costMsi: 4.18,
     leadTimeDays: 42,
     leadTimeSigmaDays: 11,
-    onHandFt: 18400,
-    safetyStockFt: 9200,
+    onHandFt: 54000,
+    safetyStockFt: 12000,
     typicalRollFt: 5000,
     alternateStockIds: ["296"],
-    baselineWeeklyFt: 1850,
+    baselineWeeklyFt: 700,
     baselineCv: 0.31,
     onOrder: [{ week: 4, footageFt: 15000, poNumber: "PO 2365" }],
     isCustom: false,
@@ -161,13 +161,13 @@ export const MATERIALS: Material[] = [
     costMsi: 3.5,
     leadTimeDays: 28,
     leadTimeSigmaDays: 6,
-    onHandFt: 6100,
-    safetyStockFt: 9400,
+    onHandFt: 41000,
+    safetyStockFt: 14000,
     typicalRollFt: 4000,
     alternateStockIds: [],
-    baselineWeeklyFt: 2400,
+    baselineWeeklyFt: 600,
     baselineCv: 0.22,
-    onOrder: [],
+    onOrder: [{ week: 5, footageFt: 16000, poNumber: "PO 2388" }],
     isCustom: false,
   },
   {
@@ -178,11 +178,11 @@ export const MATERIALS: Material[] = [
     costMsi: 2.05,
     leadTimeDays: 21,
     leadTimeSigmaDays: 4,
-    onHandFt: 31200,
-    safetyStockFt: 7800,
+    onHandFt: 26000,
+    safetyStockFt: 9000,
     typicalRollFt: 6000,
     alternateStockIds: ["296"],
-    baselineWeeklyFt: 3100,
+    baselineWeeklyFt: 900,
     baselineCv: 0.18,
     onOrder: [{ week: 2, footageFt: 12000, poNumber: "PO 2402" }],
     isCustom: false,
@@ -195,11 +195,11 @@ export const MATERIALS: Material[] = [
     costMsi: 2.18,
     leadTimeDays: 24,
     leadTimeSigmaDays: 5,
-    onHandFt: 9800,
+    onHandFt: 15400,
     safetyStockFt: 3900,
     typicalRollFt: 6000,
     alternateStockIds: ["195"],
-    baselineWeeklyFt: 900,
+    baselineWeeklyFt: 300,
     baselineCv: 0.44,
     onOrder: [],
     isCustom: false,
@@ -212,11 +212,11 @@ export const MATERIALS: Material[] = [
     costMsi: 3.92,
     leadTimeDays: 35,
     leadTimeSigmaDays: 9,
-    onHandFt: 4200,
-    safetyStockFt: 5600,
+    onHandFt: 19000,
+    safetyStockFt: 6000,
     typicalRollFt: 4000,
     alternateStockIds: [],
-    baselineWeeklyFt: 1150,
+    baselineWeeklyFt: 400,
     baselineCv: 0.37,
     onOrder: [{ week: 6, footageFt: 8000, poNumber: "PO 2411" }],
     isCustom: false,
@@ -229,13 +229,13 @@ export const MATERIALS: Material[] = [
     costMsi: 1.64,
     leadTimeDays: 18,
     leadTimeSigmaDays: 3,
-    onHandFt: 22800,
-    safetyStockFt: 6400,
+    onHandFt: 196000,
+    safetyStockFt: 28000,
     typicalRollFt: 8000,
     alternateStockIds: [],
-    baselineWeeklyFt: 2050,
+    baselineWeeklyFt: 850,
     baselineCv: 0.26,
-    onOrder: [],
+    onOrder: [{ week: 3, footageFt: 48000, poNumber: "PO 2377" }],
     isCustom: false,
   },
   {
@@ -632,6 +632,212 @@ export const DEMAND_LINES: DemandLine[] = [
     },
   }),
 
+  // --- More customers on the core substrates, so pooling is real -----------
+  line({
+    id: "L14",
+    source: "NETSUITE",
+    ref: "SO118955",
+    customer: "Coastal Botanics",
+    brand: "Coastal",
+    rep: "Brad Sherman",
+    stage: "Pending Fulfillment",
+    qtyUnits: 110000,
+    amountUsd: 42800,
+    ageDays: 3,
+    requiredWeek: 4,
+    ltBacked: true,
+    stockDemand: [
+      { stockId: "73", widthIn: 7.5, footageFt: 12100 },
+      { stockId: "512", widthIn: 7.5, footageFt: 12100 },
+    ],
+    construction: {
+      sizeAcrossIn: 7.42,
+      sizeAroundIn: 1.2,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 1.325,
+      noAcross: 1,
+      goodLengthFt: 12100,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L15",
+    source: "HUBSPOT",
+    ref: "deal-9301",
+    customer: "Ember Cannabis",
+    brand: "Ember",
+    rep: "Jake Lynch",
+    stage: "Expect|Retention",
+    qtyUnits: 160000,
+    amountUsd: 61000,
+    ageDays: 6,
+    requiredWeek: 9,
+    stockDemand: [
+      { stockId: "73", widthIn: 7.5, footageFt: 17600 },
+      { stockId: "512", widthIn: 7.5, footageFt: 17600 },
+    ],
+    construction: {
+      sizeAcrossIn: 7.42,
+      sizeAroundIn: 1.2,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 1.325,
+      noAcross: 1,
+      goodLengthFt: 17600,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L16",
+    source: "NETSUITE",
+    ref: "SO118880",
+    customer: "Planet 13",
+    brand: "Planet 13",
+    rep: "Brad Sherman",
+    stage: "Pending Approval",
+    qtyUnits: 62000,
+    amountUsd: 38400,
+    ageDays: 7,
+    requiredWeek: 6,
+    stockDemand: [
+      { stockId: "206", widthIn: 9.0, footageFt: 16900 },
+      { stockId: "512", widthIn: 9.0, footageFt: 16900 },
+    ],
+    construction: {
+      sizeAcrossIn: 4.25,
+      sizeAroundIn: 6.5,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 6.625,
+      noAcross: 2,
+      goodLengthFt: 16900,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L17",
+    source: "HUBSPOT",
+    ref: "deal-9315",
+    customer: "Grove Collective",
+    brand: "Grove",
+    rep: "Dave Borkowski",
+    stage: "Expect|Growth",
+    qtyUnits: 90000,
+    amountUsd: 44000,
+    ageDays: 10,
+    requiredWeek: 11,
+    stockDemand: [
+      { stockId: "206", widthIn: 9.0, footageFt: 20900 },
+      { stockId: "512", widthIn: 9.0, footageFt: 20900 },
+    ],
+    construction: {
+      sizeAcrossIn: 4.25,
+      sizeAroundIn: 6.5,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 6.625,
+      noAcross: 2,
+      goodLengthFt: 20900,
+      derived: true,
+    },
+  }),
+  line({
+    id: "L18",
+    source: "HUBSPOT",
+    ref: "deal-9280",
+    customer: "Coastal Botanics",
+    brand: "Coastal",
+    rep: "Jake Lynch",
+    stage: "Expect|Retention",
+    qtyUnits: 70000,
+    amountUsd: 34000,
+    ageDays: 4,
+    requiredWeek: 7,
+    stockDemand: [
+      { stockId: "296", widthIn: 6.25, footageFt: 15800 },
+      { stockId: "512", widthIn: 6.25, footageFt: 15800 },
+    ],
+    construction: {
+      sizeAcrossIn: 3.0,
+      sizeAroundIn: 2.7,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 2.825,
+      noAcross: 4,
+      goodLengthFt: 15800,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L21",
+    source: "NETSUITE",
+    ref: "SO118934",
+    customer: "Grove Collective",
+    brand: "Grove",
+    rep: "Dave Borkowski",
+    stage: "Pending Fulfillment",
+    qtyUnits: 34000,
+    amountUsd: 16800,
+    ageDays: 5,
+    requiredWeek: 3,
+    ltBacked: true,
+    stockDemand: [{ stockId: "296", widthIn: 6.25, footageFt: 7600 }],
+    construction: {
+      sizeAcrossIn: 3.0,
+      sizeAroundIn: 2.7,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 2.825,
+      noAcross: 4,
+      goodLengthFt: 7600,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L19",
+    source: "NETSUITE",
+    ref: "SO118912",
+    customer: "Ember Cannabis",
+    brand: "Ember",
+    rep: "Max Shaw",
+    stage: "Pending Approval",
+    qtyUnits: 48000,
+    amountUsd: 22600,
+    ageDays: 12,
+    requiredWeek: 5,
+    stockDemand: [{ stockId: "418", widthIn: 5.5, footageFt: 10800 }],
+    construction: {
+      sizeAcrossIn: 2.5,
+      sizeAroundIn: 2.0,
+      copyPosition: "OUT_LEFT_4",
+      repeatIn: 2.625,
+      noAcross: 5,
+      goodLengthFt: 10800,
+      derived: false,
+    },
+  }),
+  line({
+    id: "L20",
+    source: "HUBSPOT",
+    ref: "deal-9166",
+    customer: "Planet 13",
+    brand: "Planet 13",
+    rep: "Owen Labombard",
+    stage: "Best Case|Growth",
+    qtyUnits: 55000,
+    amountUsd: 27500,
+    ageDays: 31,
+    requiredWeek: 10,
+    stockDemand: [
+      { stockId: "195", widthIn: 6.25, footageFt: 12400 },
+      { stockId: "512", widthIn: 6.25, footageFt: 12400 },
+    ],
+    construction: {
+      sizeAcrossIn: 3.0,
+      sizeAroundIn: 2.7,
+      copyPosition: "OUT_BTM_2",
+      repeatIn: 2.825,
+      noAcross: 4,
+      goodLengthFt: 12400,
+      derived: true,
+    },
+  }),
+
   // --- Unforecastable: no construction from Estimating yet -----------------
   line({
     id: "L11",
@@ -738,6 +944,13 @@ export interface MaterialForecast {
   recommendRolls: number;
   recommendUsd: number;
   orderByWeek: number | null;
+  /** Weeks past the order-by date. >0 means the lead time can no longer make it. */
+  lateByWeeks: number;
+  /** Whether any driver is firm enough to justify committing on an unpooled stock. */
+  hasFirmDriver: boolean;
+  /** Policy gate on the recommendation — the buy is not always allowed. */
+  gate: "OK" | "HOLD_UNFIRM" | "NO_BUY_NEEDED";
+  gateReason: string | null;
   pooling: PoolingClass;
   distinctCustomers: number;
   distinctDeals: number;
@@ -868,8 +1081,11 @@ export function buildForecast(
   const recommendUsd = recommendFt * msiPerFt * material.costMsi;
 
   const leadWeeks = Math.ceil(material.leadTimeDays / 7);
-  const orderByWeek =
-    firstBreachWeek === null ? null : Math.max(0, firstBreachWeek - leadWeeks);
+  const rawOrderBy =
+    firstBreachWeek === null ? null : firstBreachWeek - leadWeeks;
+  const orderByWeek = rawOrderBy === null ? null : Math.max(0, rawOrderBy);
+  // Negative order-by means the lead time already cannot make the need-by date.
+  const lateByWeeks = rawOrderBy !== null && rawOrderBy < 0 ? -rawOrderBy : 0;
 
   // ---- pooling classification, computed not tagged
   const distinctCustomers = new Set(drivers.map((d) => d.line.customer)).size;
@@ -882,14 +1098,28 @@ export function buildForecast(
     Math.max(1, weeklyTotals.length);
   const demandCv = mean > 0 ? Math.sqrt(variance) / mean : 0;
 
+  // Pooling class is COMPUTED, not hand-tagged: how many independent customers
+  // draw on this stock, does it substitute, and is it a bespoke buy?
   let pooling: PoolingClass;
-  if (material.isCustom || distinctCustomers <= 1) pooling = "UNPOOLED";
-  else if (
+  if (material.isCustom) {
+    pooling = "UNPOOLED";
+  } else if (distinctCustomers === 0) {
+    // No named demand at all — fall back to the stock's own character rather
+    // than calling a shared substrate "unpooled" on an empty week.
+    pooling =
+      material.alternateStockIds.length > 0 || material.baselineWeeklyFt > 0
+        ? "POOLED"
+        : "UNPOOLED";
+  } else if (distinctCustomers === 1) {
+    pooling = "UNPOOLED";
+  } else if (
     distinctCustomers >= 3 ||
     (distinctCustomers >= 2 && material.alternateStockIds.length > 0)
-  )
+  ) {
     pooling = "POOLED";
-  else pooling = "SEMI_POOLED";
+  } else {
+    pooling = "SEMI_POOLED";
+  }
 
   // ---- exposure if non-firm drivers die
   const exposureUsd = drivers
@@ -903,6 +1133,22 @@ export function buildForecast(
       ? Math.round(expectedExcessFt / material.baselineWeeklyFt)
       : null;
 
+  // ---- policy gate. A recommendation is not automatically an instruction:
+  // on an unpooled stock with nothing firm behind it, the correct answer is to
+  // wait, because a dead deal leaves the entire buy stranded.
+  const hasFirmDriver = drivers.some((d) => d.line.p >= 0.9);
+  let gate: MaterialForecast["gate"] = "OK";
+  let gateReason: string | null = null;
+  if (recommendRolls === 0) {
+    gate = "NO_BUY_NEEDED";
+  } else if (pooling === "UNPOOLED" && !hasFirmDriver) {
+    const topDriver = [...drivers].sort((a, b) => b.line.p - a.line.p)[0];
+    gate = "HOLD_UNFIRM";
+    gateReason = topDriver
+      ? `Unpooled stock, nothing firm behind it — best driver is ${topDriver.line.ref} at ${(topDriver.line.p * 100).toFixed(0)}%. Policy is make-to-order: wait for an approved order or a deposit. Committing now puts the full ${Math.round(recommendFt).toLocaleString()} ft at risk.`
+      : "Unpooled stock with no named demand — nothing to buy against.";
+  }
+
   return {
     material,
     weeks,
@@ -915,6 +1161,10 @@ export function buildForecast(
     recommendRolls,
     recommendUsd,
     orderByWeek,
+    lateByWeeks,
+    hasFirmDriver,
+    gate,
+    gateReason,
     pooling,
     distinctCustomers,
     distinctDeals,
