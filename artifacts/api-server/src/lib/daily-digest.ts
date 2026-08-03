@@ -7,6 +7,7 @@ import {
   fetchOpenTickets,
   fetchStockInfo,
   computeWidthAvailability,
+  widthGroupKey,
   type WidthRow,
 } from "./demand";
 import {
@@ -55,6 +56,19 @@ const PO_STATUS_COLOR: Record<PoStatus, string> = {
   confirmed: "#059669",
 };
 
+/**
+ * A substitute the floor can run while the primary material is short.
+ *
+ * Footage is what the alternate holds AT THE SAME WIDTH — a 30" roll of #296 is
+ * no help to a ≤13" job, so a stock-level total would read as coverage that
+ * doesn't exist.
+ */
+export interface DigestAlternate {
+  stockId: string;
+  description: string | null;
+  onHandFootage: number;
+}
+
 export interface DigestWidth {
   label: string;
   status: string;
@@ -62,6 +76,8 @@ export interface DigestWidth {
   onOrderFootage: number;
   requiredFootage: number;
   shortFootage: number;
+  /** Substitutes configured for this stock, with their on-hand at this width. */
+  alternates: DigestAlternate[];
 }
 
 export interface DigestStock {
@@ -141,6 +157,26 @@ export async function buildDigest(): Promise<Digest> {
 
   const descOf = (stockId: string): string | null => onHandByStock.get(stockId)?.description ?? null;
 
+  /**
+   * Substitutes for a stock, with their on-hand footage in the same width
+   * bucket as the row. Configured under Setup › Configuration; advisory only —
+   * on-order supply stays attributed to the stock actually ordered.
+   */
+  const alternatesAtWidth = (stockId: string, row: WidthRow): DigestAlternate[] => {
+    const ids = (goalByStock.get(stockId)?.alternateStockIds ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) return [];
+    const wantKey = widthGroupKey(row.width);
+    return ids.map((altId) => {
+      const footage = (onHandByWidth.get(altId) ?? [])
+        .filter((w) => widthGroupKey(w.width) === wantKey)
+        .reduce((s, w) => s + w.footage, 0);
+      return { stockId: altId, description: descOf(altId), onHandFootage: Math.round(footage) };
+    });
+  };
+
   // ---- 1. Stock availability, same math as the dashboard ----
   const stocks: DigestStock[] = [];
   const totals = { out: 0, unconfirmed: 0, ordered: 0, evaluated: 0 };
@@ -187,6 +223,7 @@ export async function buildDigest(): Promise<Digest> {
         onOrderFootage: w.onOrderFootage,
         requiredFootage: w.requiredFootage,
         shortFootage: w.shortFootage,
+        alternates: alternatesAtWidth(stockId, w),
       });
     }
     if (keep.length === 0) continue;
@@ -305,6 +342,16 @@ const TH =
   "padding:7px 10px;border-bottom:2px solid #d1d5db;font-size:11px;text-transform:uppercase;" +
   "letter-spacing:.04em;color:#6b7280;text-align:left;white-space:nowrap";
 
+/**
+ * Material descriptions run long ("Clear 1 mil Direct Thermal Clear BOPP/ S692N
+ * / 40# SCK 1 mil S692N"). They must wrap: a nowrap cell overflows into the next
+ * column and the two texts render on top of each other. `word-break` handles the
+ * slash-heavy names that have no spaces to break on.
+ */
+const DESC = "color:#6b7280;font-size:12px;margin-top:2px;white-space:normal;word-break:break-word;line-height:1.35";
+/** Same reason — status notes are sentences, not labels. */
+const NOTE = "color:#6b7280;font-size:11px;margin-top:3px;white-space:normal;line-height:1.35";
+
 function chip(text: string, color: string): string {
   return (
     `<span style="display:inline-block;background:${color};color:#fff;border-radius:10px;` +
@@ -327,18 +374,34 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
         ? `Nothing uncovered — ${d.totals.unconfirmed} width${d.totals.unconfirmed === 1 ? "" : "s"} waiting on vendor confirmation`
         : "Every committed ticket is covered";
 
+  /** "#296 42,000 ft" per substitute, greyed when it has none at this width. */
+  const altCell = (w: DigestWidth): string => {
+    if (w.alternates.length === 0) return `<span style="color:#9ca3af">—</span>`;
+    return w.alternates
+      .map((a) => {
+        const has = a.onHandFootage > 0;
+        return (
+          `<div style="white-space:nowrap;${has ? "" : "color:#9ca3af"}">` +
+          `<strong style="font-weight:600">#${esc(a.stockId)}</strong> ` +
+          `${has ? `${num(a.onHandFootage)} ft` : "none at this width"}</div>` +
+          (a.description ? `<div style="${DESC};margin-top:0">${esc(a.description)}</div>` : "")
+        );
+      })
+      .join("");
+  };
+
   const stockRows =
     d.stocks.length === 0
-      ? `<tr><td style="${TD}" colspan="6">Nothing in these statuses — every material with open tickets is covered by stock on hand.</td></tr>`
+      ? `<tr><td style="${TD}" colspan="7">Nothing in these statuses — every material with open tickets is covered by stock on hand.</td></tr>`
       : d.stocks
           .flatMap((s) =>
             s.widths.map(
               (w, i) =>
                 `<tr>` +
                 (i === 0
-                  ? `<td style="${TD}" rowspan="${s.widths.length}">` +
-                    `<a href="${esc(appUrl)}/demand/${encodeURIComponent(s.stockId)}" style="color:#1d4ed8;text-decoration:none;font-weight:600">#${esc(s.stockId)}</a>` +
-                    `<div style="color:#6b7280;font-size:12px;margin-top:2px">${esc(s.description ?? "")}</div></td>`
+                  ? `<td style="${TD};width:230px" rowspan="${s.widths.length}">` +
+                    `<a href="${esc(appUrl)}/demand/${encodeURIComponent(s.stockId)}" style="color:#1d4ed8;text-decoration:none;font-weight:600;white-space:nowrap">#${esc(s.stockId)}</a>` +
+                    `<div style="${DESC}">${esc(s.description ?? "")}</div></td>`
                   : "") +
                 `<td style="${TD};white-space:nowrap">${esc(w.label)}</td>` +
                 `<td style="${TD}">${chip(w.status, STATUS_COLOR[w.status] ?? "#6b7280")}</td>` +
@@ -350,6 +413,7 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
                 `</td>` +
                 `<td style="${TD};text-align:right;white-space:nowrap;${w.shortFootage > 0 ? "color:#b91c1c;font-weight:600" : "color:#6b7280"}">` +
                 `${w.shortFootage > 0 ? `${num(w.shortFootage)} ft` : "covered"}</td>` +
+                `<td style="${TD};width:190px">${altCell(w)}</td>` +
                 `</tr>`,
             ),
           )
@@ -362,11 +426,11 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
           .map(
             (p) =>
               `<tr>` +
-              `<td style="${TD};white-space:nowrap"><strong>#${esc(p.stockId)}</strong>` +
-              `<div style="color:#6b7280;font-size:12px;max-width:260px">${esc(p.description ?? "")}</div></td>` +
+              `<td style="${TD};width:240px"><strong style="white-space:nowrap">#${esc(p.stockId)}</strong>` +
+              `<div style="${DESC}">${esc(p.description ?? "")}</div></td>` +
               `<td style="${TD};white-space:nowrap">${esc(p.poNumber)}</td>` +
-              `<td style="${TD}">${chip(PO_STATUS_LABEL[p.status], PO_STATUS_COLOR[p.status])}` +
-              `<div style="color:#6b7280;font-size:11px;max-width:240px;margin-top:3px">${esc(p.statusNote)}</div></td>` +
+              `<td style="${TD};width:210px">${chip(PO_STATUS_LABEL[p.status], PO_STATUS_COLOR[p.status])}` +
+              `<div style="${NOTE}">${esc(p.statusNote)}</div></td>` +
               `<td style="${TD};white-space:nowrap${p.status === "past_due" ? ";color:#b91c1c;font-weight:600" : ""}">` +
               `${esc(p.date ?? "—")}${p.date && !p.dateIsPromised ? ` <span style="color:#9ca3af;font-size:11px">req</span>` : ""}</td>` +
               `<td style="${TD};text-align:right;white-space:nowrap">${p.width ? `${p.width}"` : "—"}</td>` +
@@ -398,11 +462,13 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
     `<p style="margin:0 0 8px;font-size:12px;color:#6b7280">` +
     `Materials whose committed tickets aren't covered by stock on hand. ` +
     `<strong>Out</strong> = short with nothing on order · <strong>Ordered Not Confirmed</strong> = covered only by a PO the vendor hasn't confirmed · ` +
-    `<strong>Ordered</strong> = covered by a confirmed PO. Widths above 14&quot; aren't interchangeable.</p>` +
+    `<strong>Ordered</strong> = covered by a confirmed PO. Widths above 14&quot; aren't interchangeable. ` +
+    `<strong>Can run instead</strong> lists configured substitutes and what they hold at the SAME width — ` +
+    `the primary stock stays on order either way.</p>` +
     `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-bottom:26px">` +
     `<tr><th style="${TH}">Stock</th><th style="${TH}">Width</th><th style="${TH}">Status</th>` +
     `<th style="${TH};text-align:right">Required</th><th style="${TH};text-align:right">On hand</th>` +
-    `<th style="${TH};text-align:right">Short</th></tr>${stockRows}</table>` +
+    `<th style="${TH};text-align:right">Short</th><th style="${TH}">Can run instead</th></tr>${stockRows}</table>` +
     `<h3 style="margin:0 0 2px;font-size:15px">Open purchase orders</h3>` +
     `<p style="margin:0 0 8px;font-size:12px;color:#6b7280">` +
     `Everything inbound, soonest first. Dates are the vendor's commitment where we have one, otherwise what we requested (&ldquo;req&rdquo;). ` +
@@ -437,6 +503,14 @@ export function renderDigestText(d: Digest): string {
           `on hand ${num(w.onHandFootage)} ft${w.onOrderFootage > 0 ? ` (+${num(w.onOrderFootage)} on order)` : ""}` +
           `${w.shortFootage > 0 ? ` · SHORT ${num(w.shortFootage)} ft` : ""}`,
       );
+      if (w.alternates.length > 0) {
+        lines.push(
+          `             can run instead: ` +
+            w.alternates
+              .map((a) => `#${a.stockId} ${a.onHandFootage > 0 ? `${num(a.onHandFootage)} ft` : "none at this width"}`)
+              .join(" · "),
+        );
+      }
     }
   }
   lines.push("");
