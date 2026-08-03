@@ -5,6 +5,7 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { ForecastLineInferredTicketConfidence } from "./forecastLineInferredTicketConfidence";
 import type { ForecastStock } from "./forecastStock";
 
 export interface ForecastLine {
@@ -25,5 +26,15 @@ export interface ForecastLine {
   goodLengthFt?: number | null;
   /** True when repeat/no-across were derived here rather than read off the LT product. */
   geometryDerived: boolean;
+  /** Open LT ticket matched by SKU + customer, because NetSuite's LT Ticket field is blank. */
+  inferredTicketNum?: string | null;
+  /** high = a production ticket already carries this demand, so the line is excluded from forecast footage. proof = only a Digital Proof ticket matched (~100 ft flat, excluded from committed footage), so the line is still forecast. low = SKU matched but the customer didn't; still forecast, shown for review.
+   */
+  inferredTicketConfidence?: ForecastLineInferredTicketConfidence;
+  inferredTicketShipDate?: string | null;
+  /** Matched ticket's LT priority, e.g. "Digital Proof". */
+  inferredTicketPriority?: string | null;
+  /** False only when a production ticket already covers this job. */
+  countsInForecast: boolean;
   stocks: ForecastStock[];
 }

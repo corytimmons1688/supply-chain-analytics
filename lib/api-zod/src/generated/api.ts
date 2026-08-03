@@ -1449,6 +1449,19 @@ export const GetMaterialForecastResponse = zod.object({
     .number()
     .describe("Allowance added to good length for spoilage\/make-ready."),
   unresolvedCount: zod.number(),
+  linkage: zod
+    .object({
+      production: zod
+        .number()
+        .describe("Excluded from forecast footage — already committed."),
+      proof: zod.number().describe("Digital Proof open; still forecast."),
+      weak: zod
+        .number()
+        .describe("SKU matched, customer didn't; still forecast."),
+    })
+    .describe(
+      "Pending lines whose job was found in Label Traxx despite a blank LT Ticket field.",
+    ),
   items: zod.array(
     zod.object({
       id: zod.string(),
@@ -1476,6 +1489,28 @@ export const GetMaterialForecastResponse = zod.object({
         .boolean()
         .describe(
           "True when repeat\/no-across were derived here rather than read off the LT product.",
+        ),
+      inferredTicketNum: zod
+        .string()
+        .nullish()
+        .describe(
+          "Open LT ticket matched by SKU + customer, because NetSuite's LT Ticket field is blank.",
+        ),
+      inferredTicketConfidence: zod
+        .enum(["high", "proof", "low"])
+        .nullish()
+        .describe(
+          "high = a production ticket already carries this demand, so the line is excluded from forecast footage. proof = only a Digital Proof ticket matched (~100 ft flat, excluded from committed footage), so the line is still forecast. low = SKU matched but the customer didn't; still forecast, shown for review.\n",
+        ),
+      inferredTicketShipDate: zod.string().nullish(),
+      inferredTicketPriority: zod
+        .string()
+        .nullish()
+        .describe('Matched ticket\'s LT priority, e.g. \"Digital Proof\".'),
+      countsInForecast: zod
+        .boolean()
+        .describe(
+          "False only when a production ticket already covers this job.",
         ),
       stocks: zod.array(
         zod.object({

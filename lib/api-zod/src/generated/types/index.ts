@@ -57,6 +57,8 @@ export * from "./eoNotesInput";
 export * from "./eoReport";
 export * from "./eoReportItem";
 export * from "./forecastLine";
+export * from "./forecastLineInferredTicketConfidence";
+export * from "./forecastLinkage";
 export * from "./forecastStock";
 export * from "./forecastStockRollup";
 export * from "./fromParameter";

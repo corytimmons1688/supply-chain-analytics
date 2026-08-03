@@ -2305,7 +2305,7 @@ components:
         footage: { type: number }
     ForecastLine:
       type: object
-      required: [id, soNumber, sku, quantity, isFlexpack, geometryDerived, stocks]
+      required: [id, soNumber, sku, quantity, isFlexpack, geometryDerived, countsInForecast, stocks]
       properties:
         id: { type: string }
         soNumber: { type: string }
@@ -2321,9 +2321,31 @@ components:
         unresolvedReason: { type: string, nullable: true, description: "Set when the SKU has no Label Traxx construction, so no footage could be computed." }
         goodLengthFt: { type: number, nullable: true, description: "Sellable web before the spoilage allowance." }
         geometryDerived: { type: boolean, description: "True when repeat/no-across were derived here rather than read off the LT product." }
+        inferredTicketNum: { type: string, nullable: true, description: "Open LT ticket matched by SKU + customer, because NetSuite's LT Ticket field is blank." }
+        inferredTicketConfidence:
+          type: string
+          nullable: true
+          enum: [high, proof, low]
+          description: >
+            high = a production ticket already carries this demand, so the line is
+            excluded from forecast footage. proof = only a Digital Proof ticket
+            matched (~100 ft flat, excluded from committed footage), so the line is
+            still forecast. low = SKU matched but the customer didn't; still
+            forecast, shown for review.
+        inferredTicketShipDate: { type: string, nullable: true }
+        inferredTicketPriority: { type: string, nullable: true, description: "Matched ticket's LT priority, e.g. \"Digital Proof\"." }
+        countsInForecast: { type: boolean, description: "False only when a production ticket already covers this job." }
         stocks:
           type: array
           items: { $ref: "#/components/schemas/ForecastStock" }
+    ForecastLinkage:
+      type: object
+      required: [production, proof, weak]
+      description: "Pending lines whose job was found in Label Traxx despite a blank LT Ticket field."
+      properties:
+        production: { type: integer, description: "Excluded from forecast footage — already committed." }
+        proof: { type: integer, description: "Digital Proof open; still forecast." }
+        weak: { type: integer, description: "SKU matched, customer didn't; still forecast." }
     ForecastStockRollup:
       type: object
       required: [stockId, footage, lines]
@@ -2334,10 +2356,11 @@ components:
         earliestShipDate: { type: string, nullable: true }
     MaterialForecast:
       type: object
-      required: [spoilagePct, unresolvedCount, items, byStock]
+      required: [spoilagePct, unresolvedCount, linkage, items, byStock]
       properties:
         spoilagePct: { type: number, description: "Allowance added to good length for spoilage/make-ready." }
         unresolvedCount: { type: integer }
+        linkage: { $ref: "#/components/schemas/ForecastLinkage" }
         items:
           type: array
           items: { $ref: "#/components/schemas/ForecastLine" }

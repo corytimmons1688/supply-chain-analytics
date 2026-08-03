@@ -6,12 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ForecastLine } from "./forecastLine";
+import type { ForecastLinkage } from "./forecastLinkage";
 import type { ForecastStockRollup } from "./forecastStockRollup";
 
 export interface MaterialForecast {
   /** Allowance added to good length for spoilage/make-ready. */
   spoilagePct: number;
   unresolvedCount: number;
+  linkage: ForecastLinkage;
   items: ForecastLine[];
   byStock: ForecastStockRollup[];
 }

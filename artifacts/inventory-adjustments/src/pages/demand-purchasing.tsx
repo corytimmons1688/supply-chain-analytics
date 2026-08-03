@@ -1340,6 +1340,13 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
 
   const totalFt = data.byStock.reduce((s, b) => s + b.footage, 0);
   const unresolved = data.items.filter((i) => i.unresolvedReason);
+  const counted = data.items.filter((i) => i.countsInForecast && !i.unresolvedReason);
+  // Jobs we located in Label Traxx even though NetSuite's LT Ticket field is
+  // blank. "high" is already committed demand (excluded above); the rest still
+  // count, so they're shown as review items rather than corrections.
+  const linkedProduction = data.items.filter((i) => i.inferredTicketConfidence === "high");
+  const linkedProof = data.items.filter((i) => i.inferredTicketConfidence === "proof");
+  const linkedWeak = data.items.filter((i) => i.inferredTicketConfidence === "low");
 
   return (
     <Card>
@@ -1349,10 +1356,11 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           {fmt(totalFt)} ft across {data.byStock.length} material{data.byStock.length === 1 ? "" : "s"} from{" "}
-          {data.items.length - unresolved.length} order line{data.items.length - unresolved.length === 1 ? "" : "s"} that
-          haven&apos;t reached Label Traxx yet. Footage comes from each SKU&apos;s Label Traxx construction (repeat ×
-          no-across) plus a {data.spoilagePct}% spoilage allowance. A line drops off here the moment its LT Ticket field
-          is filled in — from then on it counts as committed ticket demand, so nothing is double-counted.
+          {counted.length} order line{counted.length === 1 ? "" : "s"} that haven&apos;t reached Label Traxx yet. Footage
+          comes from each SKU&apos;s Label Traxx construction (repeat × no-across) plus a {data.spoilagePct}% spoilage
+          allowance. A line drops off here once its NetSuite LT Ticket field is filled in — or, because that field is
+          usually written after the order leaves Pending Approval, as soon as a production ticket for the same SKU and
+          customer turns up in Label Traxx. Either way the demand counts once.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1421,6 +1429,71 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
           </div>
         )}
 
+        {linkedProduction.length > 0 && (
+          <div className="rounded-md border px-3 py-2 text-xs">
+            <div className="font-medium">
+              {linkedProduction.length} line{linkedProduction.length === 1 ? "" : "s"} already have a production ticket in
+              Label Traxx — excluded from the footage above
+            </div>
+            <div className="text-muted-foreground mt-0.5">
+              Matched on SKU + customer because the NetSuite LT Ticket field is blank on these lines. Filling it in keeps
+              the handoff exact.
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {linkedProduction.map((i) => (
+                <div key={i.id}>
+                  {i.soNumber}
+                  {i.lineNo != null ? `/${i.lineNo}` : ""} · {i.sku} · {i.customerName ?? "—"} → ticket{" "}
+                  <span className="font-medium">#{i.inferredTicketNum}</span>
+                  {i.inferredTicketShipDate ? ` (ship ${i.inferredTicketShipDate})` : ""}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {linkedProof.length > 0 && (
+          <div className="rounded-md border px-3 py-2 text-xs">
+            <div className="font-medium">
+              {linkedProof.length} line{linkedProof.length === 1 ? "" : "s"} in proofing — still counted
+            </div>
+            <div className="text-muted-foreground mt-0.5">
+              A Digital Proof ticket is open, but proofs run ~100 ft flat and don&apos;t reserve the production stock, so
+              the full run is still ahead of us. Artwork moving is a good sign the order will approve.
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {linkedProof.map((i) => (
+                <div key={i.id}>
+                  {i.soNumber}
+                  {i.lineNo != null ? `/${i.lineNo}` : ""} · {i.sku} · {i.customerName ?? "—"} → proof{" "}
+                  <span className="font-medium">#{i.inferredTicketNum}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {linkedWeak.length > 0 && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            <div className="font-medium">
+              {linkedWeak.length} possible match{linkedWeak.length === 1 ? "" : "es"} — same SKU, different customer
+            </div>
+            <div className="mt-0.5 opacity-90">
+              Still counted as forecast. Worth a look: if it&apos;s the same job under another customer name, the demand
+              is being counted twice.
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {linkedWeak.map((i) => (
+                <div key={i.id}>
+                  {i.soNumber}
+                  {i.lineNo != null ? `/${i.lineNo}` : ""} · {i.sku} · {i.customerName ?? "—"} → ticket{" "}
+                  <span className="font-medium">#{i.inferredTicketNum}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <button
           type="button"
           className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
@@ -1438,12 +1511,20 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                   <th className="text-left px-2 py-1.5 font-medium">SKU</th>
                   <th className="text-right px-2 py-1.5 font-medium">Qty</th>
                   <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Ship by</th>
+                  <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">In LT</th>
                   <th className="text-left px-2 py-1.5 font-medium">Material needed</th>
                 </tr>
               </thead>
               <tbody>
                 {data.items.map((it) => (
-                  <tr key={it.id} className="border-b last:border-b-0 align-top">
+                  <tr
+                    key={it.id}
+                    className={cn(
+                      "border-b last:border-b-0 align-top",
+                      // Not forecast any more — its footage sits in the committed book.
+                      !it.countsInForecast && "opacity-60",
+                    )}
+                  >
                     <td className="px-2 py-1.5 whitespace-nowrap">
                       {it.soNumber}
                       {it.lineNo != null && <span className="text-muted-foreground">/{it.lineNo}</span>}
@@ -1459,9 +1540,37 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
                       {it.expectedShipDate ?? "—"}
                     </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {it.inferredTicketNum ? (
+                        <span
+                          className={cn(
+                            it.inferredTicketConfidence === "high" && "font-medium",
+                            it.inferredTicketConfidence === "low" && "text-amber-700 dark:text-amber-400",
+                            it.inferredTicketConfidence === "proof" && "text-muted-foreground",
+                          )}
+                          title={
+                            it.inferredTicketConfidence === "high"
+                              ? "Production ticket already open — excluded from forecast footage"
+                              : it.inferredTicketConfidence === "proof"
+                                ? "Digital Proof only — production run still forecast"
+                                : "SKU matched but customer differs — still forecast, worth reviewing"
+                          }
+                        >
+                          #{it.inferredTicketNum}
+                          {it.inferredTicketConfidence === "proof" && " proof"}
+                          {it.inferredTicketConfidence === "low" && " ?"}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="px-2 py-1.5">
                       {it.unresolvedReason ? (
                         <span className="text-amber-700 dark:text-amber-400">{it.unresolvedReason}</span>
+                      ) : !it.countsInForecast ? (
+                        <span className="text-muted-foreground">
+                          Counted as committed ticket demand, not forecast
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">
                           {it.stocks

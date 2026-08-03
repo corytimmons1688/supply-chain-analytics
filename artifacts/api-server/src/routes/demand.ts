@@ -2066,7 +2066,7 @@ router.get(
   "/demand/forecast",
   asyncHandler(async (_req, res) => {
     const { nsForecastLineTable } = await import("@workspace/db");
-    const { forecastSpoilagePct } = await import("../lib/forecast-sync");
+    const { forecastSpoilagePct, countsAsForecast } = await import("../lib/forecast-sync");
     const rows = await db.select().from(nsForecastLineTable);
     const open = rows.filter((r) => !r.ltTicketNum);
     const items = open
@@ -2089,6 +2089,12 @@ router.get(
           unresolvedReason: r.unresolvedReason,
           goodLengthFt: sd?.goodLengthFt != null ? Math.round(sd.goodLengthFt) : null,
           geometryDerived: Boolean(sd?.derived),
+          inferredTicketNum: r.inferredTicketNum,
+          inferredTicketConfidence: r.inferredTicketConfidence,
+          inferredTicketShipDate: r.inferredTicketShipDate,
+          inferredTicketPriority: r.inferredTicketPriority,
+          // False only when a production ticket already covers this job.
+          countsInForecast: countsAsForecast(r),
           stocks: (sd?.stocks ?? []).map((s) => ({
             stockId: s.stockId,
             widthIn: s.widthIn,
@@ -2099,8 +2105,11 @@ router.get(
       .sort((a, b) => (a.expectedShipDate ?? "9999").localeCompare(b.expectedShipDate ?? "9999"));
 
     // Roll up per stock so a buyer sees the material impact, not just orders.
+    // Lines already covered by a production ticket are excluded — their footage
+    // lives in the committed open-ticket book.
     const byStock = new Map<string, { stockId: string; footage: number; lines: number; earliestShipDate: string | null }>();
     for (const it of items) {
+      if (!it.countsInForecast) continue;
       for (const s of it.stocks) {
         const cur = byStock.get(s.stockId) ?? { stockId: s.stockId, footage: 0, lines: 0, earliestShipDate: null };
         cur.footage += s.footage;
@@ -2111,9 +2120,21 @@ router.get(
         byStock.set(s.stockId, cur);
       }
     }
+
+    // Lines whose job we found in Label Traxx even though NetSuite's LT Ticket
+    // field is blank. Both a double-count guard and a data-hygiene list.
+    const linked = items.filter((i) => i.inferredTicketNum);
     res.json({
       spoilagePct: forecastSpoilagePct(),
       unresolvedCount: items.filter((i) => i.unresolvedReason).length,
+      linkage: {
+        // Suppressed: a production ticket already carries this demand.
+        production: linked.filter((i) => i.inferredTicketConfidence === "high").length,
+        // Counted: proofs are ~100 ft flat and excluded from committed footage.
+        proof: linked.filter((i) => i.inferredTicketConfidence === "proof").length,
+        // Counted, needs eyes: SKU matched but the customer didn't.
+        weak: linked.filter((i) => i.inferredTicketConfidence === "low").length,
+      },
       items,
       byStock: [...byStock.values()].sort((a, b) => b.footage - a.footage),
     });

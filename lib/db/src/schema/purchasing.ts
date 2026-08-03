@@ -200,6 +200,14 @@ export type EoDispositionRow = typeof eoDispositionTable.$inferSelect;
  * (custcollt_ticket_num) is populated: at that point a real ticket exists in
  * LT and the demand is already counted as committed open-ticket footage, so
  * keeping it here would double-count.
+ *
+ * That field alone isn't enough, though — measured 2026-08-02, NOT ONE pending
+ * line carried it, yet 6 of 42 already had an open LT ticket for the same SKU
+ * and customer. Ticket creation and approval happen close enough together that
+ * the write-back usually lands after the order has left Pending Approval, so
+ * we would never observe it. The `inferredTicket*` columns match on SKU +
+ * customer instead, which is what actually protects against double-counting a
+ * job that's already live in LT.
  */
 export const nsForecastLineTable = pgTable(
   "ns_forecast_line",
@@ -219,6 +227,29 @@ export const nsForecastLineTable = pgTable(
     orderDate: text("order_date"), // ISO
     /** NetSuite's LT Ticket field. Non-null ⇒ excluded from the forecast. */
     ltTicketNum: text("lt_ticket_num"),
+    /**
+     * An open LT ticket that appears to BE this line's job, found by matching
+     * SKU (and customer) instead of relying on NetSuite's LT Ticket field.
+     */
+    inferredTicketNum: text("inferred_ticket_num"),
+    /**
+     * What the matched ticket means for the forecast:
+     *   "high"  — a PRODUCTION ticket for the same SKU and customer is already
+     *             open. Its footage is in the committed open-ticket book, so the
+     *             line is excluded from forecast footage to avoid double-count.
+     *   "proof" — only a Digital Proof ticket matched. Proofs are ~100 ft flat
+     *             regardless of order size and demand.ts excludes them from
+     *             committed footage, so the line KEEPS its forecast footage;
+     *             the proof is just evidence the job is moving toward LT.
+     *   "low"   — SKU matches but the customer doesn't. Still counted (a repeat
+     *             of the same SKU for someone else is real new demand); shown
+     *             for review.
+     */
+    inferredTicketConfidence: text("inferred_ticket_confidence"),
+    /** Priority of the matched ticket (e.g. "Digital Proof") — drives the above. */
+    inferredTicketPriority: text("inferred_ticket_priority"),
+    /** Ship-by of the matched ticket, so a reviewer can sanity-check the match. */
+    inferredTicketShipDate: text("inferred_ticket_ship_date"),
     /** LT product this SKU resolved to (null = unresolved, no construction). */
     ltProductNumber: text("lt_product_number"),
     ltUniqueProdId: integer("lt_unique_prod_id"),
@@ -230,7 +261,11 @@ export const nsForecastLineTable = pgTable(
     stockDemand: jsonb("stock_demand"),
     syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [index("ns_forecast_sku_idx").on(t.sku), index("ns_forecast_ticket_idx").on(t.ltTicketNum)],
+  (t) => [
+    index("ns_forecast_sku_idx").on(t.sku),
+    index("ns_forecast_ticket_idx").on(t.ltTicketNum),
+    index("ns_forecast_inferred_idx").on(t.inferredTicketConfidence),
+  ],
 );
 
 export type NsForecastLineRow = typeof nsForecastLineTable.$inferSelect;

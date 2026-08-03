@@ -779,6 +779,20 @@ export interface ForecastStock {
   footage: number;
 }
 
+/**
+ * high = a production ticket already carries this demand, so the line is excluded from forecast footage. proof = only a Digital Proof ticket matched (~100 ft flat, excluded from committed footage), so the line is still forecast. low = SKU matched but the customer didn't; still forecast, shown for review.
+
+ */
+export type ForecastLineInferredTicketConfidence =
+  | (typeof ForecastLineInferredTicketConfidence)[keyof typeof ForecastLineInferredTicketConfidence]
+  | null;
+
+export const ForecastLineInferredTicketConfidence = {
+  high: "high",
+  proof: "proof",
+  low: "low",
+} as const;
+
 export interface ForecastLine {
   id: string;
   soNumber: string;
@@ -797,7 +811,29 @@ export interface ForecastLine {
   goodLengthFt?: number | null;
   /** True when repeat/no-across were derived here rather than read off the LT product. */
   geometryDerived: boolean;
+  /** Open LT ticket matched by SKU + customer, because NetSuite's LT Ticket field is blank. */
+  inferredTicketNum?: string | null;
+  /** high = a production ticket already carries this demand, so the line is excluded from forecast footage. proof = only a Digital Proof ticket matched (~100 ft flat, excluded from committed footage), so the line is still forecast. low = SKU matched but the customer didn't; still forecast, shown for review.
+   */
+  inferredTicketConfidence?: ForecastLineInferredTicketConfidence;
+  inferredTicketShipDate?: string | null;
+  /** Matched ticket's LT priority, e.g. "Digital Proof". */
+  inferredTicketPriority?: string | null;
+  /** False only when a production ticket already covers this job. */
+  countsInForecast: boolean;
   stocks: ForecastStock[];
+}
+
+/**
+ * Pending lines whose job was found in Label Traxx despite a blank LT Ticket field.
+ */
+export interface ForecastLinkage {
+  /** Excluded from forecast footage — already committed. */
+  production: number;
+  /** Digital Proof open; still forecast. */
+  proof: number;
+  /** SKU matched, customer didn't; still forecast. */
+  weak: number;
 }
 
 export interface ForecastStockRollup {
@@ -811,6 +847,7 @@ export interface MaterialForecast {
   /** Allowance added to good length for spoilage/make-ready. */
   spoilagePct: number;
   unresolvedCount: number;
+  linkage: ForecastLinkage;
   items: ForecastLine[];
   byStock: ForecastStockRollup[];
 }
