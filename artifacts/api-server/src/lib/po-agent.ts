@@ -13,6 +13,8 @@ import {
   header,
   type GmailMessage,
 } from "./gmail";
+import { addBusinessDaysIso } from "./mah-release";
+import { trackingRefs } from "./open-po-status";
 import { logger } from "./logger";
 
 /**
@@ -31,6 +33,13 @@ import { logger } from "./logger";
 
 const ACK_NUDGE_AFTER_BUSINESS_DAYS = 2;
 const MAX_ACK_NUDGES = 2;
+/**
+ * Only chase tracking once delivery is this close (or already past). Asking a
+ * fortnight early teaches vendors that our follow-ups can be ignored.
+ */
+const TRACKING_CHASE_WITHIN_DAYS = 3;
+const TRACKING_CHASE_GAP_BUSINESS_DAYS = 2;
+const MAX_TRACKING_CHASES = 2;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const BODY_PREVIEW_CHARS = 1200;
 // PDFs handed to the classifier (order acknowledgements are structured PDFs —
@@ -71,6 +80,10 @@ function poReference(po: { ltPoNumbers: string | null; id: string }): string {
 export interface Classification {
   kind: "ack" | "ship_notice" | "delay" | "question" | "ooo_or_auto" | "other";
   promisedDate: string | null;
+  /** Date the vendor says it shipped — present even when no delivery date is. */
+  shippedDate: string | null;
+  transitDaysMin: number | null;
+  transitDaysMax: number | null;
   tracking: { carrier: string; number: string }[];
   confirmedQuantity: string | null;
   /** Vendor's own order / sales-order number from the ACK (e.g. "22414417"). */
@@ -105,7 +118,22 @@ const CLASSIFY_TOOL = {
       promised_date: {
         type: ["string", "null"],
         description:
-          "Vendor-committed ship or delivery date, YYYY-MM-DD — from the email body OR an attached acknowledgement document. Prefer a delivery/arrival date over a ship date when both are given.",
+          "Vendor-committed ship or delivery date, YYYY-MM-DD — from the email body OR an attached acknowledgement document. Prefer a delivery/arrival date over a ship date when both are given. Null if the vendor gave no date at all.",
+      },
+      shipped_date: {
+        type: ["string", "null"],
+        description:
+          "The date the vendor says the material SHIPPED (or will ship), YYYY-MM-DD. Resolve relative wording against the email's own date — 'shipped today' on 2026-08-03 is 2026-08-03. Set this even when promised_date is null.",
+      },
+      transit_days_min: {
+        type: ["number", "null"],
+        description:
+          "Low end of any transit estimate the vendor gives, in BUSINESS days. 'typical 4-5 business day transit' → 4. Null if none stated.",
+      },
+      transit_days_max: {
+        type: ["number", "null"],
+        description:
+          "High end of the transit estimate, in BUSINESS days. 'typical 4-5 business day transit' → 5. For a single figure use the same value in both.",
       },
       tracking: {
         type: "array",
@@ -251,6 +279,9 @@ export async function classifyVendorEmail(input: {
       c: {
         kind: (i["kind"] as Classification["kind"]) ?? "other",
         promisedDate: typeof i["promised_date"] === "string" ? i["promised_date"] : null,
+        shippedDate: typeof i["shipped_date"] === "string" ? i["shipped_date"] : null,
+        transitDaysMin: typeof i["transit_days_min"] === "number" ? i["transit_days_min"] : null,
+        transitDaysMax: typeof i["transit_days_max"] === "number" ? i["transit_days_max"] : null,
         tracking: Array.isArray(i["tracking"])
           ? (i["tracking"] as { carrier?: string; number?: string }[])
               .filter((t) => t?.number)
@@ -395,6 +426,8 @@ export async function runPoAgent(): Promise<AgentRunResult> {
     const ref = poReference(po);
     let state = po.agentState ?? "awaiting_ack";
     let promisedDate = po.promisedDate;
+    let promisedDateDerived = po.promisedDateDerived;
+    let promisedDateBasis = po.promisedDateBasis;
     let needsAttention = po.needsAttention;
     let attentionReason = po.attentionReason;
     let ackAt = po.ackAt;
@@ -428,16 +461,60 @@ export async function runPoAgent(): Promise<AgentRunResult> {
         }
       }
 
-      if (c.promisedDate) promisedDate = c.promisedDate;
+      /**
+       * Derive a delivery date when the vendor gave a ship date and a transit
+       * estimate instead of stating one.
+       *
+       * PO 2610 is why: Derprosa replied "shipped today from Terre Haute, IN,
+       * with typical 4-5 business day transit". That's a STRONGER commitment
+       * than a typed date — the material is physically moving — but with
+       * promised_date null the PO read "Ordered Not Confirmed" and the plan
+       * scheduled it against our requested 8/14 rather than the real ~8/10.
+       * Recording nothing made a shipped order look less certain than an
+       * unshipped one.
+       *
+       * Conservative on purpose: the HIGH end of the range, so a derived date is
+       * never optimistic, and flagged derived so it stays distinguishable from
+       * something the vendor actually said.
+       */
+      let derivedPromise: { date: string; from: string } | null = null;
+      if (!c.promisedDate && c.shippedDate) {
+        const transit = c.transitDaysMax ?? c.transitDaysMin;
+        if (transit != null && transit > 0 && transit <= 60) {
+          const d = addBusinessDaysIso(c.shippedDate, Math.round(transit));
+          derivedPromise = {
+            date: d,
+            from: `shipped ${c.shippedDate} + ${Math.round(transit)} business day${Math.round(transit) === 1 ? "" : "s"} transit`,
+          };
+        }
+      }
+
+      if (c.promisedDate) {
+        promisedDate = c.promisedDate;
+        promisedDateDerived = false;
+        promisedDateBasis = null;
+      } else if (derivedPromise) {
+        promisedDate = derivedPromise.date;
+        promisedDateDerived = true;
+        promisedDateBasis = derivedPromise.from;
+        await appendEvent(po.id, {
+          direction: "system",
+          kind: "note",
+          summary:
+            `Promised date derived as ${derivedPromise.date} — vendor gave no delivery date, but ` +
+            `${derivedPromise.from}. Treated as confirmed supply; the high end of any range is used so it isn't optimistic.`,
+        });
+      }
 
       // A vendor date past our requested delivery is accepted, not a problem:
       // record how far past and tag the PO line "extended lead time" rather
       // than raising a flag. (Requested delivery = order date + the configured
       // lead time, so this is precisely "the vendor needs longer than we
       // planned for" — useful history, not an exception to chase.)
-      if (c.promisedDate && po.requestedDeliveryDate && c.promisedDate > po.requestedDeliveryDate) {
+      const effectivePromise = c.promisedDate ?? derivedPromise?.date ?? null;
+      if (effectivePromise && po.requestedDeliveryDate && effectivePromise > po.requestedDeliveryDate) {
         const days = Math.round(
-          (Date.parse(`${c.promisedDate}T00:00:00Z`) - Date.parse(`${po.requestedDeliveryDate}T00:00:00Z`)) / 864e5,
+          (Date.parse(`${effectivePromise}T00:00:00Z`) - Date.parse(`${po.requestedDeliveryDate}T00:00:00Z`)) / 864e5,
         );
         if (days > 0 && line && (!line.extendedLeadTime || line.extendedLeadTimeDays !== days)) {
           await db
@@ -600,7 +677,20 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       for (const e of events) {
         if (e.direction !== "inbound" || !e.gmailMessageId) continue;
         const extracted = (e.extracted ?? {}) as Record<string, unknown>;
-        if (extracted["kind"]) continue; // already classified
+        /**
+         * Re-read a message when it was classified before the classifier learned
+         * to capture ship date + transit, AND the PO still has no promised date —
+         * exactly the case the derivation was added for. Self-terminating: after
+         * one pass `shippedDate` exists on the extraction (even as null), so it
+         * never fires twice, and it's scoped to substantive messages so
+         * out-of-office replies aren't re-billed to the model.
+         */
+        const predatesShipFields =
+          extracted["kind"] != null &&
+          !("shippedDate" in extracted) &&
+          !promisedDate &&
+          ["ack", "ship_notice", "delay"].includes(String(extracted["kind"]));
+        if (extracted["kind"] && !predatesShipFields) continue; // already classified
         const msg = await fetchMessage(e.gmailMessageId).catch(() => null);
         if (!msg) continue;
         const r = await classifyMsg(msg);
@@ -720,10 +810,99 @@ export async function runPoAgent(): Promise<AgentRunResult> {
         }
       }
 
+      /**
+       * 6. Chase tracking on an acknowledged order that hasn't shipped notice.
+       *
+       * A PO sitting in `acknowledged` with a promised date arriving — or gone —
+       * and no tracking anywhere is the case that quietly turns into a line-down
+       * call. PO 2610 is the live example: Derprosa said "tracking to follow" and
+       * nothing followed.
+       *
+       * Only chased once the promised date is close (or past): asking for
+       * tracking a fortnight early trains vendors to ignore us. Capped at one
+       * outstanding draft and MAX_TRACKING_CHASES total, then handed to a human —
+       * the same shape as the ack nudge, because a vendor who won't produce
+       * tracking after two asks needs a phone call, not a third email.
+       */
+      if (state === "acknowledged" && !needsAttention && promisedDate) {
+        const hasTracking =
+          events.some((e) => e.kind === "ship_notice") ||
+          events.some((e) => {
+            const ex = (e.extracted ?? null) as { tracking?: unknown[] } | null;
+            return Array.isArray(ex?.tracking) && ex.tracking.length > 0;
+          }) ||
+          trackingRefs(po.notes).length > 0;
+
+        if (!hasTracking) {
+          const daysToPromise = Math.round(
+            (Date.parse(`${promisedDate}T00:00:00Z`) - Date.now()) / 864e5,
+          );
+          const chases = events.filter((e) => e.kind === "tracking_request");
+          const pending = await db
+            .select()
+            .from(poAgentDraftTable)
+            .where(
+              and(
+                eq(poAgentDraftTable.poId, po.id),
+                eq(poAgentDraftTable.status, "pending"),
+                eq(poAgentDraftTable.kind, "tracking_request"),
+              ),
+            );
+          const lastChase = chases.length
+            ? new Date(Math.max(...chases.map((e) => e.at.getTime())))
+            : null;
+          const quietSinceChase = lastChase ? businessDaysBetween(lastChase, new Date()) : Infinity;
+
+          if (
+            daysToPromise <= TRACKING_CHASE_WITHIN_DAYS &&
+            pending.length === 0 &&
+            chases.length < MAX_TRACKING_CHASES &&
+            quietSinceChase >= TRACKING_CHASE_GAP_BUSINESS_DAYS
+          ) {
+            const stockRef = line ? `Stock #${line.stockId}` : "";
+            const late = daysToPromise < 0;
+            await db.insert(poAgentDraftTable).values({
+              poId: po.id,
+              kind: "tracking_request",
+              toEmails: vendor.toEmails ?? po.vendorEmails ?? "",
+              ccEmails: vendor.ccEmails,
+              subject: `Re: Calyx Containers PO ${ref} — ${po.vendorName} — ${stockRef} — tracking`,
+              body:
+                `Hi All,\n\n` +
+                (late
+                  ? `Purchase order ${ref} was due ${promisedDate} and we haven't received it or any tracking. ` +
+                    `Could you send the tracking number and confirm where it stands?\n\n`
+                  : `Purchase order ${ref} is due ${promisedDate}. Could you send the tracking number once it ships` +
+                    `${daysToPromise <= 0 ? "" : ", or let us know if that date has moved"}?\n\n`) +
+                `Thank you,\nCalyx Containers Supply Chain`,
+            });
+            result.draftsCreated += 1;
+          } else if (
+            chases.length >= MAX_TRACKING_CHASES &&
+            quietSinceChase >= TRACKING_CHASE_GAP_BUSINESS_DAYS
+          ) {
+            needsAttention = true;
+            attentionReason =
+              `No tracking after ${chases.length} request${chases.length === 1 ? "" : "s"} — ` +
+              `promised ${promisedDate}${daysToPromise < 0 ? `, now ${Math.abs(daysToPromise)} day(s) past` : ""}`;
+          }
+        }
+      }
+
       if (needsAttention && !po.needsAttention) result.flagged += 1;
       await db
         .update(materialPoTable)
-        .set({ agentState: state, promisedDate, ackAt, needsAttention, attentionReason, notes, updatedAt: new Date() })
+        .set({
+          agentState: state,
+          promisedDate,
+          promisedDateDerived,
+          promisedDateBasis,
+          ackAt,
+          needsAttention,
+          attentionReason,
+          notes,
+          updatedAt: new Date(),
+        })
         .where(eq(materialPoTable.id, po.id));
     } catch (e) {
       logger.error({ poId: po.id, err: e instanceof Error ? e.message : String(e) }, "PO agent failed for PO");

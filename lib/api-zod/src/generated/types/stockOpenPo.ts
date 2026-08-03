@@ -18,6 +18,10 @@ export interface StockOpenPo {
   promisedDeliveryDate?: string | null;
   /** True when the promise came from the agent's email capture rather than Label Traxx. */
   promisedFromAgent?: boolean;
+  /** The promised date was inferred from the vendor's ship date plus a transit estimate, not stated by them. Plan on it; don't quote it back. */
+  promisedDateDerived?: boolean;
+  /** How a derived date was reached, e.g. "shipped 2026-08-03 + 5 business days transit". */
+  promisedDateBasis?: string | null;
   /** Vendor confirmed a date after the delivery we requested — accepted as an extended lead time. */
   extendedLeadTime?: boolean;
   /** Days past our requested date the vendor committed to. */

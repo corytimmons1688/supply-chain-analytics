@@ -849,6 +849,18 @@ export const GetDemandPurchasingResponse = zod.object({
                 .describe(
                   "True when the promise came from the agent's email capture rather than Label Traxx.",
                 ),
+              promisedDateDerived: zod
+                .boolean()
+                .optional()
+                .describe(
+                  "The promised date was inferred from the vendor's ship date plus a transit estimate, not stated by them. Plan on it; don't quote it back.",
+                ),
+              promisedDateBasis: zod
+                .string()
+                .nullish()
+                .describe(
+                  'How a derived date was reached, e.g. \"shipped 2026-08-03 + 5 business days transit\".',
+                ),
               extendedLeadTime: zod
                 .boolean()
                 .optional()
@@ -1296,6 +1308,18 @@ export const ListMaterialPosResponse = zod.object({
         .nullish()
         .describe(
           "Delivery date the vendor committed to in their acknowledgement.",
+        ),
+      promisedDateDerived: zod
+        .boolean()
+        .optional()
+        .describe(
+          "The promised date was DERIVED from a ship date plus a transit estimate, not stated by the vendor. Plan on it, but don't quote it back to them.",
+        ),
+      promisedDateBasis: zod
+        .string()
+        .nullish()
+        .describe(
+          'How a derived date was arrived at, e.g. \"shipped 2026-08-03 + 5 business days transit\".',
         ),
       needsAttention: zod
         .boolean()

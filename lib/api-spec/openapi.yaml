@@ -2171,6 +2171,8 @@ components:
         requestedDeliveryDate: { type: string, nullable: true, description: "Delivery Calyx asked for (ODBC RequestedDeliveryDate)." }
         promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement." }
         promisedFromAgent: { type: boolean, description: "True when the promise came from the agent's email capture rather than Label Traxx." }
+        promisedDateDerived: { type: boolean, description: "The promised date was inferred from the vendor's ship date plus a transit estimate, not stated by them. Plan on it; don't quote it back." }
+        promisedDateBasis: { type: string, nullable: true, description: "How a derived date was reached, e.g. \"shipped 2026-08-03 + 5 business days transit\"." }
         extendedLeadTime: { type: boolean, description: "Vendor confirmed a date after the delivery we requested — accepted as an extended lead time." }
         extendedLeadTimeDays: { type: number, nullable: true, description: "Days past our requested date the vendor committed to." }
         supplierName: { type: string, nullable: true, description: "LT supplier on the PO — authoritative for identifying make-and-hold (Dazpak) orders." }
@@ -2445,6 +2447,8 @@ components:
         emailedTo: { type: string, nullable: true, description: "Recipients of that send (To + CC)." }
         agentState: { type: string, nullable: true, description: "Follow-up agent state: awaiting_ack | acknowledged | shipped | closed. Null = not tracked." }
         promisedDate: { type: string, nullable: true, description: "Delivery date the vendor committed to in their acknowledgement." }
+        promisedDateDerived: { type: boolean, description: "The promised date was DERIVED from a ship date plus a transit estimate, not stated by the vendor. Plan on it, but don't quote it back to them." }
+        promisedDateBasis: { type: string, nullable: true, description: "How a derived date was arrived at, e.g. \"shipped 2026-08-03 + 5 business days transit\"." }
         needsAttention: { type: boolean, description: "Agent stopped and wants a human decision." }
         attentionReason: { type: string, nullable: true }
         lines:

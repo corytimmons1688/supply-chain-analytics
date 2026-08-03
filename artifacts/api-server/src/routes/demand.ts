@@ -679,13 +679,21 @@ router.get(
     // inbound view has to consult both sources or it shows stale dates.
     const agentByLtPo = new Map<
       string,
-      { promisedDate: string | null; notes: string | null; extendedLeadTimeDays: number | null }
+      {
+        promisedDate: string | null;
+        promisedDateDerived: boolean;
+        promisedDateBasis: string | null;
+        notes: string | null;
+        extendedLeadTimeDays: number | null;
+      }
     >();
     for (const p of trackedPos) {
       for (const n of (p.ltPoNumbers ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
         const prev = agentByLtPo.get(n);
         agentByLtPo.set(n, {
           promisedDate: p.promisedDate ?? prev?.promisedDate ?? null,
+          promisedDateDerived: p.promisedDate ? p.promisedDateDerived : (prev?.promisedDateDerived ?? false),
+          promisedDateBasis: p.promisedDate ? p.promisedDateBasis : (prev?.promisedDateBasis ?? null),
           notes: [prev?.notes, p.notes].filter(Boolean).join("\n") || null,
           extendedLeadTimeDays: extLeadByPoId.has(p.id)
             ? extLeadByPoId.get(p.id) ?? null
@@ -901,6 +909,8 @@ router.get(
                 // from the vendor's acknowledgement email.
                 promisedDeliveryDate: p.dueDateIso ?? agent?.promisedDate ?? null,
                 promisedFromAgent: p.dueDateIso == null && agent?.promisedDate != null,
+                promisedDateDerived: p.dueDateIso == null && (agent?.promisedDateDerived ?? false),
+                promisedDateBasis: p.dueDateIso == null ? (agent?.promisedDateBasis ?? null) : null,
                 extendedLeadTime: extLead != null || agent?.extendedLeadTimeDays != null,
                 extendedLeadTimeDays: extLead,
                 supplierName: p.supplierName,
@@ -1204,6 +1214,8 @@ router.get(
           emailedTo: po.emailedTo,
           agentState: po.agentState,
           promisedDate: po.promisedDate,
+          promisedDateDerived: po.promisedDateDerived,
+          promisedDateBasis: po.promisedDateBasis,
           needsAttention: po.needsAttention,
           attentionReason: po.attentionReason,
           lines: (linesByPo.get(po.id) ?? []).map((l) => ({

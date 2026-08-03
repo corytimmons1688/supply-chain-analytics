@@ -1873,6 +1873,9 @@ function OpenPosTable({
       notes: string | null;
       extendedLeadTime: boolean;
       extendedLeadTimeDays: number | null;
+      /** Promised date was inferred from ship date + transit, not stated by the vendor. */
+      promisedDateDerived: boolean;
+      promisedDateBasis: string | null;
       status: PoStatus;
       /** Extra context for the status cell — ETA, release footage, why. */
       statusNote: string | null;
@@ -1942,6 +1945,8 @@ function OpenPosTable({
           notes: p.notes ?? null,
           extendedLeadTime: Boolean(p.extendedLeadTime),
           extendedLeadTimeDays: p.extendedLeadTimeDays ?? null,
+          promisedDateDerived: Boolean(p.promisedDateDerived),
+          promisedDateBasis: p.promisedDateBasis ?? null,
           status,
           statusNote,
           onHandFootage: metricsByStock.get(item.stockId)?.onHandFootage ?? 0,
@@ -1994,6 +1999,8 @@ function OpenPosTable({
         notes: rel.notes ?? null,
         extendedLeadTime: false,
         extendedLeadTimeDays: null,
+        promisedDateDerived: false,
+        promisedDateBasis: null,
         status,
         statusNote,
         onHandFootage: metricsByStock.get(rel.stockId)?.onHandFootage ?? 0,
@@ -2104,6 +2111,20 @@ function OpenPosTable({
                       {/* "req" marks a date we asked for but the vendor has
                           not confirmed — the status column says as much. */}
                       {r.date && !r.dateIsPromised && <span className="ml-1 text-[10px] text-muted-foreground">req</span>}
+                      {/* A derived date drives planning, but the vendor never
+                          actually said it — mark it so nobody quotes it back. */}
+                      {r.dateIsPromised && r.promisedDateDerived && (
+                        <span
+                          className="ml-1 text-[10px] text-muted-foreground"
+                          title={
+                            r.promisedDateBasis
+                              ? `Inferred: ${r.promisedDateBasis}. The vendor gave no delivery date.`
+                              : "Inferred from the vendor's ship date and transit estimate"
+                          }
+                        >
+                          est
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                       {r.width ? `${r.width}"` : <span className="text-muted-foreground">—</span>}

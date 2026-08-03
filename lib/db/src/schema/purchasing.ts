@@ -59,6 +59,15 @@ export const materialPoTable = pgTable("material_po", {
   // Vendor-confirmed delivery date extracted from their acknowledgement —
   // distinct from requestedDeliveryDate (ours) and lt_po.dueDate (LT's).
   promisedDate: text("promised_date"),
+  /**
+   * True when promisedDate was DERIVED (vendor gave a ship date plus a transit
+   * estimate, not a delivery date) rather than stated. Kept distinct because a
+   * derived date is an inference: it should drive planning, but a buyer arguing
+   * with a vendor needs to know the vendor never actually said it.
+   */
+  promisedDateDerived: boolean("promised_date_derived").default(false).notNull(),
+  /** How it was derived, for the audit trail — e.g. "shipped 2026-08-03 + 5 business days". */
+  promisedDateBasis: text("promised_date_basis"),
   ackAt: timestamp("ack_at", { withTimezone: true }),
   // Set (with a reason) when the agent stops and wants a human: vendor asked a
   // question, announced a delay, or ignored the nudges.
