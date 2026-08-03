@@ -76,6 +76,20 @@ export interface DigestWidth {
   onOrderFootage: number;
   requiredFootage: number;
   shortFootage: number;
+  /**
+   * Soonest expected arrival among the open POs supplying this width — the
+   * vendor's commitment where we have one, otherwise the date we requested
+   * (flagged, because an unconfirmed date isn't a plan).
+   */
+  inboundDate: string | null;
+  inboundDateIsPromised: boolean;
+  /** How many open POs feed this width, so one date doesn't imply one delivery. */
+  inboundPoCount: number;
+  /**
+   * Some of this width's on-order footage is make-and-hold stock sitting at the
+   * vendor. It counts as supply but isn't coming until a release is requested.
+   */
+  inboundHeldAtVendor: boolean;
   /** Substitutes configured for this stock, with their on-hand at this width. */
   alternates: DigestAlternate[];
 }
@@ -177,6 +191,48 @@ export async function buildDigest(): Promise<Digest> {
     });
   };
 
+  /**
+   * When the material on order for this width is expected.
+   *
+   * Same date rule as the Open POs report — the vendor's promise where we have
+   * one, otherwise what we asked for, flagged so an unconfirmed date isn't read
+   * as a plan. Unspecified PO widths fall back to the stock's master width, the
+   * way availability already treats them.
+   */
+  const inboundAtWidth = (
+    stockId: string,
+    row: WidthRow,
+    masterWidthFallback: number,
+  ): { date: string | null; promised: boolean; poCount: number; heldAtVendor: boolean } => {
+    const wantKey = widthGroupKey(row.width);
+    let date: string | null = null;
+    let promised = false;
+    let poCount = 0;
+    let heldAtVendor = false;
+    for (const p of posByStock.get(stockId) ?? []) {
+      const w = p.masterWidth && p.masterWidth > 0 ? p.masterWidth : masterWidthFallback;
+      if (widthGroupKey(w) !== wantKey) continue;
+      poCount += 1;
+      // A make-and-hold PO is real supply — availability counts it, so the
+      // footage stays — but it is NOT arriving. The rolls sit in the vendor's
+      // warehouse until someone requests a release, and its LT date is a
+      // made-by date, not a delivery. Showing it as an arrival would tell a
+      // buyer to wait for a truck that nobody has called for.
+      if (isMakeAndHoldPo(p.supplierName)) {
+        heldAtVendor = true;
+        continue;
+      }
+      const confirmed = p.dueDateIso ?? p.agentPromisedIso;
+      const d = confirmed ?? p.requestedDeliveryIso;
+      if (!d) continue;
+      if (!date || d < date) {
+        date = d;
+        promised = Boolean(confirmed);
+      }
+    }
+    return { date, promised, poCount, heldAtVendor };
+  };
+
   // ---- 1. Stock availability, same math as the dashboard ----
   const stocks: DigestStock[] = [];
   const totals = { out: 0, unconfirmed: 0, ordered: 0, evaluated: 0 };
@@ -216,6 +272,7 @@ export async function buildDigest(): Promise<Digest> {
       else if (w.status === "Ordered") totals.ordered += 1;
       if (w.status !== "Without Tickets") totals.evaluated += 1;
       if (!(DIGEST_STATUSES as readonly string[]).includes(w.status)) continue;
+      const inbound = inboundAtWidth(stockId, w, info?.masterWidth ?? 0);
       keep.push({
         label: w.pooled ? `≤13"` : `${w.width}"`,
         status: w.status,
@@ -223,6 +280,10 @@ export async function buildDigest(): Promise<Digest> {
         onOrderFootage: w.onOrderFootage,
         requiredFootage: w.requiredFootage,
         shortFootage: w.shortFootage,
+        inboundDate: inbound.date,
+        inboundDateIsPromised: inbound.promised,
+        inboundPoCount: inbound.poCount,
+        inboundHeldAtVendor: inbound.heldAtVendor,
         alternates: alternatesAtWidth(stockId, w),
       });
     }
@@ -374,6 +435,26 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
         ? `Nothing uncovered — ${d.totals.unconfirmed} width${d.totals.unconfirmed === 1 ? "" : "s"} waiting on vendor confirmation`
         : "Every committed ticket is covered";
 
+  /**
+   * Footage on order for this width and when the soonest of it is expected.
+   * The date is flagged "req" when it's only what we asked for — a buyer
+   * planning around an unconfirmed date needs to know that.
+   */
+  const arrivingCell = (w: DigestWidth): string => {
+    if (w.onOrderFootage <= 0) return `<span style="color:#9ca3af">nothing on order</span>`;
+    const when = w.inboundDate
+      ? `${esc(w.inboundDate)}${w.inboundDateIsPromised ? "" : ` <span style="color:#9ca3af">req</span>`}`
+      : w.inboundHeldAtVendor
+        ? `<span style="color:#b45309">held at vendor · needs release</span>`
+        : `<span style="color:#b45309">no date yet</span>`;
+    return (
+      `${num(w.onOrderFootage)} ft` +
+      `<div style="color:#6b7280;font-size:11px;font-weight:400">${when}` +
+      (w.inboundPoCount > 1 ? ` · ${w.inboundPoCount} POs` : "") +
+      `</div>`
+    );
+  };
+
   /** "#296 42,000 ft" per substitute, greyed when it has none at this width. */
   const altCell = (w: DigestWidth): string => {
     if (w.alternates.length === 0) return `<span style="color:#9ca3af">—</span>`;
@@ -406,13 +487,8 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
                 `<td style="${TD};white-space:nowrap">${esc(w.label)}</td>` +
                 `<td style="${TD}">${chip(w.status, STATUS_COLOR[w.status] ?? "#6b7280")}</td>` +
                 `<td style="${TD};text-align:right;white-space:nowrap">${num(w.requiredFootage)} ft</td>` +
-                `<td style="${TD};text-align:right;white-space:nowrap">${num(w.onHandFootage)} ft` +
-                (w.onOrderFootage > 0
-                  ? `<div style="color:#6b7280;font-size:11px">+${num(w.onOrderFootage)} on order</div>`
-                  : "") +
-                `</td>` +
-                `<td style="${TD};text-align:right;white-space:nowrap;${w.shortFootage > 0 ? "color:#b91c1c;font-weight:600" : "color:#6b7280"}">` +
-                `${w.shortFootage > 0 ? `${num(w.shortFootage)} ft` : "covered"}</td>` +
+                `<td style="${TD};text-align:right;white-space:nowrap">${num(w.onHandFootage)} ft</td>` +
+                `<td style="${TD};text-align:right;white-space:nowrap">${arrivingCell(w)}</td>` +
                 `<td style="${TD};width:190px">${altCell(w)}</td>` +
                 `</tr>`,
             ),
@@ -463,12 +539,14 @@ export function renderDigestHtml(d: Digest, appUrl: string): string {
     `Materials whose committed tickets aren't covered by stock on hand. ` +
     `<strong>Out</strong> = short with nothing on order · <strong>Ordered Not Confirmed</strong> = covered only by a PO the vendor hasn't confirmed · ` +
     `<strong>Ordered</strong> = covered by a confirmed PO. Widths above 14&quot; aren't interchangeable. ` +
+    `<strong>Arriving</strong> is the footage on order for that width and when the soonest of it lands — ` +
+    `the vendor's date where we have one, otherwise what we asked for (&ldquo;req&rdquo;). ` +
     `<strong>Can run instead</strong> lists configured substitutes and what they hold at the SAME width — ` +
     `the primary stock stays on order either way.</p>` +
     `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-bottom:26px">` +
     `<tr><th style="${TH}">Stock</th><th style="${TH}">Width</th><th style="${TH}">Status</th>` +
     `<th style="${TH};text-align:right">Required</th><th style="${TH};text-align:right">On hand</th>` +
-    `<th style="${TH};text-align:right">Short</th><th style="${TH}">Can run instead</th></tr>${stockRows}</table>` +
+    `<th style="${TH};text-align:right">Arriving</th><th style="${TH}">Can run instead</th></tr>${stockRows}</table>` +
     `<h3 style="margin:0 0 2px;font-size:15px">Open purchase orders</h3>` +
     `<p style="margin:0 0 8px;font-size:12px;color:#6b7280">` +
     `Everything inbound, soonest first. Dates are the vendor's commitment where we have one, otherwise what we requested (&ldquo;req&rdquo;). ` +
@@ -500,8 +578,17 @@ export function renderDigestText(d: Digest): string {
     for (const w of s.widths) {
       lines.push(
         `    ${w.label.padEnd(7)} ${w.status.padEnd(22)} need ${num(w.requiredFootage)} ft · ` +
-          `on hand ${num(w.onHandFootage)} ft${w.onOrderFootage > 0 ? ` (+${num(w.onOrderFootage)} on order)` : ""}` +
-          `${w.shortFootage > 0 ? ` · SHORT ${num(w.shortFootage)} ft` : ""}`,
+          `on hand ${num(w.onHandFootage)} ft · ` +
+          (w.onOrderFootage > 0
+            ? `arriving ${num(w.onOrderFootage)} ft ${
+                w.inboundDate
+                  ? `${w.inboundDate}${w.inboundDateIsPromised ? "" : " (req)"}`
+                  : w.inboundHeldAtVendor
+                    ? "held at vendor, needs release"
+                    : "no date yet"
+              }` +
+              (w.inboundPoCount > 1 ? ` across ${w.inboundPoCount} POs` : "")
+            : "nothing on order"),
       );
       if (w.alternates.length > 0) {
         lines.push(
