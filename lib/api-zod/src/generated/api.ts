@@ -1631,6 +1631,30 @@ export const GetPoAgentQueueResponse = zod.object({
       ltPoNumbers: zod.string().nullish(),
       agentState: zod.string().nullish(),
       reason: zod.string().nullish(),
+      fromAddr: zod
+        .string()
+        .nullish()
+        .describe("Who sent the message that caused the flag."),
+      subject: zod.string().nullish(),
+      receivedAt: zod.string().nullish(),
+      bodyPreview: zod
+        .string()
+        .nullish()
+        .describe(
+          "First ~1200 chars of the vendor's own message, already captured by the watcher — so the question can be answered without leaving the dashboard.",
+        ),
+      replyUrl: zod
+        .string()
+        .nullish()
+        .describe(
+          "Gmail thread deep link, addressed to the connected mailbox specifically rather than \/u\/0.",
+        ),
+      vendorEmails: zod
+        .string()
+        .nullish()
+        .describe(
+          "Who the PO went to, as a fallback when there is no inbound message to reply to.",
+        ),
     }),
   ),
   lessons: zod

@@ -2189,6 +2189,44 @@ router.get(
       db.select().from(materialPoTable).where(isNotNull(materialPoTable.agentState)),
       db.select().from(agentLessonTable),
     ]);
+
+    /**
+     * The vendor's own message for each flagged PO.
+     *
+     * The queue used to show only the agent's one-line summary, so answering
+     * "vendor asked a question" meant leaving the dashboard to find the mail.
+     * The watcher already stores the sender, subject and the first 1,200
+     * characters of the body on the inbound event, so this is a read — no new
+     * copy of vendor mail is kept anywhere.
+     */
+    const flaggedIds = flagged.map((p) => p.id);
+    const inboundByPo = new Map<
+      string,
+      { fromAddr: string | null; subject: string | null; at: string; bodyPreview: string | null; gmailThreadId: string | null }
+    >();
+    if (flaggedIds.length > 0) {
+      const events = await db
+        .select()
+        .from(poEmailEventTable)
+        .where(and(inArray(poEmailEventTable.poId, flaggedIds), eq(poEmailEventTable.direction, "inbound")));
+      // Latest inbound per PO — that's the one being asked about.
+      for (const e of events.sort((a, b) => a.at.getTime() - b.at.getTime())) {
+        const ex = e.extracted as { bodyPreview?: string } | null;
+        inboundByPo.set(e.poId, {
+          fromAddr: e.fromAddr,
+          subject: e.subject,
+          at: e.at.toISOString(),
+          bodyPreview: ex?.bodyPreview ?? null,
+          gmailThreadId: e.gmailThreadId,
+        });
+      }
+    }
+    // Deep-link replies into the connected mailbox specifically — a /u/0 link
+    // opens whichever account the browser signed in first, which may not be it.
+    const gmailAccount = await import("../lib/gmail")
+      .then((g) => (g.gmailConfigured() ? g.gmailConnection() : null))
+      .then((c) => c?.accountEmail ?? null)
+      .catch(() => null);
     const poIds = [...new Set([...drafts.map((d) => d.poId), ...flagged.map((p) => p.id)])];
     const lines = poIds.length
       ? await db.select().from(materialPoLineTable).where(inArray(materialPoLineTable.poId, poIds))
@@ -2211,14 +2249,27 @@ router.get(
           body: d.body,
           createdAt: d.createdAt.toISOString(),
         })),
-      needsAttention: flagged.map((p) => ({
-        poId: p.id,
-        vendorName: p.vendorName,
-        stockId: lineByPo.get(p.id)?.stockId ?? null,
-        ltPoNumbers: p.ltPoNumbers,
-        agentState: p.agentState,
-        reason: p.attentionReason,
-      })),
+      needsAttention: flagged.map((p) => {
+        const inbound = inboundByPo.get(p.id) ?? null;
+        return {
+          poId: p.id,
+          vendorName: p.vendorName,
+          stockId: lineByPo.get(p.id)?.stockId ?? null,
+          ltPoNumbers: p.ltPoNumbers,
+          agentState: p.agentState,
+          reason: p.attentionReason,
+          // The message that caused the flag, so it can be answered in place.
+          fromAddr: inbound?.fromAddr ?? null,
+          subject: inbound?.subject ?? null,
+          receivedAt: inbound?.at ?? null,
+          bodyPreview: inbound?.bodyPreview ?? null,
+          replyUrl:
+            inbound?.gmailThreadId && gmailAccount
+              ? `https://mail.google.com/mail/u/${encodeURIComponent(gmailAccount)}/#all/${inbound.gmailThreadId}`
+              : null,
+          vendorEmails: p.emailedTo ?? p.vendorEmails ?? null,
+        };
+      }),
       lessons: lessons
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .map((l) => ({ id: l.id, vendorName: l.vendorName, lesson: l.lesson, createdAt: l.createdAt.toISOString() })),

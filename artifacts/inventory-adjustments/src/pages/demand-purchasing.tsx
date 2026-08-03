@@ -1804,6 +1804,15 @@ function MaterialForecastCard({ rows }: { rows: DemandStockMetrics[] }) {
   );
 }
 
+/**
+ * Automated senders — Avery Dennison's order acknowledgements arrive from
+ * no_reply@averydennison.com. Offering a Reply button on those sends the buyer
+ * into a thread nobody reads, so they get pointed at the PO contacts instead.
+ */
+function isNoReply(addr: string | null | undefined): boolean {
+  return /no[._-]?reply@/i.test(addr ?? "");
+}
+
 /** Where an open PO stands, for someone asking "when do I get this material?" */
 type PoStatus =
   | "pending_confirmation"
@@ -4220,24 +4229,82 @@ function PoAgentQueueCard() {
           </div>
         ))}
         {attention.map((a) => (
-          <div key={a.poId} className="rounded-md border border-amber-300/60 px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
-            <div className="min-w-0">
-              <span className="font-medium">{a.vendorName}</span>
-              {a.stockId && <span className="text-muted-foreground"> · Stock #{a.stockId}</span>}
-              {a.ltPoNumbers && <span className="text-muted-foreground"> · LT PO {a.ltPoNumbers}</span>}
-              <div className="text-amber-700 dark:text-amber-400">⚠ {a.reason ?? "Needs review"}</div>
+          <div key={a.poId} className="rounded-md border border-amber-300/60 px-3 py-2">
+            <div className="flex items-start justify-between gap-2 flex-wrap">
+              <div className="min-w-0">
+                <span className="font-medium">{a.vendorName}</span>
+                {a.stockId && <span className="text-muted-foreground"> · Stock #{a.stockId}</span>}
+                {a.ltPoNumbers && <span className="text-muted-foreground"> · LT PO {a.ltPoNumbers}</span>}
+                <div className="text-amber-700 dark:text-amber-400">⚠ {a.reason ?? "Needs review"}</div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* Reply where the thread already is, so the vendor sees a real
+                    reply rather than a fresh mail with no history. */}
+                {a.replyUrl && (
+                  <Button asChild variant="outline" size="sm" className="h-7 text-xs">
+                    <a
+                      href={a.replyUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      title={
+                        isNoReply(a.fromAddr)
+                          ? "Opens the thread in Gmail. The sender is a no-reply address, so reply to the vendor's PO contacts instead."
+                          : "Open this thread in Gmail to reply"
+                      }
+                    >
+                      <Mail className="w-3.5 h-3.5 mr-1" /> {isNoReply(a.fromAddr) ? "Open thread" : "Reply"}
+                    </a>
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setResolving(a);
+                    setExplanation("");
+                  }}
+                >
+                  Mark handled
+                </Button>
+              </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs shrink-0"
-              onClick={() => {
-                setResolving(a);
-                setExplanation("");
-              }}
-            >
-              Mark handled
-            </Button>
+
+            {/* The vendor's own words. The agent's one-line summary is a
+                classification, not evidence — answering a question needs the
+                question. Already captured by the watcher, so this is a read. */}
+            {(a.fromAddr || a.bodyPreview) && (
+              <div className="mt-2 rounded border bg-muted/30 px-2.5 py-2">
+                <div className="text-[11px] text-muted-foreground">
+                  {a.fromAddr && (
+                    <>
+                      From <span className="font-medium text-foreground">{a.fromAddr}</span>
+                    </>
+                  )}
+                  {a.receivedAt && <> · {new Date(a.receivedAt).toLocaleString()}</>}
+                </div>
+                {isNoReply(a.fromAddr) && (
+                  <div className="text-[11px] text-amber-700 dark:text-amber-400">
+                    Automated sender — replying here goes nowhere.
+                    {a.vendorEmails ? ` Use ${a.vendorEmails}.` : " Use the vendor's PO contacts."}
+                  </div>
+                )}
+                {a.subject && <div className="text-[11px] font-medium mt-0.5">{a.subject}</div>}
+                {a.bodyPreview && (
+                  <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px] text-muted-foreground max-h-40 overflow-y-auto">
+                    {a.bodyPreview}
+                  </pre>
+                )}
+              </div>
+            )}
+            {!a.fromAddr && !a.bodyPreview && a.vendorEmails && (
+              // Flagged without an inbound message — a price revision or a
+              // discrepancy the agent found on its own. There's no thread to
+              // reply to, so show who to contact.
+              <div className="mt-1.5 text-[11px] text-muted-foreground">
+                No vendor message on this one — the agent raised it. PO went to {a.vendorEmails}.
+              </div>
+            )}
           </div>
         ))}
       </CardContent>

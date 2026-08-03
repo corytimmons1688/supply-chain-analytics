@@ -1196,6 +1196,16 @@ export interface PoAttentionItem {
   ltPoNumbers?: string | null;
   agentState?: string | null;
   reason?: string | null;
+  /** Who sent the message that caused the flag. */
+  fromAddr?: string | null;
+  subject?: string | null;
+  receivedAt?: string | null;
+  /** First ~1200 chars of the vendor's own message, already captured by the watcher — so the question can be answered without leaving the dashboard. */
+  bodyPreview?: string | null;
+  /** Gmail thread deep link, addressed to the connected mailbox specifically rather than /u/0. */
+  replyUrl?: string | null;
+  /** Who the PO went to, as a fallback when there is no inbound message to reply to. */
+  vendorEmails?: string | null;
 }
 
 export interface PoAgentQueue {
