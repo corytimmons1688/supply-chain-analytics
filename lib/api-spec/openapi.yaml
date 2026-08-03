@@ -2720,9 +2720,11 @@ components:
       required: [reachable]
       properties:
         reachable: { type: boolean }
-        odbcConnected: { type: boolean }
+        odbcConnected: { type: boolean, description: "LT Cloud API health — primary connectivity, drives the header indicator." }
         latencyMs: { type: number }
         error: { type: string, nullable: true }
+        gatewayDegraded: { type: boolean, description: "The ODBC gateway can't answer queries. It's the only source for PO requested-delivery dates and per-roll cost, so those go stale silently — verified by running a real query, since the gateway's own /health reports healthy during a total outage." }
+        gatewayImpact: { type: string, nullable: true, description: "What's stale while the gateway is down. Null when healthy." }
         syncAges:
           type: array
           description: "Age of each data source's last successful sync, display order."

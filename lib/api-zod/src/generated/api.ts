@@ -19,9 +19,24 @@ export const HealthCheckResponse = zod.object({
  */
 export const GatewayHealthResponse = zod.object({
   reachable: zod.boolean(),
-  odbcConnected: zod.boolean().optional(),
+  odbcConnected: zod
+    .boolean()
+    .optional()
+    .describe(
+      "LT Cloud API health — primary connectivity, drives the header indicator.",
+    ),
   latencyMs: zod.number().optional(),
   error: zod.string().nullish(),
+  gatewayDegraded: zod
+    .boolean()
+    .optional()
+    .describe(
+      "The ODBC gateway can't answer queries. It's the only source for PO requested-delivery dates and per-roll cost, so those go stale silently — verified by running a real query, since the gateway's own \/health reports healthy during a total outage.",
+    ),
+  gatewayImpact: zod
+    .string()
+    .nullish()
+    .describe("What's stale while the gateway is down. Null when healthy."),
   syncAges: zod
     .array(
       zod.object({

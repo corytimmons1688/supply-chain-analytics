@@ -42,6 +42,16 @@ export async function runGatewaySql(sql: string): Promise<GatewayRow[]> {
   return json.rows ?? json.data ?? json.result ?? [];
 }
 
+/**
+ * Is the gateway actually able to answer a query?
+ *
+ * Its own /health endpoint can't be trusted: observed 2026-08-03, it returned
+ * `odbc: {connected: true, latencyMs: 0, lastSuccessfulQuery: <now>}` while
+ * EVERY statement — down to `SELECT 1` — failed with "[odbc] Error executing
+ * the sql statement". A zero-latency success stamped at request time means it
+ * reports its own liveness, not the ODBC link's. So we run a real query and
+ * treat that as the answer; /health only tells us the service is listening.
+ */
 export async function checkGateway(): Promise<{
   reachable: boolean;
   odbcConnected: boolean;
@@ -49,33 +59,32 @@ export async function checkGateway(): Promise<{
   error: string | null;
 }> {
   const started = Date.now();
+  let reachable = false;
   try {
-    const url = `${GATEWAY_URL.replace(/\/$/, "")}/health`;
-    const res = await fetch(url, {
+    const res = await fetch(`${GATEWAY_URL.replace(/\/$/, "")}/health`, {
       headers: { "x-api-key": GATEWAY_KEY },
     });
-    const latencyMs = Date.now() - started;
+    reachable = res.ok;
     if (!res.ok) {
-      return { reachable: false, odbcConnected: false, latencyMs, error: `HTTP ${res.status}` };
+      return { reachable: false, odbcConnected: false, latencyMs: Date.now() - started, error: `HTTP ${res.status}` };
     }
-    let odbcConnected = true;
-    try {
-      const body = (await res.json()) as Record<string, unknown>;
-      if (typeof body["odbcConnected"] === "boolean") odbcConnected = body["odbcConnected"] as boolean;
-      else if (typeof body["odbc"] === "boolean") odbcConnected = body["odbc"] as boolean;
-    } catch {
-      // ignore
-    }
-    return { reachable: true, odbcConnected, latencyMs, error: null };
   } catch (err) {
-    const latencyMs = Date.now() - started;
     logger.warn({ err }, "Gateway health check failed");
     return {
       reachable: false,
       odbcConnected: false,
-      latencyMs,
+      latencyMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+  // The real test. Cheapest query that still proves the ODBC link works.
+  try {
+    await runGatewaySql("SELECT TOP 1 StockID FROM stock");
+    return { reachable, odbcConnected: true, latencyMs: Date.now() - started, error: null };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: error }, "Gateway reachable but ODBC queries are failing");
+    return { reachable, odbcConnected: false, latencyMs: Date.now() - started, error };
   }
 }
 

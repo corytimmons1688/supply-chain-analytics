@@ -9,9 +9,14 @@ import type { SyncAge } from "./syncAge";
 
 export interface GatewayHealth {
   reachable: boolean;
+  /** LT Cloud API health — primary connectivity, drives the header indicator. */
   odbcConnected?: boolean;
   latencyMs?: number;
   error?: string | null;
+  /** The ODBC gateway can't answer queries. It's the only source for PO requested-delivery dates and per-roll cost, so those go stale silently — verified by running a real query, since the gateway's own /health reports healthy during a total outage. */
+  gatewayDegraded?: boolean;
+  /** What's stale while the gateway is down. Null when healthy. */
+  gatewayImpact?: string | null;
   /** Age of each data source's last successful sync, display order. */
   syncAges?: SyncAge[];
 }
