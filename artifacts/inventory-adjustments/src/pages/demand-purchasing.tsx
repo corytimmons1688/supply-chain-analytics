@@ -68,7 +68,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck, Clock, TrendingUp } from "lucide-react";
+import { Mail, Send, ShoppingCart, Ticket, Settings2, Printer, ExternalLink, X, PackageCheck, BarChart3, LayoutGrid, Trash2, UnfoldHorizontal, MessagesSquare, Truck, Clock, TrendingUp, FilePlus2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseNoteTracking } from "@/lib/carrier-tracking";
 
@@ -2181,6 +2181,354 @@ function lineEstCost(l: SuggestionLine): number | null {
   return msi * (l.msiCost + l.freightMsi);
 }
 
+/**
+ * Raise a PO for any stock, not just the ones the engine flagged.
+ *
+ * The suggestion list only contains stocks at or below their reorder point, so
+ * until now there was no way to order a material for a reason the math can't see
+ * — a job that hasn't been booked yet, a price window, a quality hold on the
+ * current lot. Everything is prefilled from the stock's own configuration so a
+ * manual PO is still a considered one, and the buyer sees the position they're
+ * ordering against rather than typing into a vacuum.
+ *
+ * Creates the same draft as a suggested PO, so it lands in PO History and runs
+ * the same Submit → Send → agent-follow-up path.
+ */
+function ManualPoCard({
+  rows,
+  purch,
+  vendorToEmails,
+}: {
+  rows: DemandStockMetrics[];
+  purch: { items: PurchasingItem[] } | undefined;
+  vendorToEmails: Map<string, string>;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const createPo = useCreateMaterialPo();
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [stockId, setStockId] = React.useState<string | null>(null);
+  const [rolls, setRolls] = React.useState(1);
+  const [width, setWidth] = React.useState(0);
+  const [footagePerRoll, setFootagePerRoll] = React.useState(0);
+  const [dueDate, setDueDate] = React.useState("");
+  const [vendorName, setVendorName] = React.useState("");
+  const [notes, setNotes] = React.useState("");
+
+  const purchByStock = React.useMemo(
+    () => new Map((purch?.items ?? []).map((i) => [i.stockId, i])),
+    [purch],
+  );
+  const metricsByStock = React.useMemo(() => new Map(rows.map((r) => [r.stockId, r])), [rows]);
+
+  const reset = () => {
+    setStockId(null);
+    setQuery("");
+    setNotes("");
+  };
+
+  /** Prefill from the stock's configuration the moment it's chosen. */
+  const pick = (id: string) => {
+    const m = metricsByStock.get(id);
+    const p = purchByStock.get(id);
+    setStockId(id);
+    // The engine's suggestion if it has one, else the economic batch, else a
+    // single roll — never zero, which the create endpoint rejects.
+    setRolls(Math.max(1, Math.round(m?.suggestedOrderRolls || m?.eoqRolls || 1)));
+    setWidth(p?.masterWidth ?? 0);
+    setFootagePerRoll(Math.round(m?.typicalRollFootage ?? 0));
+    setVendorName(p?.vendorName ?? "");
+    // Same rule as a suggested PO: today + the configured lead time, with 14
+    // days only backstopping a stock that has no lead time at all.
+    const d = new Date();
+    d.setDate(d.getDate() + (m && m.avgLeadTimeDays > 0 ? Math.round(m.avgLeadTimeDays) : 14));
+    setDueDate(d.toISOString().slice(0, 10));
+  };
+
+  const candidates = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows
+      .filter((r) => {
+        if (!q) return true;
+        return (
+          r.stockId.toLowerCase().includes(q) ||
+          (r.description ?? "").toLowerCase().includes(q) ||
+          (purchByStock.get(r.stockId)?.vendorName ?? "").toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 60);
+  }, [rows, query, purchByStock]);
+
+  const m = stockId ? metricsByStock.get(stockId) : null;
+  const p = stockId ? purchByStock.get(stockId) : null;
+  const effWidth = width > 0 ? width : (p?.masterWidth ?? 0);
+  const totalFootage = rolls * footagePerRoll;
+  const estCost =
+    p?.msiCost != null && effWidth > 0 && totalFootage > 0
+      ? footageToMsi(totalFootage, effWidth) * (p.msiCost + (p.freightMsi ?? 0))
+      : null;
+  const openPos = p?.openPos ?? [];
+  const vendorEmail = vendorName ? vendorToEmails.get(vendorName) : undefined;
+
+  const create = async () => {
+    if (!stockId || !m) return;
+    if (!vendorName.trim()) {
+      toast({
+        title: "Vendor required",
+        description: "Set one here, or permanently under Setup › Configuration",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await createPo.mutateAsync({
+        data: {
+          vendorName: vendorName.trim(),
+          vendorEmails: p?.vendorEmails ?? null,
+          requestedDeliveryDate: dueDate || null,
+          notes: notes.trim() || null,
+          lines: [
+            {
+              stockId,
+              description: m.description ?? null,
+              rolls,
+              footage: totalFootage > 0 ? totalFootage : null,
+              width: effWidth > 0 ? effWidth : null,
+              msiCost: p?.msiCost ?? null,
+              estCost,
+            },
+          ],
+        },
+      });
+      await queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
+      toast({
+        title: `PO drafted for #${stockId}`,
+        description: `${rolls} roll${rolls === 1 ? "" : "s"} from ${vendorName} — review & submit in PO History below`,
+      });
+      setOpen(false);
+      reset();
+    } catch (e) {
+      toast({ title: "Failed", description: String(e), variant: "destructive" });
+    }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardContent className="py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-muted-foreground">
+            Need something the suggestions don&apos;t cover? They only include stocks at or below their reorder point.
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            <FilePlus2 className="w-3.5 h-3.5 mr-1" /> New PO
+          </Button>
+        </CardContent>
+      </Card>
+
+      {open && (
+        <Dialog
+          open
+          onOpenChange={(o) => {
+            if (!o) {
+              setOpen(false);
+              reset();
+            }
+          }}
+        >
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-base">
+                {stockId ? `New PO — #${stockId}` : "New PO — pick a material"}
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                {stockId
+                  ? "Prefilled from this stock's configuration. Creates a draft — nothing reaches the vendor until you send it."
+                  : "Any stock, whether or not it's below its reorder point."}
+              </DialogDescription>
+            </DialogHeader>
+
+            {!stockId ? (
+              <div className="space-y-2">
+                <Input
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by stock number, description or vendor…"
+                  className="h-8 text-xs"
+                />
+                <div className="rounded-md border max-h-80 overflow-y-auto">
+                  {candidates.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-xs text-muted-foreground">No match.</div>
+                  ) : (
+                    candidates.map((r) => {
+                      const pi = purchByStock.get(r.stockId);
+                      return (
+                        <button
+                          key={r.stockId}
+                          type="button"
+                          className="w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-muted/50 text-xs"
+                          onClick={() => pick(r.stockId)}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium">#{r.stockId}</span>
+                            <span className="text-muted-foreground tabular-nums">{fmt(r.onHandFootage)} ft on hand</span>
+                          </div>
+                          <div className="text-muted-foreground truncate">{r.description ?? "—"}</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {pi?.vendorName ?? "no vendor configured"}
+                            {r.discontinued ? " · discontinued" : ""}
+                            {pi?.inactive ? " · inactive in Label Traxx" : ""}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div className="text-muted-foreground">{m?.description ?? ""}</div>
+
+                {/* The position being ordered against, so a manual PO isn't blind. */}
+                <div className="rounded-md border bg-muted/30 px-3 py-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">On hand</div>
+                    <div className="tabular-nums">{fmt(m?.onHandFootage)} ft</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Available</div>
+                    <div className="tabular-nums">{fmt(m?.availableFootage)} ft</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Committed</div>
+                    <div className="tabular-nums">{fmt(p?.openTicketFootage)} ft</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Reorder at</div>
+                    <div className="tabular-nums">{fmt(m?.reorderPointFootage)} ft</div>
+                  </div>
+                </div>
+
+                {openPos.length > 0 && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-800 dark:text-amber-300">
+                    {openPos.length} PO{openPos.length === 1 ? "" : "s"} already open for this stock
+                    {openPos[0]?.promisedDeliveryDate ?? openPos[0]?.requestedDeliveryDate
+                      ? ` — soonest ${openPos[0]?.promisedDeliveryDate ?? openPos[0]?.requestedDeliveryDate}`
+                      : ""}
+                    . Worth checking you&apos;re not double-ordering.
+                  </div>
+                )}
+                {m?.discontinued && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-800 dark:text-amber-300">
+                    Marked discontinued — excluded from reorder suggestions on purpose.
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <label className="space-y-1">
+                    <span className="text-muted-foreground">Vendor</span>
+                    <Input
+                      value={vendorName}
+                      onChange={(e) => setVendorName(e.target.value)}
+                      className="h-8 text-xs"
+                      placeholder="required"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-muted-foreground">Rolls</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={rolls}
+                      onChange={(e) => setRolls(Math.max(1, Math.round(Number(e.target.value) || 0)))}
+                      className="h-8 text-xs"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-muted-foreground">Width (in)</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={width}
+                      onChange={(e) => setWidth(Number(e.target.value) || 0)}
+                      className="h-8 text-xs"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-muted-foreground">Footage per roll</span>
+                    <Input
+                      type="number"
+                      value={footagePerRoll}
+                      onChange={(e) => setFootagePerRoll(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                      className="h-8 text-xs"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-muted-foreground">Requested delivery</span>
+                    <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="h-8 text-xs" />
+                  </label>
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground">Total</span>
+                    <div className="h-8 flex items-center tabular-nums">
+                      {fmt(totalFootage)} ft
+                      {estCost != null && <span className="text-muted-foreground">&nbsp;· est. ${fmt(estCost)}</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <label className="block space-y-1">
+                  <span className="text-muted-foreground">Note to the vendor (optional)</span>
+                  <Textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={2}
+                    className="text-xs"
+                    placeholder="e.g. hold for job starting 8/20"
+                  />
+                </label>
+
+                <p className="text-muted-foreground">
+                  {vendorEmail ? (
+                    <>Will be addressed to {vendorEmail} when you send it.</>
+                  ) : (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      No PO email for this vendor yet — add one under Setup › Vendor PO contacts before sending.
+                    </span>
+                  )}{" "}
+                  Requested date is today + the configured lead time
+                  {m && m.avgLeadTimeDays > 0 ? ` (${Math.round(m.avgLeadTimeDays)} days)` : ""}.
+                </p>
+              </div>
+            )}
+
+            <DialogFooter>
+              {stockId && (
+                <Button variant="ghost" size="sm" onClick={reset}>
+                  Pick another
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setOpen(false);
+                  reset();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" disabled={!stockId || createPo.isPending} onClick={create}>
+                {createPo.isPending ? "Creating…" : "Create draft PO"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -2454,10 +2802,14 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
           two render the same query. */}
       <PoAgentQueueCard />
 
+      {/* Always available, including when there are no suggestions — that's
+          exactly when someone needs to order off-script. */}
+      <ManualPoCard rows={rows} purch={purch} vendorToEmails={vendorToEmails} />
+
       {byVendor.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            Nothing to order — no active stocks are at or below their reorder point. 🎉
+            Nothing to order — no active stocks are at or below their reorder point. Use New PO above to order anyway.
           </CardContent>
         </Card>
       ) : (
