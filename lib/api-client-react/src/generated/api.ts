@@ -83,6 +83,8 @@ import type {
   ListVendorShipmentsParams,
   ListVendors200,
   ListWeeklySnapshots200,
+  MahReleaseRequest,
+  MahReleaseResult,
   MaterialForecast,
   MaterialPoCreateResult,
   MaterialPoInput,
@@ -1932,6 +1934,94 @@ export const useUpdateDemandConfig = <
   TContext
 > => {
   return useMutation(getUpdateDemandConfigMutationOptions(options));
+};
+
+/**
+ * Creates a draft release request against material the vendor has already made and is holding. Quantities are rounded up to the stock's configured roll size and capped at what's actually held, per width. Runs the same email → send → agent-follow-up path as a PO but is never submitted to Label Traxx, because the material is already on the make-and-hold PO.
+
+ * @summary Request release of held make-and-hold material from the vendor
+ */
+export const getRequestMahReleaseUrl = () => {
+  return `/api/demand/mah-release`;
+};
+
+export const requestMahRelease = async (
+  mahReleaseRequest: MahReleaseRequest,
+  options?: RequestInit,
+): Promise<MahReleaseResult> => {
+  return customFetch<MahReleaseResult>(getRequestMahReleaseUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(mahReleaseRequest),
+  });
+};
+
+export const getRequestMahReleaseMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestMahRelease>>,
+    TError,
+    { data: BodyType<MahReleaseRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestMahRelease>>,
+  TError,
+  { data: BodyType<MahReleaseRequest> },
+  TContext
+> => {
+  const mutationKey = ["requestMahRelease"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestMahRelease>>,
+    { data: BodyType<MahReleaseRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return requestMahRelease(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestMahReleaseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestMahRelease>>
+>;
+export type RequestMahReleaseMutationBody = BodyType<MahReleaseRequest>;
+export type RequestMahReleaseMutationError = ErrorType<void>;
+
+/**
+ * @summary Request release of held make-and-hold material from the vendor
+ */
+export const useRequestMahRelease = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestMahRelease>>,
+    TError,
+    { data: BodyType<MahReleaseRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestMahRelease>>,
+  TError,
+  { data: BodyType<MahReleaseRequest> },
+  TContext
+> => {
+  return useMutation(getRequestMahReleaseMutationOptions(options));
 };
 
 /**

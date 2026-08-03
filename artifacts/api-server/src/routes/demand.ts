@@ -505,6 +505,39 @@ router.get(
       return b.forecast12wkFootage - a.forecast12wkFootage;
     });
 
+    // Make-and-hold releases we've requested. The make-and-hold PO itself isn't
+    // inbound material (it sits in the vendor's warehouse), but a release is —
+    // so the Open POs report shows these instead of the parent orders.
+    const releaseRows = await db
+      .select()
+      .from(materialPoTable)
+      .where(eq(materialPoTable.kind, "mah_release"));
+    const releaseLines = releaseRows.length
+      ? await db
+          .select()
+          .from(materialPoLineTable)
+          .where(inArray(materialPoLineTable.poId, releaseRows.map((r) => r.id)))
+      : [];
+    const mahReleases = releaseLines.map((l) => {
+      const po = releaseRows.find((r) => r.id === l.poId)!;
+      return {
+        id: po.id,
+        stockId: l.stockId,
+        vendorName: po.vendorName,
+        fromPoNumbers: po.releaseFromPoNumbers,
+        rolls: l.rolls,
+        footage: l.footage ?? 0,
+        width: l.width,
+        requestedDeliveryDate: po.requestedDeliveryDate,
+        promisedDate: po.promisedDate,
+        emailedAt: po.emailedAt?.toISOString() ?? null,
+        agentState: po.agentState,
+        needsAttention: po.needsAttention,
+        attentionReason: po.attentionReason,
+        notes: po.notes,
+      };
+    });
+
     res.json({
       windowFrom: from,
       windowTo: to,
@@ -513,6 +546,7 @@ router.get(
       forecastWeeks,
       generatedAt: new Date().toISOString(),
       items,
+      mahReleases,
     });
   }),
 );
@@ -1132,6 +1166,8 @@ router.get(
           vendorEmails: vc?.toEmails ?? po.vendorEmails,
           vendorCcEmails: vc?.ccEmails ?? null,
           status: receivedOn ? "received" : po.status,
+          kind: po.kind,
+          releaseFromPoNumbers: po.releaseFromPoNumbers,
           ltPoNumbers: po.ltPoNumbers,
           requestedDeliveryDate: po.requestedDeliveryDate,
           createdAt: po.createdAt.toISOString(),
@@ -1206,6 +1242,108 @@ router.post(
       lines: lineValues.map((l) => ({ ...l, mfgSpecNum: specs.get(l.stockId) ?? null })),
     });
     res.json({ id: po!.id, status: "draft", email });
+  }),
+);
+
+/**
+ * Request a make-and-hold release: ask the vendor to ship material they've
+ * already made and are holding.
+ *
+ * Created as a draft material_po with kind "mah_release" so it runs the same
+ * email → send → agent-follow-up path as a PO (we need the same things back:
+ * confirmation, ship date, tracking). It is NOT submittable to Label Traxx —
+ * the material is already on the make-and-hold PO.
+ */
+router.post(
+  "/demand/mah-release",
+  asyncHandler(async (req, res) => {
+    const b = (req.body ?? {}) as {
+      stockId?: string;
+      requestedDeliveryDate?: string | null;
+      notes?: string | null;
+      widths?: { width?: number; label?: string; releaseFootage?: number }[];
+    };
+    const stockId = String(b.stockId ?? "").trim();
+    if (!stockId) return void res.status(400).json({ error: "stockId required" });
+    const needs = (b.widths ?? [])
+      .map((w) => ({
+        width: Number(w.width) || 0,
+        label: String(w.label ?? ""),
+        releaseFootage: Number(w.releaseFootage) || 0,
+        heldFootage: 0, // resolved server-side from the vendor feed
+      }))
+      .filter((w) => w.releaseFootage > 0);
+    if (needs.length === 0) return void res.status(400).json({ error: "at least one width with releaseFootage > 0 required" });
+
+    const { planMahRelease, mahReleaseEmail, addBusinessDaysIso, RELEASE_LEAD_BUSINESS_DAYS } = await import(
+      "../lib/mah-release"
+    );
+    const plan = await planMahRelease(stockId, needs);
+    if (plan.blockedReason) return void res.status(400).json({ error: plan.blockedReason });
+
+    // Held stock delivers in ~5 business days; that's the ask unless overridden.
+    const requestedDeliveryDate =
+      b.requestedDeliveryDate ??
+      addBusinessDaysIso(new Date().toISOString().slice(0, 10), RELEASE_LEAD_BUSINESS_DAYS);
+    const [po] = await db
+      .insert(materialPoTable)
+      .values({
+        vendorName: plan.vendorName,
+        vendorEmails: plan.vendorEmails,
+        kind: "mah_release",
+        releaseFromPoNumbers: plan.fromPoNumbers.join(", ") || null,
+        requestedDeliveryDate,
+        notes: b.notes ?? null,
+        status: "draft",
+      })
+      .returning();
+    const lineValues = plan.lines.map((l) => ({
+      poId: po!.id,
+      stockId: l.stockId,
+      description: l.description,
+      rolls: l.rolls,
+      footage: l.footage,
+      width: l.width > 0 ? l.width : null,
+      // A release has no price of its own — the material was costed on the
+      // make-and-hold PO, so leaving these null keeps it out of spend math.
+      msiCost: null,
+      estCost: null,
+    }));
+    await db.insert(materialPoLineTable).values(lineValues);
+    const { appendPoEvent } = await import("../lib/po-agent");
+    await appendPoEvent(po!.id, {
+      direction: "system",
+      kind: "note",
+      summary:
+        `Release requested for #${stockId}: ${plan.totalRolls} roll${plan.totalRolls === 1 ? "" : "s"} ` +
+        `(${Math.round(plan.totalFootage).toLocaleString()} ft) in ${plan.rollFootage.toLocaleString()} ft rolls` +
+        (plan.fromPoNumbers.length ? ` from ${plan.fromPoNumbers.join(", ")}` : "") +
+        (plan.rollFootageConfigured ? "" : ` — no roll size configured for this stock, used ${plan.rollFootage.toLocaleString()} ft`),
+    });
+
+    const contacts = await vendorEmailsFor(plan.vendorName, plan.vendorEmails);
+    const specs = await mfgSpecsFor(lineValues.map((l) => l.stockId));
+    const email = mahReleaseEmail({
+      vendorName: plan.vendorName,
+      vendorEmails: contacts.to,
+      vendorCcEmails: contacts.cc,
+      requestedDeliveryDate,
+      fromPoNumbers: plan.fromPoNumbers,
+      lines: plan.lines.map((l) => ({ ...l, mfgSpecNum: specs.get(l.stockId) ?? null })),
+    });
+    res.json({
+      id: po!.id,
+      status: "draft",
+      kind: "mah_release",
+      vendorName: plan.vendorName,
+      rollFootage: plan.rollFootage,
+      rollFootageConfigured: plan.rollFootageConfigured,
+      totalRolls: plan.totalRolls,
+      totalFootage: plan.totalFootage,
+      fromPoNumbers: plan.fromPoNumbers,
+      lines: plan.lines,
+      email,
+    });
   }),
 );
 
@@ -1432,6 +1570,16 @@ router.post(
     const id = String(req.params["id"]);
     const [po] = await db.select().from(materialPoTable).where(eq(materialPoTable.id, id)).limit(1);
     if (!po) return void res.status(404).json({ error: "PO not found" });
+    // A make-and-hold release is a call-in against material that's already on
+    // an existing LT PO. Creating a second PO for it would double the on-order
+    // position and bill us twice.
+    if (po.kind === "mah_release") {
+      return void res.status(400).json({
+        error:
+          "This is a make-and-hold release, not a new order — the material is already on " +
+          (po.releaseFromPoNumbers ?? "an existing PO") + ". Email it to the vendor instead of submitting to Label Traxx.",
+      });
+    }
     const lines = await db.select().from(materialPoLineTable).where(eq(materialPoLineTable.poId, id));
 
     let ltPoNumbers: string[] = [];
@@ -1559,6 +1707,30 @@ async function poMailPayload(id: string) {
     vendorEmailsFor(po.vendorName, po.vendorEmails),
     mfgSpecsFor(lines.map((l) => l.stockId)),
   ]);
+  // A make-and-hold release is a different ask — ship what you're already
+  // holding on your PO — so it gets its own template, no pricing and no PO PDF.
+  if (po.kind === "mah_release") {
+    const { mahReleaseEmail } = await import("../lib/mah-release");
+    const email = mahReleaseEmail({
+      vendorName: po.vendorName,
+      vendorEmails: contacts.to,
+      vendorCcEmails: contacts.cc,
+      requestedDeliveryDate: po.requestedDeliveryDate,
+      fromPoNumbers: (po.releaseFromPoNumbers ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      lines: lines.map((l) => ({
+        stockId: l.stockId,
+        description: l.description,
+        width: l.width,
+        rolls: l.rolls,
+        footage: l.footage,
+        mfgSpecNum: specs.get(l.stockId) ?? null,
+      })),
+    });
+    return { po, email };
+  }
   const email = poEmail({
     vendorName: po.vendorName,
     vendorEmails: contacts.to,
@@ -1578,28 +1750,41 @@ async function poMailPayload(id: string) {
   return { po, email };
 }
 
+/**
+ * A release carries no PO document — the material was ordered on the
+ * make-and-hold PO, so there's nothing to attach and a DRAFT-stamped PDF would
+ * only confuse the vendor.
+ */
+function attachesPoPdf(po: { kind: string }): boolean {
+  return po.kind !== "mah_release";
+}
+
 router.get(
   "/demand/pos/:id/email-preview",
   asyncHandler(async (req, res) => {
     try {
       const id = String(req.params["id"]);
-      const [{ po, email }, doc, gmail] = await Promise.all([
+      const [{ po, email }, gmail] = await Promise.all([
         poMailPayload(id),
-        assemblePoDocument(id),
         import("../lib/gmail").then(async (g) => ({
           configured: g.gmailConfigured(),
           connection: g.gmailConfigured() ? await g.gmailConnection() : null,
         })),
       ]);
+      // Releases have no PO document, and assembling one would fail anyway
+      // (no LT PO number, no pricing).
+      const doc = attachesPoPdf(po) ? await assemblePoDocument(id) : null;
       const { poPdfFilename } = await import("../lib/po-pdf");
       res.json({
         to: parseEmails(email.to),
         cc: parseEmails(email.cc),
         subject: email.subject,
         body: email.body,
-        attachmentName: poPdfFilename(doc),
+        attachmentName: doc ? poPdfFilename(doc) : null,
+        kind: po.kind,
+        releaseFromPoNumbers: po.releaseFromPoNumbers,
         /** The PDF says DRAFT until the PO exists in Label Traxx — worth a warning. */
-        isDraft: doc.isDraft,
+        isDraft: doc?.isDraft ?? false,
         emailedAt: po.emailedAt?.toISOString() ?? null,
         emailedTo: po.emailedTo,
         gmailConfigured: gmail.configured,
@@ -1646,9 +1831,9 @@ router.post(
       const { po, email } = await poMailPayload(id);
       const realTo = parseEmails(email.to);
       const realCc = parseEmails(email.cc);
-      const doc = await assemblePoDocument(id);
+      const doc = attachesPoPdf(po) ? await assemblePoDocument(id) : null;
       const { renderPoPdf, poPdfFilename } = await import("../lib/po-pdf");
-      const pdf = await renderPoPdf(doc);
+      const pdf = doc ? await renderPoPdf(doc) : null;
 
       // Make it unmistakable that this is a test, in case it ever gets forwarded.
       const banner =
@@ -1669,7 +1854,8 @@ router.post(
           (realCc.length ? `<br>and CC: ${realCc.join(", ")}` : "") +
           `</div>` +
           email.html,
-        attachments: [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }],
+        attachments:
+          doc && pdf ? [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }] : [],
       });
 
       logger.info({ poId: id, to: connection.accountEmail, messageId: sent.id }, "Test PO email sent to self");
@@ -1679,7 +1865,7 @@ router.post(
         to: [connection.accountEmail],
         cc: [],
         subject: `[TEST] ${email.subject}`,
-        attachmentName: poPdfFilename(doc),
+        attachmentName: doc ? poPdfFilename(doc) : null,
         messageId: sent.id,
         threadId: sent.threadId,
       });
@@ -1724,9 +1910,9 @@ router.post(
         });
       }
 
-      const doc = await assemblePoDocument(id);
+      const doc = attachesPoPdf(po) ? await assemblePoDocument(id) : null;
       const { renderPoPdf, poPdfFilename } = await import("../lib/po-pdf");
-      const pdf = await renderPoPdf(doc);
+      const pdf = doc ? await renderPoPdf(doc) : null;
 
       const sent = await gmail.sendMail({
         to,
@@ -1734,7 +1920,8 @@ router.post(
         subject: email.subject,
         text: email.body,
         html: email.html,
-        attachments: [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }],
+        attachments:
+          doc && pdf ? [{ filename: poPdfFilename(doc), mimeType: "application/pdf", content: pdf }] : [],
       });
 
       const emailedAt = new Date();
@@ -1773,7 +1960,9 @@ router.post(
           rfc822MessageId: rfc822,
           fromAddr: connection.accountEmail,
           subject: email.subject,
-          summary: `PO emailed to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}`,
+          summary:
+            `${po.kind === "mah_release" ? "Release request" : "PO"} emailed to ${to.join(", ")}` +
+            `${cc.length ? ` (cc ${cc.join(", ")})` : ""}`,
         });
       } catch (e) {
         logger.warn({ poId: id, err: String(e) }, "Could not record send event");
@@ -1785,7 +1974,7 @@ router.post(
         to,
         cc,
         subject: email.subject,
-        attachmentName: poPdfFilename(doc),
+        attachmentName: doc ? poPdfFilename(doc) : null,
         messageId: sent.id,
         threadId: sent.threadId,
         emailedAt: emailedAt.toISOString(),

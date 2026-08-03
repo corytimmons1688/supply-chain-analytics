@@ -5,11 +5,14 @@
  * Inventory adjustments dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { MahRelease } from "./mahRelease";
 import type { PurchasingItem } from "./purchasingItem";
 import type { PurchasingResponseStatusCounts } from "./purchasingResponseStatusCounts";
 
 export interface PurchasingResponse {
   statusCounts: PurchasingResponseStatusCounts;
   items: PurchasingItem[];
+  /** Make-and-hold release requests — one entry per stock+width line. These are the inbound rows on the Open POs report; the parent make-and-hold PO is not inbound. */
+  mahReleases?: MahRelease[];
   ltWriteEnabled: boolean;
 }

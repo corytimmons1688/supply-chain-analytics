@@ -14,6 +14,10 @@ export interface MaterialPo {
   /** Vendor-level CC addresses for the PO email. */
   vendorCcEmails?: string | null;
   status: string;
+  /** "po" = a normal purchase order. "mah_release" = a call-in against material the vendor already holds on a make-and-hold PO; not submittable to Label Traxx. */
+  kind?: string;
+  /** For a release: the make-and-hold PO number(s) the material is held under. */
+  releaseFromPoNumbers?: string | null;
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;
   createdAt: string;

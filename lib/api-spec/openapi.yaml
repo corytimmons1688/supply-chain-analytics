@@ -352,6 +352,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DemandConfigResult" }
+  /demand/mah-release:
+    post:
+      operationId: requestMahRelease
+      tags: [demand]
+      summary: Request release of held make-and-hold material from the vendor
+      description: >
+        Creates a draft release request against material the vendor has already made
+        and is holding. Quantities are rounded up to the stock's configured roll size
+        and capped at what's actually held, per width. Runs the same email → send →
+        agent-follow-up path as a PO but is never submitted to Label Traxx, because the
+        material is already on the make-and-hold PO.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MahReleaseRequest" }
+      responses:
+        "200":
+          description: Release drafted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MahReleaseResult" }
+        "400":
+          description: Nothing releasable — no vendor, not on the feed, or all still in production
   /demand/pos:
     get:
       operationId: listMaterialPos
@@ -2158,7 +2182,86 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/PurchasingItem" }
+        mahReleases:
+          type: array
+          description: "Make-and-hold release requests — one entry per stock+width line. These are the inbound rows on the Open POs report; the parent make-and-hold PO is not inbound."
+          items: { $ref: "#/components/schemas/MahRelease" }
         ltWriteEnabled: { type: boolean }
+    MahRelease:
+      type: object
+      required: [id, stockId, vendorName, rolls, footage]
+      properties:
+        id: { type: string, description: "material_po id — the release's own record, for email preview/send." }
+        stockId: { type: string }
+        vendorName: { type: string }
+        fromPoNumbers: { type: string, nullable: true, description: "Make-and-hold PO number(s) the material is held under." }
+        rolls: { type: integer }
+        footage: { type: number }
+        width: { type: number, nullable: true }
+        requestedDeliveryDate: { type: string, nullable: true }
+        promisedDate: { type: string, nullable: true, description: "Vendor-confirmed date the agent captured from their reply." }
+        emailedAt: { type: string, nullable: true, description: "Null = drafted but not yet sent to the vendor." }
+        agentState: { type: string, nullable: true }
+        needsAttention: { type: boolean }
+        attentionReason: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+    MahReleaseRequest:
+      type: object
+      required: [stockId, widths]
+      properties:
+        stockId: { type: string }
+        requestedDeliveryDate: { type: string, nullable: true, description: "Defaults to 5 business days out — held material's quoted transit." }
+        notes: { type: string, nullable: true }
+        widths:
+          type: array
+          description: "Per-width shortfalls to call in. Held footage is resolved server-side from the vendor feed, so a stale client can't over-request."
+          items:
+            type: object
+            required: [width, releaseFootage]
+            properties:
+              width: { type: number }
+              label: { type: string }
+              releaseFootage: { type: number }
+    MahReleaseResult:
+      type: object
+      required: [id, status, kind, vendorName, rollFootage, totalRolls, totalFootage, lines, email]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        kind: { type: string }
+        vendorName: { type: string }
+        rollFootage: { type: number, description: "Roll increment the request was rounded to." }
+        rollFootageConfigured: { type: boolean, description: "False = the stock has no configured roll size and a 10,000 ft default was used." }
+        totalRolls: { type: integer }
+        totalFootage: { type: number }
+        fromPoNumbers:
+          type: array
+          items: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [stockId, width, widthLabel, rolls, footage, neededFootage, heldFootage, partialRoll]
+            properties:
+              stockId: { type: string }
+              description: { type: string, nullable: true }
+              width: { type: number }
+              widthLabel: { type: string }
+              rolls: { type: integer }
+              footage: { type: number }
+              neededFootage: { type: number, description: "Footage actually short, before rounding up to whole rolls." }
+              heldFootage: { type: number }
+              partialRoll: { type: boolean, description: "True when the vendor holds less than a full roll at this width, so the ask is the remnant." }
+              fromPoNumbers:
+                type: array
+                items: { type: string }
+        email:
+          type: object
+          properties:
+            to: { type: string }
+            cc: { type: string }
+            subject: { type: string }
+            body: { type: string }
     DemandConfigInput:
       type: object
       properties:
@@ -2208,6 +2311,8 @@ components:
         vendorEmails: { type: string, nullable: true }
         vendorCcEmails: { type: string, nullable: true, description: "Vendor-level CC addresses for the PO email." }
         status: { type: string }
+        kind: { type: string, description: "\"po\" = a normal purchase order. \"mah_release\" = a call-in against material the vendor already holds on a make-and-hold PO; not submittable to Label Traxx." }
+        releaseFromPoNumbers: { type: string, nullable: true, description: "For a release: the make-and-hold PO number(s) the material is held under." }
         ltPoNumbers: { type: string, nullable: true }
         requestedDeliveryDate: { type: string, nullable: true }
         createdAt: { type: string }

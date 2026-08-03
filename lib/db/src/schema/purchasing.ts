@@ -30,6 +30,17 @@ export const materialPoTable = pgTable("material_po", {
   id: text("id").primaryKey().$defaultFn(uuid),
   vendorName: text("vendor_name").notNull(),
   vendorEmails: text("vendor_emails"),
+  /**
+   * "po" — a normal purchase order, submittable to Label Traxx.
+   * "mah_release" — a call-in against material the vendor already made and is
+   * holding under an existing make-and-hold PO. No new LT PO is created (the
+   * material is already on one), but it otherwise runs the same draft → email →
+   * agent-follow-up path, because what we need back is identical: confirmation,
+   * a ship date, and a tracking number.
+   */
+  kind: text("kind").notNull().default("po"),
+  /** For a release: the make-and-hold PO number(s) the material is held under. */
+  releaseFromPoNumbers: text("release_from_po_numbers"),
   status: text("status").notNull().default("draft"), // draft | submitted | submitted_lt
   // Label Traxx PO numbers created for this order (comma-separated), once
   // LT submission is enabled.

@@ -897,6 +897,44 @@ export const GetDemandPurchasingResponse = zod.object({
         .optional(),
     }),
   ),
+  mahReleases: zod
+    .array(
+      zod.object({
+        id: zod
+          .string()
+          .describe(
+            "material_po id — the release's own record, for email preview\/send.",
+          ),
+        stockId: zod.string(),
+        vendorName: zod.string(),
+        fromPoNumbers: zod
+          .string()
+          .nullish()
+          .describe("Make-and-hold PO number(s) the material is held under."),
+        rolls: zod.number(),
+        footage: zod.number(),
+        width: zod.number().nullish(),
+        requestedDeliveryDate: zod.string().nullish(),
+        promisedDate: zod
+          .string()
+          .nullish()
+          .describe(
+            "Vendor-confirmed date the agent captured from their reply.",
+          ),
+        emailedAt: zod
+          .string()
+          .nullish()
+          .describe("Null = drafted but not yet sent to the vendor."),
+        agentState: zod.string().nullish(),
+        needsAttention: zod.boolean().optional(),
+        attentionReason: zod.string().nullish(),
+        notes: zod.string().nullish(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Make-and-hold release requests — one entry per stock+width line. These are the inbound rows on the Open POs report; the parent make-and-hold PO is not inbound.",
+    ),
   ltWriteEnabled: zod.boolean(),
 });
 
@@ -946,6 +984,78 @@ export const UpdateDemandConfigResponse = zod.object({
 });
 
 /**
+ * Creates a draft release request against material the vendor has already made and is holding. Quantities are rounded up to the stock's configured roll size and capped at what's actually held, per width. Runs the same email → send → agent-follow-up path as a PO but is never submitted to Label Traxx, because the material is already on the make-and-hold PO.
+
+ * @summary Request release of held make-and-hold material from the vendor
+ */
+export const RequestMahReleaseBody = zod.object({
+  stockId: zod.string(),
+  requestedDeliveryDate: zod
+    .string()
+    .nullish()
+    .describe(
+      "Defaults to 5 business days out — held material's quoted transit.",
+    ),
+  notes: zod.string().nullish(),
+  widths: zod
+    .array(
+      zod.object({
+        width: zod.number(),
+        label: zod.string().optional(),
+        releaseFootage: zod.number(),
+      }),
+    )
+    .describe(
+      "Per-width shortfalls to call in. Held footage is resolved server-side from the vendor feed, so a stale client can't over-request.",
+    ),
+});
+
+export const RequestMahReleaseResponse = zod.object({
+  id: zod.string(),
+  status: zod.string(),
+  kind: zod.string(),
+  vendorName: zod.string(),
+  rollFootage: zod
+    .number()
+    .describe("Roll increment the request was rounded to."),
+  rollFootageConfigured: zod
+    .boolean()
+    .optional()
+    .describe(
+      "False = the stock has no configured roll size and a 10,000 ft default was used.",
+    ),
+  totalRolls: zod.number(),
+  totalFootage: zod.number(),
+  fromPoNumbers: zod.array(zod.string()).optional(),
+  lines: zod.array(
+    zod.object({
+      stockId: zod.string(),
+      description: zod.string().nullish(),
+      width: zod.number(),
+      widthLabel: zod.string(),
+      rolls: zod.number(),
+      footage: zod.number(),
+      neededFootage: zod
+        .number()
+        .describe("Footage actually short, before rounding up to whole rolls."),
+      heldFootage: zod.number(),
+      partialRoll: zod
+        .boolean()
+        .describe(
+          "True when the vendor holds less than a full roll at this width, so the ask is the remnant.",
+        ),
+      fromPoNumbers: zod.array(zod.string()).optional(),
+    }),
+  ),
+  email: zod.object({
+    to: zod.string().optional(),
+    cc: zod.string().optional(),
+    subject: zod.string().optional(),
+    body: zod.string().optional(),
+  }),
+});
+
+/**
  * @summary List material purchase orders raised from demand planning
  */
 export const ListMaterialPosResponse = zod.object({
@@ -959,6 +1069,18 @@ export const ListMaterialPosResponse = zod.object({
         .nullish()
         .describe("Vendor-level CC addresses for the PO email."),
       status: zod.string(),
+      kind: zod
+        .string()
+        .optional()
+        .describe(
+          '\"po\" = a normal purchase order. \"mah_release\" = a call-in against material the vendor already holds on a make-and-hold PO; not submittable to Label Traxx.',
+        ),
+      releaseFromPoNumbers: zod
+        .string()
+        .nullish()
+        .describe(
+          "For a release: the make-and-hold PO number(s) the material is held under.",
+        ),
       ltPoNumbers: zod.string().nullish(),
       requestedDeliveryDate: zod.string().nullish(),
       createdAt: zod.string(),

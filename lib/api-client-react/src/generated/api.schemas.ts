@@ -610,10 +610,86 @@ export interface VendorContact {
 
 export type PurchasingResponseStatusCounts = { [key: string]: number };
 
+export interface MahRelease {
+  /** material_po id — the release's own record, for email preview/send. */
+  id: string;
+  stockId: string;
+  vendorName: string;
+  /** Make-and-hold PO number(s) the material is held under. */
+  fromPoNumbers?: string | null;
+  rolls: number;
+  footage: number;
+  width?: number | null;
+  requestedDeliveryDate?: string | null;
+  /** Vendor-confirmed date the agent captured from their reply. */
+  promisedDate?: string | null;
+  /** Null = drafted but not yet sent to the vendor. */
+  emailedAt?: string | null;
+  agentState?: string | null;
+  needsAttention?: boolean;
+  attentionReason?: string | null;
+  notes?: string | null;
+}
+
 export interface PurchasingResponse {
   statusCounts: PurchasingResponseStatusCounts;
   items: PurchasingItem[];
+  /** Make-and-hold release requests — one entry per stock+width line. These are the inbound rows on the Open POs report; the parent make-and-hold PO is not inbound. */
+  mahReleases?: MahRelease[];
   ltWriteEnabled: boolean;
+}
+
+export type MahReleaseRequestWidthsItem = {
+  width: number;
+  label?: string;
+  releaseFootage: number;
+};
+
+export interface MahReleaseRequest {
+  stockId: string;
+  /** Defaults to 5 business days out — held material's quoted transit. */
+  requestedDeliveryDate?: string | null;
+  notes?: string | null;
+  /** Per-width shortfalls to call in. Held footage is resolved server-side from the vendor feed, so a stale client can't over-request. */
+  widths: MahReleaseRequestWidthsItem[];
+}
+
+export type MahReleaseResultLinesItem = {
+  stockId: string;
+  description?: string | null;
+  width: number;
+  widthLabel: string;
+  rolls: number;
+  footage: number;
+  /** Footage actually short, before rounding up to whole rolls. */
+  neededFootage: number;
+  heldFootage: number;
+  /** True when the vendor holds less than a full roll at this width, so the ask is the remnant. */
+  partialRoll: boolean;
+  fromPoNumbers?: string[];
+};
+
+export type MahReleaseResultEmail = {
+  to?: string;
+  cc?: string;
+  subject?: string;
+  body?: string;
+};
+
+export interface MahReleaseResult {
+  id: string;
+  status: string;
+  kind: string;
+  vendorName: string;
+  /** Roll increment the request was rounded to. */
+  rollFootage: number;
+  /** False = the stock has no configured roll size and a 10,000 ft default was used. */
+  rollFootageConfigured?: boolean;
+  totalRolls: number;
+  totalFootage: number;
+  fromPoNumbers?: string[];
+  lines: MahReleaseResultLinesItem[];
+  email: MahReleaseResultEmail;
 }
 
 export interface DemandConfigInput {
@@ -681,6 +757,10 @@ export interface MaterialPo {
   /** Vendor-level CC addresses for the PO email. */
   vendorCcEmails?: string | null;
   status: string;
+  /** "po" = a normal purchase order. "mah_release" = a call-in against material the vendor already holds on a make-and-hold PO; not submittable to Label Traxx. */
+  kind?: string;
+  /** For a release: the make-and-hold PO number(s) the material is held under. */
+  releaseFromPoNumbers?: string | null;
   ltPoNumbers?: string | null;
   requestedDeliveryDate?: string | null;
   createdAt: string;

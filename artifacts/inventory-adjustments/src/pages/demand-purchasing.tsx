@@ -35,6 +35,7 @@ import {
   type DemandStockMetrics,
   type PurchasingItem,
   type MaterialPo,
+  type MahRelease,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { authorizedFetch, openAuthorizedUrl } from "@/lib/auth-client";
@@ -369,6 +370,121 @@ type WidthTip = {
   top: number;
 };
 
+/** What the server drafted in response to a release request. */
+type MahReleaseDraft = {
+  id: string;
+  stockId: string;
+  vendorName: string;
+  description: string | null;
+  rollFootage: number;
+  rollFootageConfigured: boolean;
+  totalRolls: number;
+  totalFootage: number;
+  fromPoNumbers: string[];
+  lines: {
+    width: number;
+    widthLabel: string;
+    rolls: number;
+    footage: number;
+    neededFootage: number;
+    heldFootage: number;
+    partialRoll: boolean;
+  }[];
+  email: { to: string; cc: string; subject: string; body: string };
+};
+
+/**
+ * What was drafted and why, before it goes anywhere. The rounding is the part
+ * worth showing: the buyer asked for a shortfall and gets whole rolls, so the
+ * numbers won't match unless we say so.
+ */
+function MahReleaseDraftDialog({
+  draft,
+  onClose,
+  onSend,
+}: {
+  draft: MahReleaseDraft;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="text-base">
+            Release {draft.totalRolls} roll{draft.totalRolls === 1 ? "" : "s"} of #{draft.stockId}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            {fmt(draft.totalFootage)} ft in {fmt(draft.rollFootage)} ft rolls
+            {draft.fromPoNumbers.length > 0 && <> from {draft.fromPoNumbers.join(", ")}</>}. Nothing is sent yet.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 text-xs">
+          {!draft.rollFootageConfigured && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-amber-800 dark:text-amber-300">
+              #{draft.stockId} has no roll size configured, so this used {fmt(draft.rollFootage)} ft. Set the real one
+              under Setup › Configuration if that&apos;s wrong.
+            </div>
+          )}
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-muted/40 text-muted-foreground">
+                  <th className="text-left px-2 py-1.5 font-medium">Width</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Short by</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Releasing</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Held</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draft.lines.map((l) => (
+                  <tr key={`${l.width}-${l.widthLabel}`} className="border-b last:border-b-0">
+                    <td className="px-2 py-1.5 whitespace-nowrap">{l.widthLabel || `${l.width}"`}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                      {fmt(l.neededFootage)} ft
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                      {l.rolls} roll{l.rolls === 1 ? "" : "s"} · {fmt(l.footage)} ft
+                      {l.partialRoll && (
+                        <div className="text-[10px] text-amber-700 dark:text-amber-400">
+                          less than a full roll held — asking for the remnant
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                      {fmt(l.heldFootage)} ft
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-muted-foreground">
+            Rounded up to whole rolls — the vendor ships rolls, so asking for the exact shortfall would produce the same
+            quantity. Capped at what they&apos;re actually holding at each width.
+          </p>
+          <div className="rounded-md border bg-muted/30 px-3 py-2">
+            <div className="font-medium">{draft.email.subject}</div>
+            <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px] text-muted-foreground max-h-40 overflow-y-auto">
+              {draft.email.body}
+            </pre>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Keep as draft
+          </Button>
+          <Button size="sm" onClick={onSend}>
+            Review recipients &amp; send
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * Dazpak make-and-hold panel. Two signals per program material:
  *  - Release from Held (made & waiting, ~5 business days to deliver)
@@ -376,8 +492,56 @@ type WidthTip = {
  */
 export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  // Stock currently being drafted, so the button can show progress and two
+  // clicks can't raise two releases for the same material.
+  const [requesting, setRequesting] = React.useState<string | null>(null);
+  const [drafted, setDrafted] = React.useState<MahReleaseDraft | null>(null);
+  const [sending, setSending] = React.useState<MahReleaseDraft | null>(null);
   const program = React.useMemo(() => rows.filter((r) => r.dazpak), [rows]);
   if (program.length === 0) return null;
+
+  /**
+   * Draft the release server-side and open the send dialog. The widths come
+   * from the row the buyer is looking at, so the request matches what they saw;
+   * the server re-derives held footage and the roll rounding, so a stale page
+   * can't over-request.
+   */
+  const requestRelease = async (r: DemandStockMetrics) => {
+    const d = r.dazpak;
+    if (!d) return;
+    const widths =
+      (d.widths ?? []).filter((w) => w.releaseFootage > 0).map((w) => ({
+        width: w.width,
+        label: w.label,
+        releaseFootage: w.releaseFootage,
+      }));
+    // Stocks with a single width don't get a widths break-out — fall back to
+    // the stock-level suggestion at its master width.
+    const payload = widths.length
+      ? widths
+      : [{ width: 0, label: "", releaseFootage: d.releaseFootage }];
+    setRequesting(r.stockId);
+    try {
+      const res = await authorizedFetch(`/api/demand/mah-release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stockId: r.stockId, widths: payload }),
+      });
+      const json = (await res.json()) as MahReleaseDraft & { error?: string };
+      if (!res.ok) {
+        toast({ title: "Can't request a release", description: json.error ?? `HTTP ${res.status}`, variant: "destructive" });
+        return;
+      }
+      await queryClient.invalidateQueries({ queryKey: getGetDemandPurchasingQueryKey() });
+      setDrafted({ ...json, stockId: r.stockId, description: r.description ?? null });
+    } catch (e) {
+      toast({ title: "Can't request a release", description: String(e), variant: "destructive" });
+    } finally {
+      setRequesting(null);
+    }
+  };
 
   const toRelease = program.filter((r) => (r.dazpak?.releaseFootage ?? 0) > 0);
   const toMake = program.filter((r) => (r.dazpak?.makeFootage ?? 0) > 0);
@@ -458,13 +622,16 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{d.etaDate ?? "—"}</td>
                     <td className="px-2 py-1.5 text-right">
                       {d.releaseFootage > 0 && (
-                        <Badge
+                        <Button
+                          size="sm"
                           variant="outline"
-                          className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40"
-                          title={`On-hand won't cover ${fmt(d.demandReleaseHorizon)} ft due in the next 15 business days`}
+                          disabled={requesting === r.stockId}
+                          className="h-6 px-2 text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40 hover:bg-amber-500/20"
+                          title={`On-hand won't cover ${fmt(d.demandReleaseHorizon)} ft due in the next 15 business days. Drafts an email asking the vendor to ship held material, rounded up to whole rolls.`}
+                          onClick={() => requestRelease(r)}
                         >
-                          Release {fmt(d.releaseFootage)} ft
-                        </Badge>
+                          {requesting === r.stockId ? "Drafting…" : `Request release ${fmt(d.releaseFootage)} ft`}
+                        </Button>
                       )}
                       {d.makeFootage > 0 && (
                         <Badge
@@ -520,6 +687,26 @@ export function MakeAndHoldSection({ rows }: { rows: DemandStockMetrics[] }) {
           </table>
         </div>
       </CardContent>
+      {drafted && !sending && (
+        <MahReleaseDraftDialog
+          draft={drafted}
+          onClose={() => setDrafted(null)}
+          onSend={() => setSending(drafted)}
+        />
+      )}
+      {sending && (
+        <SendPoDialog
+          po={{ id: sending.id, vendorName: sending.vendorName } as MaterialPo}
+          onClose={() => {
+            setSending(null);
+            setDrafted(null);
+          }}
+          onSent={() => {
+            void queryClient.invalidateQueries({ queryKey: getGetDemandPurchasingQueryKey() });
+            void queryClient.invalidateQueries({ queryKey: getListMaterialPosQueryKey() });
+          }}
+        />
+      )}
     </Card>
   );
 }
@@ -1624,10 +1811,9 @@ type PoStatus =
   | "extended"
   | "in_transit"
   | "past_due"
-  | "release_planned"
-  | "held_at_vendor"
-  | "in_production_at_vendor"
-  | "make_and_hold_unknown";
+  | "release_requested"
+  | "release_confirmed"
+  | "release_draft";
 
 const PO_STATUS_LABEL: Record<PoStatus, string> = {
   pending_confirmation: "Pending vendor confirmation",
@@ -1635,10 +1821,9 @@ const PO_STATUS_LABEL: Record<PoStatus, string> = {
   extended: "Confirmed · extended lead time",
   in_transit: "In transit",
   past_due: "Past due",
-  release_planned: "Release planned",
-  held_at_vendor: "Held at vendor",
-  in_production_at_vendor: "In production at vendor",
-  make_and_hold_unknown: "Make & hold · status unknown",
+  release_draft: "Release drafted · not sent",
+  release_requested: "Release requested",
+  release_confirmed: "Release confirmed",
 };
 
 const PO_STATUS_CLASS: Record<PoStatus, string> = {
@@ -1647,10 +1832,9 @@ const PO_STATUS_CLASS: Record<PoStatus, string> = {
   extended: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/40",
   in_transit: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/40",
   past_due: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/40",
-  release_planned: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40",
-  held_at_vendor: "bg-muted text-muted-foreground border-border",
-  in_production_at_vendor: "bg-muted text-muted-foreground border-border",
-  make_and_hold_unknown: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/40",
+  release_draft: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/40",
+  release_requested: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40",
+  release_confirmed: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/40",
 };
 
 function OpenPosTable({
@@ -1658,7 +1842,7 @@ function OpenPosTable({
   purch,
 }: {
   rows: DemandStockMetrics[];
-  purch: { items: PurchasingItem[] } | undefined;
+  purch: { items: PurchasingItem[]; mahReleases?: MahRelease[] } | undefined;
 }) {
   // Descriptions live on the demand metrics, not the purchasing items.
   const descByStock = React.useMemo(
@@ -1666,9 +1850,6 @@ function OpenPosTable({
     [metricRows],
   );
   const metricsByStock = React.useMemo(() => new Map(metricRows.map((r) => [r.stockId, r])), [metricRows]);
-  // Make-and-hold POs are "open" but the rolls sit in Dazpak's warehouse, so
-  // they aren't inbound until a release is planned. Hidden unless they are.
-  const [showHeld, setShowHeld] = React.useState(false);
   const rows = React.useMemo(() => {
     const out: {
       key: string;
@@ -1686,61 +1867,41 @@ function OpenPosTable({
       status: PoStatus;
       /** Extra context for the status cell — ETA, release footage, why. */
       statusNote: string | null;
-      /** Sitting in the vendor's warehouse, not inbound to Calyx. */
-      atVendor: boolean;
       onHandFootage: number;
       /** Substitutes with material free right now — what to run while waiting. */
       alternates: { stockId: string; description: string | null; availableFootage: number; onHandFootage: number }[];
     }[] = [];
     const nowIso = new Date().toISOString().slice(0, 10);
+    const alternatesFor = (stockId: string) =>
+      (metricsByStock.get(stockId)?.alternateStockIds ?? [])
+        .map((altId) => {
+          const alt = metricsByStock.get(altId);
+          return {
+            stockId: altId,
+            description: alt?.description ?? null,
+            availableFootage: alt?.availableFootage ?? 0,
+            onHandFootage: alt?.onHandFootage ?? 0,
+          };
+        })
+        .filter((a) => a.availableFootage > 0 || a.onHandFootage > 0)
+        .sort((a, b) => b.availableFootage - a.availableFootage);
+
     for (const item of purch?.items ?? []) {
-      const metrics = metricsByStock.get(item.stockId);
-      const dz = metrics?.dazpak;
       for (const p of item.openPos ?? []) {
         const date = p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null;
         const promised = Boolean(p.promisedDeliveryDate);
         const hasTracking = parseNoteTracking(p.notes).some((s) => s.kind === "track");
-        // Make-and-hold is identified from the LT supplier, not Dazpak's feed:
-        // their feed omits some of their own POs (stocks 308/318), so a
-        // feed-only check would show those as ordinary inbound orders.
-        const isMakeAndHold = /dazpak/i.test(p.supplierName ?? "");
-        const dzLine = (dz?.lines ?? []).find((l) => l.poNumber === p.poNumber);
-        const releasePlanned = (dz?.releaseFootage ?? 0) > 0;
+        // Make-and-hold orders are excluded outright: the rolls live in the
+        // vendor's warehouse, so they're supply, not inbound freight. What IS
+        // inbound is a release we've asked for — those rows come from
+        // purch.mahReleases below. Identified from the LT supplier rather than
+        // Dazpak's feed, which omits some of their own POs (stocks 308/318).
+        if (/dazpak/i.test(p.supplierName ?? "")) continue;
 
         let status: PoStatus;
         let statusNote: string | null = null;
-        let atVendor = false;
 
-        if (isMakeAndHold && !dzLine) {
-          // Known make-and-hold, but Dazpak's feed doesn't report this PO — so
-          // we can't say whether the rolls are made or still in production.
-          // Kept visible (hiding unverified material is worse than labelling
-          // it) but never presented as a confirmed delivery.
-          status = releasePlanned ? "release_planned" : "make_and_hold_unknown";
-          statusNote = releasePlanned
-            ? `Release planned for this stock — confirm with Dazpak which order it comes from`
-            : `Make-and-hold order, but Dazpak's report doesn't cover it — ask them whether it's made or still running before planning around ${date ?? "this PO"}`;
-        } else if (dzLine && (dzLine.madeFootage > 0 || dzLine.outstandingFootage > 0)) {
-          // Rolls already made and parked in Dazpak's warehouse aren't inbound
-          // until someone calls them in — those hide until a release is
-          // planned. Rolls still in production have a real ETA, so they stay
-          // visible like any other vendor's order.
-          const holding = dzLine.madeFootage > 0;
-          atVendor = holding && !releasePlanned;
-          if (holding && releasePlanned) {
-            status = "release_planned";
-            statusNote = `${fmt(dz?.releaseFootage ?? 0)} ft to call in from ${fmt(dzLine.madeFootage)} ft held`;
-          } else if (holding) {
-            status = "held_at_vendor";
-            statusNote =
-              `${fmt(dzLine.madeFootage)} ft made & waiting at Dazpak — no release needed yet` +
-              // A single PO can be part-made, part-still-running.
-              (dzLine.outstandingFootage > 0 ? `; ${fmt(dzLine.outstandingFootage)} ft still in production` : "");
-          } else {
-            status = "in_production_at_vendor";
-            statusNote = `${fmt(dzLine.outstandingFootage)} ft in production${dzLine.planAvailDate ? ` · available ${dzLine.planAvailDate}` : ""}`;
-          }
-        } else if (hasTracking) {
+        if (hasTracking) {
           status = "in_transit";
           statusNote = "Tracking received — see link";
         } else if (date && date < nowIso) {
@@ -1774,46 +1935,84 @@ function OpenPosTable({
           extendedLeadTimeDays: p.extendedLeadTimeDays ?? null,
           status,
           statusNote,
-          atVendor,
-          onHandFootage: metrics?.onHandFootage ?? 0,
+          onHandFootage: metricsByStock.get(item.stockId)?.onHandFootage ?? 0,
           // Only substitutes with material genuinely free — an alternate whose
           // own stock is fully committed is no help to production.
-          alternates: (metrics?.alternateStockIds ?? [])
-            .map((altId) => {
-              const alt = metricsByStock.get(altId);
-              return {
-                stockId: altId,
-                description: alt?.description ?? null,
-                availableFootage: alt?.availableFootage ?? 0,
-                onHandFootage: alt?.onHandFootage ?? 0,
-              };
-            })
-            .filter((a) => a.availableFootage > 0 || a.onHandFootage > 0)
-            .sort((a, b) => b.availableFootage - a.availableFootage),
+          alternates: alternatesFor(item.stockId),
         });
       }
     }
-    // Worst news first for production: past due, then pending confirmation,
-    // then by the date material actually shows up.
+
+    // Make-and-hold releases: material we've asked the vendor to ship from what
+    // they're holding. These are the inbound rows for the make-and-hold program.
+    for (const rel of purch?.mahReleases ?? []) {
+      const date = rel.promisedDate ?? rel.requestedDeliveryDate ?? null;
+      const promised = Boolean(rel.promisedDate);
+      const hasTracking = parseNoteTracking(rel.notes).some((s) => s.kind === "track");
+      let status: PoStatus;
+      let statusNote: string | null;
+      if (!rel.emailedAt) {
+        status = "release_draft";
+        statusNote = "Drafted but not sent — the vendor hasn't been asked yet";
+      } else if (hasTracking) {
+        status = "in_transit";
+        statusNote = "Tracking received — see link";
+      } else if (date && date < nowIso) {
+        status = "past_due";
+        statusNote = promised
+          ? `Vendor committed ${date} and it hasn't arrived`
+          : `Release requested for ${date}, still no confirmation`;
+      } else if (promised) {
+        status = "release_confirmed";
+        statusNote = `Vendor confirmed release for ${date}`;
+      } else {
+        status = "release_requested";
+        statusNote = `Requested ${new Date(rel.emailedAt).toLocaleDateString()}; awaiting confirmation`;
+      }
+      if (rel.needsAttention && rel.attentionReason) {
+        statusNote = `${statusNote} · ${rel.attentionReason}`;
+      }
+      out.push({
+        key: `rel|${rel.id}|${rel.stockId}|${rel.width ?? "x"}`,
+        stockId: rel.stockId,
+        description: descByStock.get(rel.stockId) ?? null,
+        poNumber: rel.fromPoNumbers ? `Release · ${rel.fromPoNumbers}` : "Release",
+        date,
+        dateIsPromised: promised,
+        footage: rel.footage ?? 0,
+        rolls: rel.rolls ?? 0,
+        width: rel.width ?? null,
+        notes: rel.notes ?? null,
+        extendedLeadTime: false,
+        extendedLeadTimeDays: null,
+        status,
+        statusNote,
+        onHandFootage: metricsByStock.get(rel.stockId)?.onHandFootage ?? 0,
+        alternates: alternatesFor(rel.stockId),
+      });
+    }
+
+    // Soonest expected first — production reads this to answer "when does my
+    // material land?", so the date is the organising fact. Rows with no date at
+    // all sort last; a tie breaks on how bad the news is.
     const rank: Record<PoStatus, number> = {
       past_due: 0,
-      pending_confirmation: 1,
-      release_planned: 2,
-      in_transit: 3,
-      extended: 4,
-      confirmed: 5,
-      make_and_hold_unknown: 6,
-      in_production_at_vendor: 7,
-      held_at_vendor: 8,
+      release_draft: 1,
+      pending_confirmation: 2,
+      release_requested: 3,
+      in_transit: 4,
+      extended: 5,
+      release_confirmed: 6,
+      confirmed: 7,
     };
     return out.sort(
-      (a, b) => rank[a.status] - rank[b.status] || (a.date ?? "9999").localeCompare(b.date ?? "9999"),
+      (a, b) => (a.date ?? "9999").localeCompare(b.date ?? "9999") || rank[a.status] - rank[b.status],
     );
   }, [purch, descByStock, metricsByStock]);
 
-  const heldRows = rows.filter((r) => r.atVendor);
-  const visible = showHeld ? rows : rows.filter((r) => !r.atVendor);
+  const visible = rows;
   if (rows.length === 0) return null;
+  const releaseCount = rows.filter((r) => r.key.startsWith("rel|")).length;
   const totalFt = visible.reduce((s, r) => s + r.footage, 0);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -1824,22 +2023,18 @@ function OpenPosTable({
           <Truck className="w-4 h-4 text-muted-foreground" /> Open POs
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Where every open order stands, worst news first. {visible.length} inbound ·{" "}
+          Everything inbound, soonest first. {visible.length} order{visible.length === 1 ? "" : "s"} ·{" "}
           {fmt(totalFt)} ft. Dates are the vendor&apos;s commitment where we have one; otherwise what we requested
-          (&ldquo;req&rdquo;), which is why the status reads pending confirmation.
-          {heldRows.length > 0 && (
+          (&ldquo;req&rdquo;), which is why the status reads pending confirmation. Make-and-hold orders aren&apos;t
+          listed — that material sits in the vendor&apos;s warehouse, so it&apos;s supply, not freight.
+          {releaseCount > 0 ? (
             <>
               {" "}
-              {heldRows.length} make-and-hold order{heldRows.length === 1 ? "" : "s"} sitting at Dazpak with no release
-              planned {showHeld ? "are shown" : "are hidden"} — the rolls exist but aren&apos;t coming to us yet.{" "}
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-foreground"
-                onClick={() => setShowHeld((v) => !v)}
-              >
-                {showHeld ? "Hide them" : "Show them"}
-              </button>
+              The {releaseCount} release{releaseCount === 1 ? "" : "s"} below {releaseCount === 1 ? "is" : "are"} the
+              part that&apos;s actually coming.
             </>
+          ) : (
+            <> Request a release from the Make &amp; Hold panel to bring some in.</>
           )}
         </p>
       </CardHeader>
@@ -1853,6 +2048,12 @@ function OpenPosTable({
                 <th className="text-left px-2 py-1.5 font-medium">PO</th>
                 <th className="text-left px-2 py-1.5 font-medium">Status</th>
                 <th className="text-left px-2 py-1.5 font-medium whitespace-nowrap">Expected</th>
+                <th
+                  className="text-right px-2 py-1.5 font-medium whitespace-nowrap"
+                  title={`Master roll width this order supplies. Width isn't interchangeable above 14" — a 30" roll can't cover a 13" need.`}
+                >
+                  Width
+                </th>
                 <th className="text-right px-2 py-1.5 font-medium whitespace-nowrap">On order</th>
                 <th
                   className="text-left px-2 py-1.5 font-medium whitespace-nowrap"
@@ -1896,11 +2097,13 @@ function OpenPosTable({
                       {r.date && !r.dateIsPromised && <span className="ml-1 text-[10px] text-muted-foreground">req</span>}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                      {r.width ? `${r.width}"` : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                       {r.footage > 0 ? `${fmt(r.footage)} ft` : <span className="text-muted-foreground">—</span>}
                       <span className="text-muted-foreground">
                         {" "}
                         · {r.rolls} roll{r.rolls === 1 ? "" : "s"}
-                        {r.width ? ` @${r.width}"` : ""}
                       </span>
                     </td>
                     <td className="px-2 py-1.5">
@@ -2498,6 +2701,15 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
               <div key={po.id} className="flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-xs flex-wrap">
                 <div className="min-w-0">
                   <span className="font-medium">{po.vendorName}</span>{" "}
+                  {po.kind === "mah_release" && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40"
+                      title={`Release of material the vendor already made and is holding${po.releaseFromPoNumbers ? ` on ${po.releaseFromPoNumbers}` : ""} — not a new order, so it is never submitted to Label Traxx.`}
+                    >
+                      release{po.releaseFromPoNumbers ? ` \u00b7 ${po.releaseFromPoNumbers}` : ""}
+                    </Badge>
+                  )}{" "}
                   <span className="text-muted-foreground">
                     · {po.lines.map((l) => `#${l.stockId}×${l.rolls}${l.width ? ` @ ${l.width}\u2033` : ""}`).join(", ")} ·{" "}
                     {new Date(po.createdAt).toLocaleDateString()}
@@ -2574,15 +2786,22 @@ export function SuggestedPosTab({ rows }: { rows: DemandStockMetrics[] }) {
                       </a>
                     )
                   )}
-                  <button
-                    type="button"
-                    title="Print PO document (Label Traxx format)"
-                    className="text-primary hover:text-primary/80 p-1"
-                    onClick={() => printPo(po)}
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                  </button>
-                  {(po.status === "draft" || po.status === "submitted") && (
+                  {/* A release has no PO document — the material was ordered
+                      on the make-and-hold PO. */}
+                  {po.kind !== "mah_release" && (
+                    <button
+                      type="button"
+                      title="Print PO document (Label Traxx format)"
+                      className="text-primary hover:text-primary/80 p-1"
+                      onClick={() => printPo(po)}
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {/* Releases are never submitted to Label Traxx: the material
+                      is already on the make-and-hold PO, so a second PO would
+                      double the on-order position. */}
+                  {po.kind !== "mah_release" && (po.status === "draft" || po.status === "submitted") && (
                     <button
                       type="button"
                       disabled={submitPo.isPending}
