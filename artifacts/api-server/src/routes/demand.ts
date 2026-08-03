@@ -2379,6 +2379,25 @@ router.post(
     const [draft] = await db.select().from(poAgentDraftTable).where(eq(poAgentDraftTable.id, id)).limit(1);
     if (!draft) return void res.status(404).json({ error: "Draft not found" });
     await db.update(poAgentDraftTable).set({ status: "dismissed" }).where(eq(poAgentDraftTable.id, id));
+    /**
+     * Record the dismissal on the timeline.
+     *
+     * Without this, dismissing was a no-op that lasted until the next cron: the
+     * nudge condition counts only PENDING drafts and SENT follow-ups, so a
+     * dismissed draft left both unchanged and the agent redrafted the identical
+     * nudge minutes later. The agent reads these events as "the buyer has dealt
+     * with this outreach" and holds off.
+     */
+    const { appendPoEvent } = await import("../lib/po-agent");
+    await appendPoEvent(draft.poId, {
+      direction: "system",
+      kind: "draft_dismissed",
+      subject: draft.subject,
+      summary:
+        `Buyer dismissed the ${draft.kind.replace(/_/g, " ")} draft — treating this outreach as handled, ` +
+        `so it won't be redrafted for a while.`,
+      extracted: { draftKind: draft.kind },
+    });
     res.json({ dismissed: true, id });
   }),
 );

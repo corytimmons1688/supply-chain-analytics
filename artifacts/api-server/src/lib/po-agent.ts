@@ -34,6 +34,13 @@ import { logger } from "./logger";
 const ACK_NUDGE_AFTER_BUSINESS_DAYS = 2;
 const MAX_ACK_NUDGES = 2;
 /**
+ * Business days to stay quiet after a buyer dismisses a draft, or after they've
+ * emailed the vendor themselves outside the PO thread. Dismissing used to mean
+ * nothing — the same nudge reappeared on the next run, which is worse than not
+ * offering one at all.
+ */
+const NUDGE_COOLDOWN_BUSINESS_DAYS = 5;
+/**
  * Only chase tracking once delivery is this close (or already past). Asking a
  * fortnight early teaches vendors that our follow-ups can be ignored.
  */
@@ -671,6 +678,58 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       if (po.gmailThreadId) trackedThreads.add(po.gmailThreadId);
       for (const e of events) if (e.gmailThreadId) trackedThreads.add(e.gmailThreadId);
 
+      /**
+       * Find conversations about this PO that aren't in its own thread.
+       *
+       * The watcher only ever polled the thread the PO was sent on. When a buyer
+       * chases the vendor in a fresh email — which is the natural thing to do —
+       * the agent saw silence and kept drafting nudges for something already
+       * asked. Dazpak #308 and #318 did exactly that.
+       *
+       * So: search the mailbox for the PO number alongside the vendor's
+       * addresses, adopt any thread found, and if the buyer wrote it themselves,
+       * record that as outreach already made so the nudge stands down.
+       */
+      if (ref && vendor.toEmails) {
+        const addrs = vendor.toEmails
+          .split(/[,;]/)
+          .map((a) => a.trim())
+          .filter(Boolean)
+          .slice(0, 4);
+        if (addrs.length > 0) {
+          const from = addrs.map((a) => `from:${a}`).join(" OR ");
+          const to = addrs.map((a) => `to:${a}`).join(" OR ");
+          const q = `"${ref}" (${from} OR ${to}) newer_than:30d`;
+          const hits = await searchMessageIds(q, 20).catch(() => []);
+          for (const h of hits) {
+            if (trackedThreads.has(h.threadId)) continue;
+            trackedThreads.add(h.threadId);
+            const seen = events.some((e) => e.gmailMessageId === h.id);
+            if (seen) continue;
+            const msg = await fetchMessage(h.id).catch(() => null);
+            if (!msg) continue;
+            const sender = (header(msg, "From") ?? "").toLowerCase();
+            const fromUs = connection.accountEmail
+              ? sender.includes(connection.accountEmail.toLowerCase())
+              : false;
+            if (fromUs) {
+              // The buyer already chased. Log it as outreach so the nudge budget
+              // and the cooldown both account for it.
+              await appendEvent(po.id, {
+                direction: "outbound",
+                kind: "buyer_contacted_vendor",
+                gmailMessageId: msg.id,
+                gmailThreadId: msg.threadId,
+                fromAddr: header(msg, "From"),
+                subject: header(msg, "Subject"),
+                summary: `Buyer emailed the vendor about ${ref} outside this PO's thread — no nudge needed.`,
+              });
+            }
+            logger.info({ poId: po.id, threadId: h.threadId, fromUs }, "Adopted an off-thread conversation about this PO");
+          }
+        }
+      }
+
       // 2b. Heal earlier failures: inbound events recorded without a
       // classification (extracted.kind missing) get re-classified now — e.g.
       // the batch flagged while the classifier was rejecting every call.
@@ -782,6 +841,20 @@ export async function runPoAgent(): Promise<AgentRunResult> {
       // 5. Nudge when the vendor has gone quiet (draft only — nothing sends).
       if (state === "awaiting_ack" && !sawInbound && po.emailedAt) {
         const nudges = events.filter((e) => e.kind === "follow_up");
+        /**
+         * Outreach the buyer has already made or explicitly declined. A dismissal
+         * counts toward the nudge budget as well as starting a cooldown —
+         * otherwise the agent could be dismissed indefinitely and keep asking,
+         * which is exactly what happened on Dazpak #308 and #318.
+         */
+        const handled = events.filter(
+          (e) => e.kind === "draft_dismissed" || e.kind === "buyer_contacted_vendor",
+        );
+        const lastHandled = handled.length
+          ? new Date(Math.max(...handled.map((e) => e.at.getTime())))
+          : null;
+        const cooldownActive =
+          lastHandled != null && businessDaysBetween(lastHandled, new Date()) < NUDGE_COOLDOWN_BUSINESS_DAYS;
         const drafts = await db
           .select()
           .from(poAgentDraftTable)
@@ -790,7 +863,12 @@ export async function runPoAgent(): Promise<AgentRunResult> {
           ? new Date(Math.max(...nudges.map((e) => e.at.getTime())))
           : po.emailedAt;
         const quietDays = businessDaysBetween(lastOutbound, new Date());
-        if (drafts.length === 0 && nudges.length < MAX_ACK_NUDGES && quietDays >= ACK_NUDGE_AFTER_BUSINESS_DAYS) {
+        if (
+          drafts.length === 0 &&
+          !cooldownActive &&
+          nudges.length + handled.length < MAX_ACK_NUDGES &&
+          quietDays >= ACK_NUDGE_AFTER_BUSINESS_DAYS
+        ) {
           const stockRef = line ? `Stock #${line.stockId}` : "";
           await db.insert(poAgentDraftTable).values({
             poId: po.id,
@@ -804,9 +882,18 @@ export async function runPoAgent(): Promise<AgentRunResult> {
               `Thank you,\nCalyx Containers Supply Chain`,
           });
           result.draftsCreated += 1;
-        } else if (nudges.length >= MAX_ACK_NUDGES && quietDays >= ACK_NUDGE_AFTER_BUSINESS_DAYS && !needsAttention) {
+        } else if (
+          nudges.length + handled.length >= MAX_ACK_NUDGES &&
+          !cooldownActive &&
+          quietDays >= ACK_NUDGE_AFTER_BUSINESS_DAYS &&
+          !needsAttention
+        ) {
           needsAttention = true;
-          attentionReason = `No vendor response after ${nudges.length} follow-ups`;
+          attentionReason =
+            handled.length > 0
+              ? `Still no vendor response — ${nudges.length} follow-up${nudges.length === 1 ? "" : "s"} sent and ` +
+                `${handled.length} chased or dismissed by hand. Worth a call.`
+              : `No vendor response after ${nudges.length} follow-ups`;
         }
       }
 
