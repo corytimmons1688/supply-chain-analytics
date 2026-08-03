@@ -4311,6 +4311,22 @@ function PoAgentQueueCard() {
                   </div>
                 )}
                 {a.subject && <div className="text-[11px] font-medium mt-0.5">{a.subject}</div>}
+                {/* Manual fallback. Gmail deep links are fussy across
+                    multi-account setups, so searching the thread id always
+                    works even if the Reply button lands wrong. */}
+                {a.gmailThreadId && (
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Gmail thread{" "}
+                    <button
+                      type="button"
+                      className="underline underline-offset-2 hover:text-foreground font-mono"
+                      title="Copy the thread id — paste it into Gmail's search box if the Reply button doesn't land"
+                      onClick={() => void navigator.clipboard?.writeText(a.gmailThreadId ?? "")}
+                    >
+                      {a.gmailThreadId}
+                    </button>
+                  </div>
+                )}
                 {a.bodyPreview && (
                   <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px] text-muted-foreground max-h-40 overflow-y-auto">
                     {a.bodyPreview}

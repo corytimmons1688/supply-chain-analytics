@@ -2758,7 +2758,8 @@ components:
         subject: { type: string, nullable: true }
         receivedAt: { type: string, nullable: true }
         bodyPreview: { type: string, nullable: true, description: "First ~1200 chars of the vendor's own message, already captured by the watcher — so the question can be answered without leaving the dashboard." }
-        replyUrl: { type: string, nullable: true, description: "Gmail thread deep link, addressed to the connected mailbox specifically rather than /u/0." }
+        replyUrl: { type: string, nullable: true, description: "Gmail thread deep link. Uses the authuser query parameter to name the connected mailbox — /mail/u/<email>/ is invalid, that segment takes an account index and 404s." }
+        gmailThreadId: { type: string, nullable: true, description: "Raw Gmail thread id, so the thread can be found by hand if the deep link fails." }
         vendorEmails: { type: string, nullable: true, description: "Who the PO went to, as a fallback when there is no inbound message to reply to." }
     PoAgentQueue:
       type: object

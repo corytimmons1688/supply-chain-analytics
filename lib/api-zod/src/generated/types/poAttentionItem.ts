@@ -19,8 +19,10 @@ export interface PoAttentionItem {
   receivedAt?: string | null;
   /** First ~1200 chars of the vendor's own message, already captured by the watcher — so the question can be answered without leaving the dashboard. */
   bodyPreview?: string | null;
-  /** Gmail thread deep link, addressed to the connected mailbox specifically rather than /u/0. */
+  /** Gmail thread deep link. Uses the authuser query parameter to name the connected mailbox — /mail/u/<email>/ is invalid, that segment takes an account index and 404s. */
   replyUrl?: string | null;
+  /** Raw Gmail thread id, so the thread can be found by hand if the deep link fails. */
+  gmailThreadId?: string | null;
   /** Who the PO went to, as a fallback when there is no inbound message to reply to. */
   vendorEmails?: string | null;
 }

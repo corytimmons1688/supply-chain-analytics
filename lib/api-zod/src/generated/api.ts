@@ -1671,7 +1671,13 @@ export const GetPoAgentQueueResponse = zod.object({
         .string()
         .nullish()
         .describe(
-          "Gmail thread deep link, addressed to the connected mailbox specifically rather than \/u\/0.",
+          "Gmail thread deep link. Uses the authuser query parameter to name the connected mailbox — \/mail\/u\/<email>\/ is invalid, that segment takes an account index and 404s.",
+        ),
+      gmailThreadId: zod
+        .string()
+        .nullish()
+        .describe(
+          "Raw Gmail thread id, so the thread can be found by hand if the deep link fails.",
         ),
       vendorEmails: zod
         .string()

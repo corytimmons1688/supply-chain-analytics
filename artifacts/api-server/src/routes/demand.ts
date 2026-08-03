@@ -2233,8 +2233,13 @@ router.get(
         });
       }
     }
-    // Deep-link replies into the connected mailbox specifically — a /u/0 link
-    // opens whichever account the browser signed in first, which may not be it.
+    /**
+     * Deep-link replies into the connected mailbox.
+     *
+     * NOT `/mail/u/<email>/` — that path segment takes an account INDEX (0, 1, 2),
+     * so an address there returns Gmail's "Temporary Error (404)". The documented
+     * way to name an account is the `authuser` query parameter.
+     */
     const gmailAccount = await import("../lib/gmail")
       .then((g) => (g.gmailConfigured() ? g.gmailConnection() : null))
       .then((c) => c?.accountEmail ?? null)
@@ -2277,8 +2282,9 @@ router.get(
           bodyPreview: inbound?.bodyPreview ?? null,
           replyUrl:
             inbound?.gmailThreadId && gmailAccount
-              ? `https://mail.google.com/mail/u/${encodeURIComponent(gmailAccount)}/#all/${inbound.gmailThreadId}`
+              ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(gmailAccount)}#all/${inbound.gmailThreadId}`
               : null,
+          gmailThreadId: inbound?.gmailThreadId ?? null,
           vendorEmails: p.emailedTo ?? p.vendorEmails ?? null,
         };
       }),
