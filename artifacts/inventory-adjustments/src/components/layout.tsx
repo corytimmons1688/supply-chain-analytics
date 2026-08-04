@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive, ShieldCheck, LineChart } from "lucide-react";
+import { Factory, BarChart3, Target, Camera, Boxes, ChevronDown, Activity, TrendingUp, ClipboardList, ListChecks, Award, ClipboardCheck, Users, Network, LogOut, LayoutDashboard, Archive, ShieldCheck, LineChart, Workflow } from "lucide-react";
 import { authClient, signOutEverywhere } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { useGatewayHealth, useGetMe } from "@workspace/api-client-react";
@@ -27,6 +27,7 @@ const DEMAND_ITEMS = [
   // Forecasting owns the forward-looking demand signal; /demand keeps execution
   // (suggested POs, vendor email, releases).
   { href: "/forecasting", label: "Forecasting", icon: LineChart },
+  { href: "/forward-demand", label: "Forward Material Demand", icon: Workflow },
   { href: "/demand", label: "Demand Planning", icon: TrendingUp },
   { href: "/excess-obsolete", label: "Excess & Obsolete", icon: Archive },
 ];
@@ -46,7 +47,8 @@ export function Layout({ children }: LayoutProps) {
     location === "/demand" ||
     location.startsWith("/demand/") ||
     location === "/excess-obsolete" ||
-    location === "/forecasting";
+    location === "/forecasting" ||
+    location === "/forward-demand";
   const supplierActive = SUPPLIER_ITEMS.some((i) => i.href === location);
 
   return (

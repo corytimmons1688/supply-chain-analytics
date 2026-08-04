@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
+    "@workspace/carrier-tracking": "workspace:*",
     "@workspace/db": "workspace:*",
+    "@workspace/hubspot-preorder": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "drizzle-orm": "catalog:",
@@ -19,8 +21,7 @@
     "node-cron": "^4.2.1",
     "pdf-lib": "^1.17.1",
     "pino": "^9",
-    "pino-http": "^10",
-    "@workspace/carrier-tracking": "workspace:*"
+    "pino-http": "^10"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

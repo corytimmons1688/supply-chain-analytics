@@ -11,8 +11,9 @@ import Goals from "@/pages/goals";
 import RootCause from "@/pages/root-cause";
 import Snapshots from "@/pages/snapshots";
 import DemandPlanning from "@/pages/demand";
+import ForwardMaterialDemand from "@/pages/forward-material-demand";
+import ForecastingQuoteStage from "@/pages/forecasting-quote-stage";
 import DemandDetail from "@/pages/demand-detail";
-import Forecasting from "@/pages/forecasting";
 import CycleCounts from "@/pages/cycle-counts";
 import Scorecards from "@/pages/scorecards";
 import Asl from "@/pages/asl";
@@ -129,7 +130,8 @@ function Router() {
             <Route path="/goals" component={Goals} />
             <Route path="/root-cause" component={RootCause} />
             <Route path="/snapshots" component={Snapshots} />
-            <Route path="/forecasting" component={Forecasting} />
+            <Route path="/forecasting" component={ForecastingQuoteStage} />
+            <Route path="/forward-demand" component={ForwardMaterialDemand} />
             <Route path="/demand" component={DemandPlanning} />
             <Route path="/demand/:stockId" component={DemandDetail} />
             <Route path="/excess-obsolete" component={ExcessObsolete} />
