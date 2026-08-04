@@ -44,6 +44,7 @@ import {
   ShieldCheck,
   Sparkles,
   Truck,
+  Workflow,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +70,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import ForwardMaterialDemand from "./ForwardMaterialDemand";
+import { ForwardFootageSankey } from "./ForwardFootageSankey";
 
 import {
   EQUIPMENT,
@@ -77,6 +87,7 @@ import {
   IN_QUARTER_SHIP_RATE,
   OPEN_POS,
   STANDARDS,
+  STOCKS,
   buildOutlooks,
   buildWeeks,
   poArrivalWeek,
@@ -368,6 +379,22 @@ export default function ForecastingV2() {
 
   const [stockId, setStockId] = React.useState(outlooks[0]?.stock.stockId ?? "73");
   const [selId, setSelId] = React.useState("Q1");
+  const [flowStockId, setFlowStockId] = React.useState<string | null>(null);
+
+  // Per-stock pipeline footage for the flow popup: entering = all counted required
+  // footage on that stock; committed = the same weighted by each record's probability.
+  const flowByStock = React.useMemo(() => {
+    const acc: Record<string, { enter: number; committed: number }> = {};
+    for (const r of resolved) {
+      if (!r.counted || !r.footage) continue;
+      for (const id of [r.faceStockId, r.laminateStockId].filter(Boolean) as string[]) {
+        const a = (acc[id] ??= { enter: 0, committed: 0 });
+        a.enter += r.footage.requiredFt;
+        a.committed += r.footage.requiredFt * r.p;
+      }
+    }
+    return acc;
+  }, [resolved]);
 
   const o = outlooks.find((x) => x.stock.stockId === stockId) ?? outlooks[0]!;
   const sel = resolved.find((r) => r.rec.id === selId) ?? resolved[0]!;
@@ -402,6 +429,14 @@ export default function ForecastingV2() {
               position is heading.
             </p>
           </div>
+
+          <Tabs defaultValue="forecast" className="w-full">
+            <TabsList>
+              <TabsTrigger value="forecast">Quote-stage forecast</TabsTrigger>
+              <TabsTrigger value="fmd">Forward material demand</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="forecast" className="mt-4 flex flex-col gap-5">
 
           {/* ------------------------------------------ double-count guard */}
           <Card className={fuzzyCatches.length > 0 ? "border-l-4 border-l-amber-500" : "border-l-4 border-l-emerald-500"}>
@@ -493,6 +528,16 @@ export default function ForecastingV2() {
                           : x.coveredThroughWeek >= HORIZON_WEEKS - 1
                             ? "covered all 13w"
                             : `covered to ${weeks[x.coveredThroughWeek]!.long}`}
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); setFlowStockId(x.stock.stockId); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); setFlowStockId(x.stock.stockId); } }}
+                        aria-label={`Show footage flow for stock ${x.stock.stockId}`}
+                        className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <Workflow className="h-3 w-3" />Flow
                       </span>
                     </div>
                     <div className="mt-0.5 truncate text-xs text-muted-foreground">{x.stock.description}</div>
@@ -592,6 +637,34 @@ export default function ForecastingV2() {
                   );
                 })}
               </div>
+            </CardContent>
+          </Card>
+
+          {/* -------------------------------------------------- footage flow */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Workflow className="h-4 w-4" />Footage flow — stock #{o.stock.stockId}
+              </CardTitle>
+              <CardDescription>
+                Where this stock&rsquo;s open pipeline footage sits by deal stage, and how much of
+                it survives to committed material. Follows the stock selected above.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(flowByStock[o.stock.stockId]?.enter ?? 0) > 0 ? (
+                <ForwardFootageSankey
+                  title={o.stock.description}
+                  subtitle={`${DIRECTION_META[o.direction].label} · ${o.stock.supplierName} · ${o.stock.leadTimeDays}d lead time`}
+                  enterFt={flowByStock[o.stock.stockId]!.enter}
+                  committedFt={flowByStock[o.stock.stockId]!.committed}
+                />
+              ) : (
+                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                  No open pipeline footage lands on stock #{o.stock.stockId} — nothing to flow. Its
+                  position above is driven by on-hand and in-flight POs only.
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -935,6 +1008,34 @@ export default function ForecastingV2() {
             constants above are stand-ins — wire the real LabelTraxx equipment records
             before any purchasing decision rests on these figures.
           </p>
+            </TabsContent>
+
+            <TabsContent value="fmd" className="mt-4">
+              <ForwardMaterialDemand />
+            </TabsContent>
+          </Tabs>
+
+          <Dialog open={flowStockId !== null} onOpenChange={(o) => !o && setFlowStockId(null)}>
+            <DialogContent className="max-w-[960px]">
+              <DialogHeader>
+                <DialogTitle>
+                  Footage flow — #{flowStockId} {flowStockId ? STOCKS[flowStockId]?.description : ""}
+                </DialogTitle>
+              </DialogHeader>
+              {flowStockId && ((flowByStock[flowStockId]?.enter ?? 0) > 0 ? (
+                <ForwardFootageSankey
+                  title={`Stock #${flowStockId} — ${STOCKS[flowStockId]?.description ?? ""}`}
+                  subtitle="Open pipeline footage across deal stages"
+                  enterFt={flowByStock[flowStockId]!.enter}
+                  committedFt={flowByStock[flowStockId]!.committed}
+                />
+              ) : (
+                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                  No open pipeline footage lands on stock #{flowStockId} — nothing to flow.
+                </div>
+              ))}
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
     </TooltipProvider>
