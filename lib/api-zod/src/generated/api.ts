@@ -31,12 +31,18 @@ export const GatewayHealthResponse = zod.object({
     .boolean()
     .optional()
     .describe(
-      "The ODBC gateway can't answer queries. It's the only source for PO requested-delivery dates and per-roll cost, so those go stale silently — verified by running a real query, since the gateway's own \/health reports healthy during a total outage.",
+      "Always false now — nothing in normal operation reads ODBC. Retained so existing clients keep working.",
     ),
   gatewayImpact: zod
     .string()
     .nullish()
-    .describe("What's stale while the gateway is down. Null when healthy."),
+    .describe("Always null now. Retained for compatibility."),
+  gatewayAvailableForBackfill: zod
+    .boolean()
+    .optional()
+    .describe(
+      "The ODBC gateway is answering queries, so the one-off requested-date backfill can be run.",
+    ),
   syncAges: zod
     .array(
       zod.object({

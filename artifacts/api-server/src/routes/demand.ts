@@ -699,6 +699,7 @@ router.get(
     const agentByLtPo = new Map<
       string,
       {
+        requestedDeliveryDate: string | null;
         promisedDate: string | null;
         promisedDateDerived: boolean;
         promisedDateBasis: string | null;
@@ -710,6 +711,7 @@ router.get(
       for (const n of (p.ltPoNumbers ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
         const prev = agentByLtPo.get(n);
         agentByLtPo.set(n, {
+          requestedDeliveryDate: p.requestedDeliveryDate ?? prev?.requestedDeliveryDate ?? null,
           promisedDate: p.promisedDate ?? prev?.promisedDate ?? null,
           promisedDateDerived: p.promisedDate ? p.promisedDateDerived : (prev?.promisedDateDerived ?? false),
           promisedDateBasis: p.promisedDate ? p.promisedDateBasis : (prev?.promisedDateBasis ?? null),
@@ -923,7 +925,17 @@ router.get(
               return {
                 poNumber: p.poNumber,
                 poDate: p.poDateIso,
-                requestedDeliveryDate: p.requestedDeliveryIso,
+                /**
+                 * Our own requested date wins over the Label Traxx mirror value.
+                 *
+                 * The requested date is set once when a PO is raised and never
+                 * changes — the promised date is the one that moves. Reading it
+                 * from the ODBC-fed mirror meant a PO we created ourselves showed
+                 * a value we couldn't refresh: PO 2562 sat on a stale date while
+                 * the correct one was in material_po the whole time. The mirror
+                 * value is now only a fallback, for POs raised directly in LT.
+                 */
+                requestedDeliveryDate: agent?.requestedDeliveryDate ?? p.requestedDeliveryIso,
                 // LT's dueDate first; otherwise the date the agent captured
                 // from the vendor's acknowledgement email.
                 promisedDeliveryDate: p.dueDateIso ?? agent?.promisedDate ?? null,

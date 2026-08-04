@@ -9,7 +9,6 @@ import {
   syncLtRollDates,
   syncLtPos,
   syncLtTickets,
-  syncLtPoRequestedDates,
   recordLtSyncState,
 } from "../lib/lt-sync";
 import { performDazpakSync } from "../lib/dazpak-sync";
@@ -100,19 +99,11 @@ router.get("/cron/lt-rolls", async (req, res, next) => {
     } catch (err) {
       out["tickets"] = { error: err instanceof Error ? err.message : String(err) };
     }
-    // Requested-delivery dates. The LT Cloud API has no requested-date field
-    // and no PO-update endpoint, so this ODBC read is the only way an edit made
-    // in Label Traxx ever reaches the Open POs report — waiting on the hourly
-    // sync meant a buyer could fix a date and watch it not change. ~20 open
-    // Stock POs, and only genuine changes are written. Isolated because the
-    // gateway is the least reliable dependency we have: it went down silently
-    // on 2026-08-03, and it must not be able to cost us the roll refresh.
-    try {
-      const r = await syncLtPoRequestedDates();
-      out["poRequestedDates"] = { changed: r.requestedDates, checked: r.checked };
-    } catch (err) {
-      out["poRequestedDates"] = { error: err instanceof Error ? err.message : String(err) };
-    }
+    // Requested-delivery dates are no longer synced. The field is set once when
+    // a PO is raised and never changes, so it needs capturing rather than
+    // polling — POs we raise carry it on material_po, and LT-raised ones keep
+    // whatever the final ODBC backfill froze. syncLtPoRequestedDates remains in
+    // lt-sync for that one-off run.
     // Pending-approval material forecast: cheap (a few LT product lookups per
     // new SKU) and buyers want it current, so it rides the 15-min refresh.
     try {

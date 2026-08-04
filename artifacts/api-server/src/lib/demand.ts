@@ -1,4 +1,3 @@
-import { runGatewaySql, pickString, pickNumber, type GatewayRow } from "./gateway";
 import { logger } from "./logger";
 import { ltGet, ltMapConcurrent, ltDate } from "./ltApi";
 import { bucketRange, eachBucket, type Bucket } from "./cc";
@@ -303,12 +302,12 @@ export interface OnHandRow {
  * mirror (lt_roll), which makes this agree with `fetchOnHandByWidth` — the
  * width bars and the drill-down stats used to disagree because one read the
  * mirror and the other read ODBC — and keeps Demand Planning working when the
- * ODBC gateway is down.
+ * mirror alone — no gateway involved.
  *
- * ODBC is consulted only to add the $ value (the LT Cloud API does not expose
- * per-roll CostOfRoll). That call is best-effort: a gateway outage costs the
- * valuation, not the whole page, which previously 500'd the demand summary and
- * blanked the stock plan.
+ * The $ value is DERIVED (lib/roll-cost.ts) rather than read from ODBC: a PO's
+ * actual amount shared across the rolls it delivered, falling back to the
+ * stock's cost/MSI. rollstock.CostOfRoll was the last reason the gateway
+ * existed, and the Cloud API has no per-roll cost to replace it with.
  */
 export async function fetchOnHandByStock(): Promise<Map<string, OnHandRow>> {
   const rollRows = await db
@@ -334,22 +333,19 @@ export async function fetchOnHandByStock(): Promise<Map<string, OnHandRow>> {
     if (!entry.description) entry.description = r.description;
   }
 
-  try {
-    const sql =
-      "SELECT StockNum, CostOfRoll * 10 AS Tenths FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
-    const rows = await runGatewaySql(sql);
-    const tenthsByStock = new Map<string, number>();
-    for (const row of rows) {
-      const stockId = pickString(row, "StockNum") ?? "";
-      if (!stockId) continue;
-      tenthsByStock.set(stockId, (tenthsByStock.get(stockId) ?? 0) + pickNumber(row, "Tenths"));
-    }
-    for (const [stockId, tenths] of tenthsByStock.entries()) {
-      const entry = m.get(stockId);
-      if (entry) entry.value = Math.round((tenths / 10) * 100) / 100;
-    }
-  } catch (err) {
-    logger.warn({ err }, "ODBC on-hand value unavailable — footage from mirror, $ value omitted");
+  // Value from derived per-roll cost. Same mirror, so footage and value can't
+  // disagree the way the mirror and ODBC used to.
+  const { buildRollCosts } = await import("./roll-cost");
+  const { byRollId } = await buildRollCosts();
+  const onHand = await db
+    .select({ rollId: ltRollTable.rollId, stockId: ltRollTable.stockId })
+    .from(ltRollTable)
+    .where(eq(ltRollTable.used, false));
+  for (const r of onHand) {
+    const stockId = (r.stockId ?? "").trim();
+    const entry = stockId ? m.get(stockId) : undefined;
+    const c = byRollId.get(r.rollId);
+    if (entry && c) entry.value = Math.round((entry.value + c.cost) * 100) / 100;
   }
   return m;
 }
@@ -365,7 +361,7 @@ export async function fetchActiveStockIds(): Promise<Set<string>> {
 
 // ---------------------------------------------------------------------
 // Label Traxx stock master (vendor / cost / width) and open-ticket
-// material requirements — read-only SELECTs through the gateway.
+// material requirements — all from the Neon mirror.
 // ---------------------------------------------------------------------
 
 export interface StockInfoRow {
@@ -1567,4 +1563,3 @@ export function defaultDemandWindow(monthsBack: number): { from: string; to: str
   return { from, to };
 }
 
-export type { GatewayRow };

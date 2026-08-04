@@ -313,6 +313,9 @@ async function upsertPoDetails(numbers: string[], supplierNames: Map<string, str
         notes: str(d["notes"]),
         orderedMsi,
         subTotal: num(d["subTotal"]),
+        total: num(d["total"]),
+        receivedTotal: num(d["receivedTotal"]),
+        supplierUnitPrice: num(d["supplierUnitPriceFc"]) || num(d["supplierUnitPrice"]),
         description: str(firstItem["description"]),
         items: items,
         modDate: ltDate(str(d["modDate"])),
@@ -339,6 +342,9 @@ async function upsertPoDetails(numbers: string[], supplierNames: Map<string, str
           notes: sql`excluded.notes`,
           orderedMsi: sql`excluded.ordered_msi`,
           subTotal: sql`excluded.sub_total`,
+          total: sql`excluded.total`,
+          receivedTotal: sql`excluded.received_total`,
+          supplierUnitPrice: sql`excluded.supplier_unit_price`,
           description: sql`excluded.description`,
           items: sql`excluded.items`,
           modDate: sql`excluded.mod_date`,
@@ -595,15 +601,8 @@ export async function performLtApiSync(opts: { full?: boolean } = {}): Promise<R
   out["ticketsDeleted"] = tix.deleted;
   out["ticketsRefreshed"] = tix.refreshed;
   out["pos"] = (await syncLtPos({ full: opts.full })).pos;
-  // Requested-delivery dates come from ODBC; never let a gateway blip stall the
-  // rest of the LT sync. Also runs on the 15-minute refresh — this hourly pass
-  // is the backstop, so it usually finds nothing changed.
-  try {
-    const r = await syncLtPoRequestedDates();
-    out["poRequestedDates"] = { changed: r.requestedDates, checked: r.checked };
-  } catch (err) {
-    out["poRequestedDates"] = { error: err instanceof Error ? err.message : String(err) };
-  }
+  // Requested-delivery dates are deliberately NOT synced here any more — see
+  // syncLtPoRequestedDates, kept only for a one-off backfill.
   const onHand = await syncLtOnHandRolls();
   out["onHandRolls"] = onHand.onHand;
   out["newlyUsedRolls"] = onHand.newlyUsed;

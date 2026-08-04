@@ -107,6 +107,15 @@ export const ltPoTable = pgTable(
     // orderedMsi × 1000 / (12 × masterWidth) — beats estimating rolls × roll size.
     orderedMsi: doublePrecision("ordered_msi"),
     subTotal: doublePrecision("sub_total"),
+    /**
+     * Order and received amounts from purchase-order-details. Mirrored so
+     * per-roll cost can be derived by sharing a PO's actual amount across the
+     * rolls it delivered — the replacement for ODBC's rollstock.CostOfRoll,
+     * which the Cloud API does not expose.
+     */
+    total: doublePrecision("total"),
+    receivedTotal: doublePrecision("received_total"),
+    supplierUnitPrice: doublePrecision("supplier_unit_price"),
     description: text("description"),
     items: jsonb("items"),
     modDate: text("mod_date"),

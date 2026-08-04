@@ -1,22 +1,24 @@
-import { runGatewaySql, pick, pickString, pickNumber, sqlEscape, type GatewayRow } from "./gateway";
+import { db, ltRollTable } from "@workspace/db";
 import { parseCcDate } from "./cc";
+import { buildRollCosts, fetchOnHandValueFromMirror, type CostBasis } from "./roll-cost";
 
 /**
- * Total on-hand dollar value + roll count. Per-roll CostOfRoll is only
- * available through the ODBC gateway (the LT Cloud API does not expose roll
- * cost), so this intentionally stays on ODBC — the only reads that do, along
- * with fetchAdjustments below.
+ * Cycle-count adjustments and on-hand valuation, off ODBC.
+ *
+ * Both used to read `rollstock` directly for `CostOfRoll`, which the Cloud API
+ * doesn't expose — the last reason the gateway existed. Everything else these
+ * needed (StockNum, PONumber, UsedTikNum, FootLength, StkDate, DateRollUsed,
+ * Description) is already mirrored on lt_roll, so only the cost had to be
+ * replaced, and that is now derived in lib/roll-cost.ts.
+ *
+ * One consequence worth knowing: a derived cost is a PO's actual amount shared
+ * across its rolls by MSI, so an adjustment's dollar value is what was paid for
+ * that material rather than LT's stored per-roll figure. The two won't match to
+ * the cent.
  */
 export async function fetchOnHandValue(): Promise<{ totalValue: number; rollCount: number }> {
-  const sql =
-    "SELECT IDNumber, CostOfRoll * 10 AS Tenths FROM rollstock WHERE DateRollUsed < {d '1900-01-01'}";
-  const rows = await runGatewaySql(sql);
-  let totalTenths = 0;
-  for (const row of rows) totalTenths += pickNumber(row, "Tenths");
-  return {
-    totalValue: Math.round((totalTenths / 10) * 100) / 100,
-    rollCount: rows.length,
-  };
+  const v = await fetchOnHandValueFromMirror();
+  return { totalValue: v.totalValue, rollCount: v.rollCount };
 }
 
 export interface AdjustmentRecord {
@@ -48,26 +50,36 @@ interface FetchOptions {
  * parse the CC date in app code, then filter by window.
  */
 export async function fetchAdjustments(opts: FetchOptions): Promise<AdjustmentRecord[]> {
-  const where: string[] = [
-    "(UPPER(PONumber) LIKE 'CC %' OR UPPER(UsedTikNum) LIKE 'CC %')",
-  ];
-  if (opts.stockId) {
-    where.push(`StockNum = '${sqlEscape(opts.stockId)}'`);
-  }
-  const sql = `SELECT IDNumber, StockNum, PONumber, UsedTikNum, CostOfRoll, FootLength, StkDate, DateRollUsed, Description FROM rollstock WHERE ${where.join(" AND ")}`;
+  // CC rolls are tagged in PONumber (added) or UsedTikNum (removed), both mirrored.
+  const rolls = await db.select().from(ltRollTable);
+  const { byRollId } = await buildRollCosts();
 
-  const rows = await runGatewaySql(sql);
   const out: AdjustmentRecord[] = [];
-  for (const row of rows) {
-    if (opts.activeStockIds) {
-      const sid = pickString(row, "StockNum");
-      if (!sid || !opts.activeStockIds.has(sid)) continue;
-    }
-    const po = pickString(row, "PONumber");
-    const used = pickString(row, "UsedTikNum");
+  for (const r of rolls) {
+    const stockId = (r.stockId ?? "").trim();
+    if (opts.stockId && stockId !== opts.stockId) continue;
+    if (opts.activeStockIds && (!stockId || !opts.activeStockIds.has(stockId))) continue;
+
+    const po = r.poNumber;
+    const used = r.usedTikNum;
+    const isCc = /^\s*cc\s+/i.test(po ?? "") || /^\s*cc\s+/i.test(used ?? "");
+    if (!isCc) continue;
+
     const addedDate = parseCcDate(po);
     const removedDate = parseCcDate(used);
-
+    const cost = byRollId.get(r.rollId);
+    const row = {
+      rollTag: r.rollId,
+      stockId,
+      description: r.description,
+      amount: cost?.cost ?? 0,
+      basis: cost?.basis ?? ("unknown" as CostBasis),
+      footage: r.length ?? 0,
+      poNumber: po,
+      usedTikNum: used,
+      stockDate: r.stockDate,
+      dateRollUsed: r.dateRollUsed,
+    };
     if (addedDate && addedDate >= opts.from && addedDate <= opts.to) {
       out.push(buildRecord(row, "added", po!, addedDate));
     }
@@ -78,35 +90,38 @@ export async function fetchAdjustments(opts: FetchOptions): Promise<AdjustmentRe
   return out;
 }
 
+interface MirrorRow {
+  rollTag: string;
+  stockId: string;
+  description: string | null;
+  amount: number;
+  basis: CostBasis;
+  footage: number;
+  poNumber: string | null;
+  usedTikNum: string | null;
+  stockDate: string | null;
+  dateRollUsed: string | null;
+}
+
 function buildRecord(
-  row: GatewayRow,
+  row: MirrorRow,
   direction: "added" | "removed",
   ccString: string,
   ccDate: string,
 ): AdjustmentRecord {
-  const idRaw = pick(row, "IDNumber");
-  const rollTag = String(idRaw ?? "");
-  const stockId = pickString(row, "StockNum") ?? "";
-  const description = pickString(row, "Description");
-  const amount = pickNumber(row, "CostOfRoll");
-  const footage = pickNumber(row, "FootLength");
-  const poNumber = pickString(row, "PONumber");
-  const usedTikNum = pickString(row, "UsedTikNum");
-  const stkDate = pickString(row, "StkDate");
-  const usedRowDate = pickString(row, "DateRollUsed");
-  const rowDate = direction === "added" ? stkDate : usedRowDate;
+  const rowDate = direction === "added" ? row.stockDate : row.dateRollUsed;
   return {
-    id: `${rollTag}-${direction}`,
-    rollTag,
-    stockId,
-    description,
+    id: `${row.rollTag}-${direction}`,
+    rollTag: row.rollTag,
+    stockId: row.stockId,
+    description: row.description,
     direction,
-    amount,
-    footage,
+    amount: row.amount,
+    footage: row.footage,
     ccDate,
     ccString,
-    poNumber,
-    usedTikNum,
+    poNumber: row.poNumber,
+    usedTikNum: row.usedTikNum,
     rowDate: normalizeDate(rowDate),
   };
 }

@@ -36,11 +36,12 @@ router.get("/healthz", (_req, res) => {
 
 router.get("/gateway/health", async (_req, res, next) => {
   try {
-    // Primary connectivity = the LT Cloud API. The ODBC gateway is still the
-    // ONLY source for PO requested-delivery dates (the Cloud API has no such
-    // field) and for per-roll cost, so its state is reported separately —
-    // reading "connected" off the API alone is how a total ODBC outage went
-    // unnoticed on 2026-08-03.
+    // The LT Cloud API is now the ONLY live dependency. Nothing in normal
+    // operation reads the ODBC gateway: requested dates come from material_po,
+    // and per-roll cost is derived from PO amounts (lib/roll-cost.ts). The
+    // gateway is still probed so a one-off backfill can be scheduled when it's
+    // available, but its being down no longer degrades anything, so it must not
+    // raise an alarm that implies otherwise.
     const [api, odbc, ages] = await Promise.all([
       checkLtApi(),
       checkGateway(),
@@ -56,10 +57,10 @@ router.get("/gateway/health", async (_req, res, next) => {
       error: api.error,
       ltApi: api,
       odbcGateway: odbc,
-      gatewayDegraded: !odbc.odbcConnected,
-      gatewayImpact: odbc.odbcConnected
-        ? null
-        : "PO requested-delivery dates and per-roll inventory cost can't refresh — on-hand value falls back to estimates and the Adjustments page has no data.",
+      // No longer a degradation: kept so the backfill can be timed.
+      gatewayDegraded: false,
+      gatewayImpact: null,
+      gatewayAvailableForBackfill: odbc.odbcConnected,
       syncAges: ages,
     });
   } catch (err) {

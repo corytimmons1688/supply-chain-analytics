@@ -201,22 +201,8 @@ export function Layout({ children }: LayoutProps) {
                 : "Label Traxx Disconnected"}
             </span>
           </div>
-          {/* The LT Cloud API can be healthy while the ODBC gateway is dead.
-              The gateway is the only source for PO requested-delivery dates and
-              per-roll cost, so a silent outage makes those quietly stale — say
-              so rather than letting the green dot imply everything is fine. */}
-          {health?.gatewayDegraded && (
-            <div
-              className="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400"
-              title={
-                health.gatewayImpact ??
-                "The ODBC gateway is reachable but not answering queries."
-              }
-            >
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
-              <span className="font-mono hidden md:inline">ODBC gateway down</span>
-            </div>
-          )}
+          {/* The ODBC gateway chip is gone: nothing in normal operation reads it
+              any more, so a down gateway is no longer a degradation to report. */}
           <div className="hidden sm:flex items-center font-mono">
             {health?.latencyMs ? `${health.latencyMs}ms` : "---"}
             <Activity className="w-3.5 h-3.5 ml-1.5" />
