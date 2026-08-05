@@ -855,6 +855,18 @@ export const GetDemandPurchasingResponse = zod.object({
                 .describe(
                   "True when the promise came from the agent's email capture rather than Label Traxx.",
                 ),
+              tracking: zod
+                .array(
+                  zod.object({
+                    carrier: zod.string(),
+                    number: zod.string(),
+                    url: zod.string().nullish(),
+                  }),
+                )
+                .optional()
+                .describe(
+                  "Tracking for this PO, from the classifier's structured extraction plus anything parsed out of the notes. url is null when the carrier isn't one we can deep-link — LTL vendors often give a PRO without naming the carrier, and the number is still worth showing.\n",
+                ),
               promisedDateDerived: zod
                 .boolean()
                 .optional()

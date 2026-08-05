@@ -8,7 +8,7 @@
  * both render from it.
  */
 
-import { parseNoteTracking, type NoteSegment } from "@workspace/carrier-tracking";
+import { parseNoteTracking, CARRIERS, type NoteSegment } from "@workspace/carrier-tracking";
 
 export type PoStatus =
   | "pending_confirmation"
@@ -73,12 +73,66 @@ export function hasTrackingNote(notes: string | null | undefined): boolean {
   return trackingRefs(notes).length > 0;
 }
 
+export interface TrackingRef {
+  carrier: string;
+  number: string;
+  /** Deep link when the carrier is recognised; null when it isn't. */
+  url: string | null;
+}
+
+/**
+ * Resolve a carrier name to a tracking URL, or null when we don't know it.
+ *
+ * The classifier records whatever the vendor said. LTL vendors often give a PRO
+ * with no carrier at all — Reynolds sent "The PRO # is 99972953555" — and the
+ * classifier stored the carrier as the generic "PRO/Freight". There is no link
+ * for that, but the NUMBER is still the useful thing, so it must survive.
+ */
+export function resolveTrackingUrl(carrier: string, number: string): string | null {
+  const c = CARRIERS.find((x) => x.re.test(carrier));
+  return c ? c.trackUrl(number.replace(/-/g, "")) : null;
+}
+
+/**
+ * Every tracking reference known for a PO, structured extractions first.
+ *
+ * The report used to re-parse the free-text note the agent had written, which
+ * threw away better information: the classifier already produced {carrier,
+ * number} and we stored it on the timeline. Worse, note-parsing requires a
+ * RECOGNISED carrier, so a PRO from an unnamed LTL carrier vanished from the
+ * screen even though it was captured — PO 2595 shipped and read as untracked.
+ *
+ * Notes are still parsed, for numbers a buyer typed in by hand. Deduped on the
+ * number, since the same reference usually appears in both.
+ */
+export function mergeTracking(
+  structured: { carrier?: string | null; number?: string | null }[],
+  notes: string | null | undefined,
+): TrackingRef[] {
+  const out: TrackingRef[] = [];
+  const seen = new Set<string>();
+  const add = (carrier: string, number: string) => {
+    const key = number.replace(/[\s-]/g, "").toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ carrier: carrier || "Tracking", number, url: resolveTrackingUrl(carrier, number) });
+  };
+  for (const t of structured) {
+    const num = String(t?.number ?? "").trim();
+    if (num) add(String(t?.carrier ?? "").trim(), num);
+  }
+  for (const t of trackingRefs(notes)) add(t.carrier, t.number);
+  return out;
+}
+
 export interface OpenPoClassifyInput {
   /** Vendor's commitment where we have one. */
   promisedDeliveryDate: string | null;
   /** What we asked for — shown when the vendor hasn't confirmed. */
   requestedDeliveryDate: string | null;
   notes: string | null;
+  /** Tracking already known for this PO, structured or parsed. */
+  trackingCount?: number;
   extendedLeadTime: boolean;
   extendedLeadTimeDays: number | null;
   /** Today, ISO. Passed in so callers agree on the boundary. */
@@ -98,7 +152,7 @@ export function classifyOpenPo(input: OpenPoClassifyInput): OpenPoClassification
   const dateIsPromised = Boolean(input.promisedDeliveryDate);
   let status: PoStatus;
   let note: string;
-  if (hasTrackingNote(input.notes)) {
+  if ((input.trackingCount ?? 0) > 0 || hasTrackingNote(input.notes)) {
     status = "in_transit";
     note = "Tracking received";
   } else if (date && date < input.todayIso) {

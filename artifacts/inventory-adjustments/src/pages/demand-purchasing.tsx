@@ -1914,6 +1914,8 @@ function OpenPosTable({
       /** Promised date was inferred from ship date + transit, not stated by the vendor. */
       promisedDateDerived: boolean;
       promisedDateBasis: string | null;
+      /** Structured tracking from the payload; url null = carrier isn't linkable. */
+      tracking: { carrier: string; number: string; url?: string | null }[];
       status: PoStatus;
       /** Extra context for the status cell — ETA, release footage, why. */
       statusNote: string | null;
@@ -1940,7 +1942,9 @@ function OpenPosTable({
       for (const p of item.openPos ?? []) {
         const date = p.promisedDeliveryDate ?? p.requestedDeliveryDate ?? null;
         const promised = Boolean(p.promisedDeliveryDate);
-        const hasTracking = parseNoteTracking(p.notes).some((s) => s.kind === "track");
+        // Structured extraction first: a PRO with no named carrier is still
+        // tracking, and note-parsing alone missed those entirely.
+        const hasTracking = (p.tracking ?? []).length > 0 || parseNoteTracking(p.notes).some((s) => s.kind === "track");
         // Make-and-hold orders are excluded outright: the rolls live in the
         // vendor's warehouse, so they're supply, not inbound freight. What IS
         // inbound is a release we've asked for — those rows come from
@@ -1985,6 +1989,7 @@ function OpenPosTable({
           extendedLeadTimeDays: p.extendedLeadTimeDays ?? null,
           promisedDateDerived: Boolean(p.promisedDateDerived),
           promisedDateBasis: p.promisedDateBasis ?? null,
+          tracking: p.tracking ?? [],
           status,
           statusNote,
           onHandFootage: metricsByStock.get(item.stockId)?.onHandFootage ?? 0,
@@ -2039,6 +2044,8 @@ function OpenPosTable({
         extendedLeadTimeDays: null,
         promisedDateDerived: false,
         promisedDateBasis: null,
+        // Releases carry tracking in their notes only.
+        tracking: parseNoteTracking(rel.notes).filter((x) => x.kind === "track").map((x) => ({ carrier: x.carrier, number: x.number, url: x.url })),
         status,
         statusNote,
         onHandFootage: metricsByStock.get(rel.stockId)?.onHandFootage ?? 0,
@@ -2208,12 +2215,12 @@ function OpenPosTable({
                       )}
                     </td>
                     <td className="px-2 py-1.5">
-                      {segs.length === 0 ? (
+                      {r.tracking.length === 0 ? (
                         <span className="text-muted-foreground">—</span>
                       ) : (
                         <div className="flex flex-col gap-0.5">
-                          {segs.map((s, i) =>
-                            s.kind === "track" ? (
+                          {r.tracking.map((s, i) =>
+                            s.url ? (
                               <a
                                 key={`${r.key}-${i}`}
                                 href={s.url}

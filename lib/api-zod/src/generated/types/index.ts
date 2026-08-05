@@ -178,6 +178,7 @@ export * from "./stockBreakdownItem";
 export * from "./stockGoal";
 export * from "./stockIdParameter";
 export * from "./stockOpenPo";
+export * from "./stockOpenPoTrackingItem";
 export * from "./stockRoll";
 export * from "./stockRolls";
 export * from "./suggestedWidth";

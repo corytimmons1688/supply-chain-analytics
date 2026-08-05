@@ -25,6 +25,7 @@ import {
 } from "../lib/demand";
 import { fetchDazpakByStock } from "../lib/dazpak-sync";
 import { assemblePoDocument, PoDocumentError } from "../lib/po-document";
+import { mergeTracking } from "../lib/open-po-status";
 import { logger } from "../lib/logger";
 import type { Bucket } from "../lib/cc";
 
@@ -696,6 +697,37 @@ router.get(
     // arrives by email (captured here) long before it lands on LT's dueDate,
     // and the agent appends tracking references to its own notes — so the
     // inbound view has to consult both sources or it shows stale dates.
+    /**
+     * Tracking per LT PO, from the classifier's structured extractions.
+     *
+     * Previously the report re-parsed the agent's free-text note, which needs a
+     * RECOGNISED carrier — so a PRO from an unnamed LTL carrier disappeared even
+     * though it was captured. PO 2595 shipped with PRO 99972953555 and read as
+     * untracked because the vendor never said who was carrying it.
+     */
+    const trackingByLtPo = new Map<string, { carrier?: string | null; number?: string | null }[]>();
+    {
+      const trackedIds = trackedPos.map((p) => p.id);
+      const events = trackedIds.length
+        ? await db.select().from(poEmailEventTable).where(inArray(poEmailEventTable.poId, trackedIds))
+        : [];
+      const byPoId = new Map<string, { carrier?: string | null; number?: string | null }[]>();
+      for (const e of events) {
+        const ex = e.extracted as { tracking?: { carrier?: string | null; number?: string | null }[] } | null;
+        if (!Array.isArray(ex?.tracking) || ex.tracking.length === 0) continue;
+        const arr = byPoId.get(e.poId) ?? [];
+        arr.push(...ex.tracking);
+        byPoId.set(e.poId, arr);
+      }
+      for (const p of trackedPos) {
+        const refs = byPoId.get(p.id);
+        if (!refs?.length) continue;
+        for (const n of (p.ltPoNumbers ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
+          trackingByLtPo.set(n, [...(trackingByLtPo.get(n) ?? []), ...refs]);
+        }
+      }
+    }
+
     const agentByLtPo = new Map<
       string,
       {
@@ -940,6 +972,7 @@ router.get(
                 // from the vendor's acknowledgement email.
                 promisedDeliveryDate: p.dueDateIso ?? agent?.promisedDate ?? null,
                 promisedFromAgent: p.dueDateIso == null && agent?.promisedDate != null,
+                tracking: mergeTracking(trackingByLtPo.get(p.poNumber) ?? [], [p.notes, agent?.notes].filter(Boolean).join("\n")),
                 promisedDateDerived: p.dueDateIso == null && (agent?.promisedDateDerived ?? false),
                 promisedDateBasis: p.dueDateIso == null ? (agent?.promisedDateBasis ?? null) : null,
                 extendedLeadTime: extLead != null || agent?.extendedLeadTimeDays != null,

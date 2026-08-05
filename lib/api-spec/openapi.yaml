@@ -2171,6 +2171,20 @@ components:
         requestedDeliveryDate: { type: string, nullable: true, description: "Delivery Calyx asked for (ODBC RequestedDeliveryDate)." }
         promisedDeliveryDate: { type: string, nullable: true, description: "Delivery the vendor promised — LT dueDate, else the date the follow-up agent captured from the vendor's acknowledgement." }
         promisedFromAgent: { type: boolean, description: "True when the promise came from the agent's email capture rather than Label Traxx." }
+        tracking:
+          type: array
+          description: >
+            Tracking for this PO, from the classifier's structured extraction plus anything
+            parsed out of the notes. url is null when the carrier isn't one we can deep-link
+            — LTL vendors often give a PRO without naming the carrier, and the number is
+            still worth showing.
+          items:
+            type: object
+            required: [carrier, number]
+            properties:
+              carrier: { type: string }
+              number: { type: string }
+              url: { type: string, nullable: true }
         promisedDateDerived: { type: boolean, description: "The promised date was inferred from the vendor's ship date plus a transit estimate, not stated by them. Plan on it; don't quote it back." }
         promisedDateBasis: { type: string, nullable: true, description: "How a derived date was reached, e.g. \"shipped 2026-08-03 + 5 business days transit\"." }
         extendedLeadTime: { type: boolean, description: "Vendor confirmed a date after the delivery we requested — accepted as an extended lead time." }

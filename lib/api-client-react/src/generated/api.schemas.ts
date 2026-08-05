@@ -496,6 +496,12 @@ export interface WidthOnHand {
   status?: string;
 }
 
+export type StockOpenPoTrackingItem = {
+  carrier: string;
+  number: string;
+  url?: string | null;
+};
+
 /**
  * An open (unreceived) Stock PO for this material.
  */
@@ -508,6 +514,9 @@ export interface StockOpenPo {
   promisedDeliveryDate?: string | null;
   /** True when the promise came from the agent's email capture rather than Label Traxx. */
   promisedFromAgent?: boolean;
+  /** Tracking for this PO, from the classifier's structured extraction plus anything parsed out of the notes. url is null when the carrier isn't one we can deep-link — LTL vendors often give a PRO without naming the carrier, and the number is still worth showing.
+   */
+  tracking?: StockOpenPoTrackingItem[];
   /** The promised date was inferred from the vendor's ship date plus a transit estimate, not stated by them. Plan on it; don't quote it back. */
   promisedDateDerived?: boolean;
   /** How a derived date was reached, e.g. "shipped 2026-08-03 + 5 business days transit". */
