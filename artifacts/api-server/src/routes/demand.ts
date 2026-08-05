@@ -2122,9 +2122,13 @@ router.post(
  * $ value is the ODBC per-roll cost when the gateway is up, else estimated
  * from footage × Label Traxx CostMSI (flagged so the buyer knows which).
  */
-router.get(
-  "/demand/eo-report",
-  asyncHandler(async (_req, res) => {
+/**
+ * The E&O rows. Extracted so the CSV export renders exactly what the screen
+ * shows — two code paths computing "months of supply" would eventually disagree,
+ * and a spreadsheet that contradicts the dashboard is worse than no spreadsheet.
+ */
+async function buildEoRows() {
+  {
     const windowFrom = new Date();
     windowFrom.setMonth(windowFrom.getMonth() - 12);
     const from = windowFrom.toISOString().slice(0, 10);
@@ -2176,7 +2180,121 @@ router.get(
       if (a.monthsOfSupply == null && b.monthsOfSupply == null) return (b.valueUsd ?? 0) - (a.valueUsd ?? 0);
       return (b.monthsOfSupply ?? 0) - (a.monthsOfSupply ?? 0);
     });
+    return { items, from };
+  }
+}
+
+router.get(
+  "/demand/eo-report",
+  asyncHandler(async (_req, res) => {
+    const { items, from } = await buildEoRows();
     res.json({ items, windowFrom: from });
+  }),
+);
+
+/** Escape one CSV field: quote it and double any internal quotes. */
+function csvCell(v: unknown): string {
+  if (v == null) return "";
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * E&O as a spreadsheet, one row per ROLL.
+ *
+ * The screen shows stock-level rows and reveals rolls on expand, which is right
+ * for triage but useless for disposition work — that happens roll by roll, on a
+ * floor, against physical tags. So each roll gets a line carrying its own tag,
+ * footage, width, PO, received date and location, alongside every stock-level
+ * column from the UI so the sheet can be sorted or pivoted without a lookup.
+ *
+ * CSV rather than a real .xlsx: it opens straight into Excel with no dependency
+ * added to a serverless bundle. A UTF-8 BOM keeps Excel from mangling the ≤ and
+ * " characters in descriptions, numbers are emitted unformatted so they arrive
+ * as numbers, and dates are ISO so they sort correctly.
+ */
+router.get(
+  "/demand/eo-report/export",
+  asyncHandler(async (_req, res) => {
+    const { items, from } = await buildEoRows();
+    const stockIds = items.map((i) => i.stockId);
+    const rolls = stockIds.length
+      ? await db.select().from(ltRollTable).where(and(eq(ltRollTable.used, false), inArray(ltRollTable.stockId, stockIds)))
+      : [];
+    const rollsByStock = new Map<string, typeof rolls>();
+    for (const r of rolls) {
+      const k = (r.stockId ?? "").trim();
+      const arr = rollsByStock.get(k) ?? [];
+      arr.push(r);
+      rollsByStock.set(k, arr);
+    }
+
+    const header = [
+      "Roll tag",
+      "Stock",
+      "Description",
+      "Roll footage",
+      "Roll width (in)",
+      "PO",
+      "Received",
+      "Location",
+      "Months of supply",
+      "Stock on hand (ft)",
+      "Stock rolls",
+      "Stock value (USD)",
+      "Value is estimate",
+      "Avg use/mo (ft)",
+      "Last used",
+      "Inactive in LT",
+      "Discontinued",
+      "Disposition",
+    ];
+    const lines: string[] = [header.map(csvCell).join(",")];
+
+    for (const it of items) {
+      const stockRolls = (rollsByStock.get(it.stockId) ?? []).slice().sort((a, b) => (a.stockDate ?? "").localeCompare(b.stockDate ?? ""));
+      const stockCols = [
+        // "Infinite" reads better than blank for a stock with no usage at all.
+        it.monthsOfSupply ?? "no usage in 12 months",
+        it.onHandFootage,
+        it.rollCount,
+        it.valueUsd ?? "",
+        it.valueIsEstimate ? "yes" : "no",
+        it.avgMonthlyFootage,
+        it.lastUsedIso ?? "never",
+        it.inactive ? "yes" : "no",
+        it.discontinued ? "yes" : "no",
+        it.notes ?? "",
+      ];
+      if (stockRolls.length === 0) {
+        // Keep the stock visible even when no roll detail is mirrored, rather
+        // than dropping value out of the sheet's total.
+        lines.push([ "", it.stockId, it.description ?? "", "", "", "", "", "", ...stockCols ].map(csvCell).join(","));
+        continue;
+      }
+      for (const r of stockRolls) {
+        lines.push(
+          [
+            r.rollId,
+            it.stockId,
+            it.description ?? "",
+            Math.round(r.length ?? 0),
+            r.width ?? "",
+            r.poNumber ?? "",
+            r.stockDate ?? "",
+            r.location ?? "",
+            ...stockCols,
+          ].map(csvCell).join(","),
+        );
+      }
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="excess-obsolete-rolls-${today}.csv"`);
+    // BOM so Excel reads it as UTF-8 rather than the local codepage.
+    res.send("\ufeff" + lines.join("\r\n") + "\r\n");
+    void from;
   }),
 );
 

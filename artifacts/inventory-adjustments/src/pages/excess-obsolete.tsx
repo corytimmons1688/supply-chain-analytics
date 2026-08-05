@@ -9,13 +9,15 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
+import { openAuthorizedUrl } from "@/lib/auth-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Archive, ChevronDown, ChevronRight } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Download } from "lucide-react";
 
 /**
  * Excess & Obsolete review. Every stock holding inventory, worst first:
@@ -168,16 +170,30 @@ export default function ExcessObsolete() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            {visible.length} stock{visible.length === 1 ? "" : "s"} · {fmt(totalFootage)} ft ·{" "}
-            <span className="text-foreground font-semibold">{money(totalValue)}</span>
-            {anyEstimated && (
-              <span title="Some values estimated from footage × CostMSI — the gateway's per-roll cost was unavailable">
-                {" "}
-                (≈)
-              </span>
-            )}
-          </CardTitle>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              {visible.length} stock{visible.length === 1 ? "" : "s"} · {fmt(totalFootage)} ft ·{" "}
+              <span className="text-foreground font-semibold">{money(totalValue)}</span>
+              {anyEstimated && (
+                <span title="Some values estimated from footage × CostMSI rather than a purchase-order amount">
+                  {" "}
+                  (≈)
+                </span>
+              )}
+            </CardTitle>
+            {/* Disposition happens roll by roll against physical tags, so the
+                export is one line per ROLL — not the stock-level rows shown
+                here — with every column from this table alongside. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              title="One row per roll: tag, footage, width, PO, received date and location, plus every column in this table"
+              onClick={() => void openAuthorizedUrl("/api/demand/eo-report/export")}
+            >
+              <Download className="w-3.5 h-3.5 mr-1" /> Export rolls
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
