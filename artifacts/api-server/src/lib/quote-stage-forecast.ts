@@ -256,6 +256,24 @@ export interface StockPosition {
   direction: "COMFORTABLE" | "WATCH" | "DECIDE" | "ACT";
   directionReason: string;
   onTrackedList: boolean;
+  /**
+   * Product line, from the material register in materials.ts — the authoritative
+   * split, not inferred from whatever happens to be quoted this week. Null when
+   * the stock is not on the register at all.
+   */
+  kind: "LABEL" | "FLEXPACK" | null;
+  /** Face stock, the second web, or a pouch zipper. */
+  role: "SUBSTRATE" | "LAMINATE" | "ZIPPER" | null;
+  tier: "PRIMARY" | "SPECIALITY" | null;
+  /** Locked to a customer or otherwise not freely usable. */
+  restricted: boolean;
+  /**
+   * Product lines whose demand actually lands on this stock right now. A
+   * laminate can serve both, so this is a set rather than a single value and is
+   * kept separate from `kind` — the register says what a stock is *for*, this
+   * says what is *using* it.
+   */
+  usedBy: ("LABEL" | "FLEXPACK")[];
   /** Demand on THIS stock broken out by pipeline stage — drives the per-stock flow. */
   byStage: Record<string, { rawFt: number; weightedFt: number; lineCount: number }>;
   /** Open POs in flight for this stock, for the lead-time timeline. */
@@ -300,6 +318,11 @@ export interface QuoteLine {
   stageLabel: string;
   probability: number;
   qty: number | null;
+  /** Release rate; null when HubSpot has none. */
+  projectedMonthlyDemand: number | null;
+  /** qty ÷ monthly. >1.5 ⇒ the quoted quantity is a blanket, not this month's. */
+  releaseSpanMonths: number | null;
+  qtyNeedsClarification: boolean;
   widthIn: number | null;
   heightIn: number | null;
   /** LT copy position (labels). Null on flexpack / NetSuite lines. */
@@ -407,6 +430,9 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
       stageLabel: job.stageLabel,
       probability: job.probability,
       qty: job.qty,
+      projectedMonthlyDemand: job.projectedMonthlyDemand,
+      releaseSpanMonths: job.releaseSpanMonths,
+      qtyNeedsClarification: job.qtyNeedsClarification,
       widthIn: job.widthIn,
       heightIn: job.heightIn,
       copyPosition: job.copyPosition ?? null,
@@ -456,6 +482,10 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
       ref: r.tranId ?? r.soId ?? r.id,
       itemName: `${r.sku ?? "(no sku)"} — ${r.customerName ?? "(no customer)"}`,
       customer: r.customerName ?? null,
+      // NetSuite carries no release rate — an SO line is already a real release.
+      projectedMonthlyDemand: null,
+      releaseSpanMonths: null,
+      qtyNeedsClarification: false,
       kind,
       stageId: null,
       stageLabel: "Sales order (firm)",
@@ -549,12 +579,15 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
   interface StockDemand {
     quote: number; weighted: number; firm: number;
     byStage: Record<string, { rawFt: number; weightedFt: number; lineCount: number }>;
+    /** Product lines whose demand lands here. A laminate can serve both. */
+    usedBy: Set<"LABEL" | "FLEXPACK">;
   }
   const demandByStock = new Map<string, StockDemand>();
   const bump = (id: number | null | undefined, l: QuoteLine) => {
     if (id == null || !l.footage) return;
     const k = String(id);
-    const row = demandByStock.get(k) ?? { quote: 0, weighted: 0, firm: 0, byStage: {} };
+    const row = demandByStock.get(k) ?? { quote: 0, weighted: 0, firm: 0, byStage: {}, usedBy: new Set<"LABEL" | "FLEXPACK">() };
+    row.usedBy.add(l.kind);
     if (l.source === "NETSUITE_SO") row.firm += l.footage.requiredFt;
     else {
       row.quote += l.footage.requiredFt;
@@ -609,7 +642,7 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
     const info: StockInfoRow | undefined = stockInfo.get(stockId);
     const oh: OnHandRow | undefined = onHand.get(stockId);
     const goal = goalByStock.get(stockId);
-    const dem = demandByStock.get(stockId) ?? { quote: 0, weighted: 0, firm: 0, byStage: {} };
+    const dem = demandByStock.get(stockId) ?? { quote: 0, weighted: 0, firm: 0, byStage: {}, usedBy: new Set<"LABEL" | "FLEXPACK">() };
 
     const samples = dailyByStock.get(stockId) ?? [];
     const totalUsed = samples.reduce((a, b) => a + b, 0);
@@ -688,6 +721,11 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
       projectedFt,
       direction,
       directionReason,
+      kind: mat?.kind ?? null,
+      role: mat?.role ?? null,
+      tier: mat?.tier ?? null,
+      restricted: mat?.restricted === true,
+      usedBy: [...dem.usedBy].sort(),
       onTrackedList: Boolean(mat),
       byStage: dem.byStage,
       openPos: openPo.list.sort((a, b) => (a.orderedIso ?? "").localeCompare(b.orderedIso ?? "")),

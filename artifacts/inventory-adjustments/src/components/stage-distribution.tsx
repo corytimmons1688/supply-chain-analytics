@@ -18,9 +18,7 @@ export interface StageDistributionOrder {
   customer: string | null;
   /** The value the bar is sized by. */
   requiredFt: number;
-  /** Full material requirement, when the bar is showing a weighted contribution. */
-  fullRequiredFt?: number;
-  /** Probability behind the weighting, for the disposition views. */
+  /** Probability, shown as context for the classification — never a multiplier. */
   probability?: number;
 }
 
@@ -29,9 +27,9 @@ export interface StageDistributionProps {
   probability: number;
   orders: StageDistributionOrder[];
   /**
-   * What each bar represents. "requirement" for a stage; "contribution" for the
-   * disposition columns, where the value is already probability-weighted and so
-   * is not the order's full material requirement.
+   * "requirement" for a stage; "contribution" for the disposition columns. Both
+   * are full order footage — the distinction is only whether the set was chosen
+   * by stage or by expected/not-expected classification.
    */
   valueNoun?: "requirement" | "contribution";
   /** Called when a bar is clicked, to open that line's spec → feet build-up. */
@@ -121,7 +119,7 @@ export function StageDistribution({
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {[
           { k: "Orders", v: String(n), s: `p=${probability}` },
-          { k: "Total", v: `${fmt(total)} ft`, s: valueNoun === "contribution" ? "weighted contribution" : "roll stock required" },
+          { k: "Total", v: `${fmt(total)} ft`, s: "roll stock required" },
           { k: "Largest", v: `${fmt(max)} ft`, s: `${topShare.toFixed(0)}% of stage` },
           { k: "Median", v: `${fmt(median)} ft`, s: max > 0 ? `${(max / Math.max(1, median)).toFixed(0)}× smaller than largest` : "" },
         ].map((t) => (
@@ -141,22 +139,18 @@ export function StageDistribution({
 
       {valueNoun === "contribution" && (
         <div className="rounded-md border border-sky-500/40 bg-sky-500/5 p-2.5 text-xs text-muted-foreground">
-          <strong className="text-foreground">Each order appears once here.</strong> The bar is its{" "}
-          <em>expected</em> footage — full requirement × probability — not a fraction of the job. A job either
-          runs or it does not; nothing is half-won. The total is a portfolio expectation, which is the right
-          number to buy against across many jobs, but it is not a quantity for any single one. The table shows
-          both the full requirement and the probability behind each bar.
+          <strong className="text-foreground">Every bar is a full order.</strong> Nothing here is scaled by a
+          probability. An order runs or it does not, so each one is classified into exactly one column at its
+          whole footage — never split, never halved. The probability is shown next to each order as context for
+          the classification, not as a multiplier. The total is therefore a real quantity: the footage you need
+          if these orders run.
         </div>
       )}
 
       {/* pareto: bars + cumulative curve */}
       <div>
         <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-xs font-semibold">
-            {valueNoun === "contribution"
-              ? "Contribution per order, largest first"
-              : "Material required per order, largest first"}
-          </span>
+          <span className="text-xs font-semibold">Material required per order, largest first</span>
           <span className="text-[10px] text-muted-foreground">line = cumulative share of stage</span>
         </div>
         <div className="overflow-x-auto rounded-md border bg-card p-2">
@@ -240,11 +234,8 @@ export function StageDistribution({
                     <div className="max-w-[380px] truncate text-[10px] text-muted-foreground">{o.itemName}</div>
                   </td>
                   {valueNoun === "contribution" && (
-                    <td className={`w-28 px-2 py-1.5 text-right ${mono} text-muted-foreground`}>
-                      {o.fullRequiredFt != null ? `${fmt(o.fullRequiredFt)} ft` : "—"}
-                      {o.probability != null && (
-                        <div className="text-[10px]">× p={o.probability.toFixed(2)}</div>
-                      )}
+                    <td className={`w-20 px-2 py-1.5 text-right ${mono} text-muted-foreground`}>
+                      {o.probability != null ? `p=${o.probability.toFixed(2)}` : "—"}
                     </td>
                   )}
                   <td className={`px-2 py-1.5 text-right font-semibold ${mono}`}>{fmt(o.requiredFt)} ft</td>

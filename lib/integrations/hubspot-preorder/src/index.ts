@@ -94,7 +94,8 @@ export const PREORDER_PROPERTIES = [
   "hs_object_id", "hs_createdate", "hs_lastmodifieddate", "hs_pipeline", "hs_pipeline_stage",
   "custom_item_name", "estimate_id", "estimate_number", "due_date", "hubspot_owner_id",
   "location", "primary_vendor", "requested_quote_location",
-  "quantity_needed", "product_width", "product_height", "product_depth",
+  "quantity_needed", "projected_monthly_demand", "quantity_tiers_to_quote",
+  "product_width", "product_height", "product_depth",
   "copy_position", "embellishment", "specialty_ink",
   "label_substrate", "label_finish", "label_application_method",
   "flexible_packaging_substrate", "flexible_packaging_finish", "flexible_packaging_style",
@@ -261,6 +262,18 @@ export interface NormalizedJob {
   primaryVendor: string | null;
   /** Parsed out of `custom_item_name`; HubSpot has no customer property here. */
   customer: string | null;
+  /**
+   * `projected_monthly_demand` — the release rate. Where this is well below
+   * `quantity_needed`, the quoted quantity is a blanket/annual total that will be
+   * drawn down over months, not material needed now. Measured 2026-08-06: 87 of
+   * 133 open records with both fields span more than a month, median 2.0× and up
+   * to 19.2×, covering 51% of all open quoted units.
+   */
+  projectedMonthlyDemand: number | null;
+  /** quantity_needed ÷ projected_monthly_demand. Null when either is missing. */
+  releaseSpanMonths: number | null;
+  /** Quoted quantity clearly spans multiple releases — needs sales to confirm. */
+  qtyNeedsClarification: boolean;
   createdAt: string | null;
   dueDate: string | null;
   qty: number | null;
@@ -291,6 +304,13 @@ export interface NormalizedJob {
  * phantom demand.
  */
 export const CALYX_VENDOR = "Calyx Containers";
+
+/**
+ * Release span at which a quoted quantity stops being "material needed now".
+ * 1.5 rather than 1.0 because rounding and part-months are normal and should not
+ * flag every record — 40 of 133 measured records sit at exactly 1.0.
+ */
+export const RELEASE_SPAN_UNCLEAR = 1.5;
 
 /**
  * A blank `primary_vendor` is ambiguous, not safe. Dropping blanks silently
@@ -370,6 +390,13 @@ export function normalizePreorder(raw: RawPreorder): NormalizedJob | null {
 
   const blockers: string[] = [];
   if (vendor.blocker) blockers.push(vendor.blocker);
+
+  // Release rate vs quoted total. A quote of 480,000 against 25,000/month is
+  // 19 months of material, not this quarter's — so flag it rather than pull the
+  // whole blanket into the horizon.
+  const monthly = num(p["projected_monthly_demand"]);
+  const qtyRaw = num(p["quantity_needed"]);
+  const span = monthly != null && monthly > 0 && qtyRaw != null && qtyRaw > 0 ? qtyRaw / monthly : null;
   const qty = num(p["quantity_needed"]);
   if (qty == null || qty <= 0) blockers.push("quantity_needed is blank or zero");
 
@@ -421,6 +448,9 @@ export function normalizePreorder(raw: RawPreorder): NormalizedJob | null {
     location: p["location"] ?? null,
     primaryVendor: p["primary_vendor"] ?? null,
     customer: customerFromItemName(p["custom_item_name"]),
+    projectedMonthlyDemand: monthly,
+    releaseSpanMonths: span,
+    qtyNeedsClarification: span != null && span >= RELEASE_SPAN_UNCLEAR,
     createdAt: p["hs_createdate"] ?? null,
     dueDate: p["due_date"] ?? null,
     qty,

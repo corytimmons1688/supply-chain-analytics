@@ -54,6 +54,8 @@ import {
   type StageOrder,
 } from "@/components/footage-flow-sankey";
 import { StageDistribution } from "@/components/stage-distribution";
+import { FootageFunnel } from "@/components/footage-funnel";
+import { BigHitters } from "@/components/big-hitters";
 import {
   Dialog,
   DialogContent,
@@ -93,6 +95,7 @@ interface Line {
   stageId: string | null;
   stageLabel: string; probability: number;
   qty: number | null; embellishment: string | null; pressRoute: string; pressCostable: boolean;
+  projectedMonthlyDemand: number | null; releaseSpanMonths: number | null; qtyNeedsClarification: boolean;
   substrateStockId: number | null; laminateStockId: number | null; extraStockIds: number[];
   footage: Footage | null; weightedFt: number; counted: boolean; suppressedBy: string | null;
   flags: string[];
@@ -110,6 +113,13 @@ interface Position {
   quoteWeightedFt: number; firmFt: number; projectedFt: number;
   direction: "COMFORTABLE" | "WATCH" | "DECIDE" | "ACT"; directionReason: string;
   onTrackedList: boolean;
+  /** From the material register — what the stock is FOR. */
+  kind: "LABEL" | "FLEXPACK" | null;
+  role: "SUBSTRATE" | "LAMINATE" | "ZIPPER" | null;
+  tier: "PRIMARY" | "SPECIALITY" | null;
+  restricted: boolean;
+  /** What is actually USING it right now. A laminate can serve both lines. */
+  usedBy: ("LABEL" | "FLEXPACK")[];
   byStage: Record<string, { rawFt: number; weightedFt: number; lineCount: number }>;
   openPos: PoRow[];
 }
@@ -136,6 +146,88 @@ const mono = "font-mono tabular-nums";
 const ft = (n: number) =>
   Math.abs(n) >= 1_000_000 ? `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`
     : Math.abs(n) >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n));
+
+/* -------------------------------------------------------------- product line */
+
+type LineFilter = "ALL" | "LABEL" | "FLEXPACK";
+
+const LINE_LABEL: Record<LineFilter, string> = {
+  ALL: "Both",
+  LABEL: "Labels",
+  FLEXPACK: "Flexpack",
+};
+
+/**
+ * A stock belongs to a product line two different ways, and conflating them
+ * hides things:
+ *
+ *   `kind`   — what the material register says it is FOR
+ *   `usedBy` — which lines' demand is landing on it right now
+ *
+ * A laminate can legitimately serve both lines, so filtering on either alone is
+ * wrong. Match if the register says so OR demand says so, and surface the
+ * disagreement rather than silently picking one.
+ */
+function matchesLine(p: Position, f: LineFilter): boolean {
+  if (f === "ALL") return true;
+  if (p.kind === f) return true;
+  return p.usedBy.includes(f);
+}
+
+/**
+ * Tracked = present on the curated material register in materials.ts.
+ * Off-tracked stocks still carry real on-hand and real demand — they are simply
+ * not on the standardised list, so they get no register metadata (role, tier,
+ * restrictions) and are the ones most likely to have no policy either.
+ */
+type TrackFilter = "ANY" | "TRACKED" | "OFF";
+
+const TRACK_LABEL: Record<TrackFilter, string> = {
+  ANY: "All",
+  TRACKED: "Tracked",
+  OFF: "Off-tracked",
+};
+
+function matchesTrack(p: Position, f: TrackFilter): boolean {
+  if (f === "ANY") return true;
+  return f === "TRACKED" ? p.onTrackedList : !p.onTrackedList;
+}
+
+const ROLE_LABEL: Record<NonNullable<Position["role"]>, string> = {
+  SUBSTRATE: "substrate",
+  LAMINATE: "laminate",
+  ZIPPER: "zipper",
+};
+
+/**
+ * Face stock and second web fail differently: a substrate shortage stops the job
+ * outright, a laminate shortage can sometimes be re-specced or run unlaminated.
+ * Worth being able to look at one without the other.
+ */
+type RoleFilter = "ANY" | "SUBSTRATE" | "LAMINATE";
+
+const ROLE_FILTER_LABEL: Record<RoleFilter, string> = {
+  ANY: "All roles",
+  SUBSTRATE: "Substrate",
+  LAMINATE: "Laminate",
+};
+
+function matchesRole(p: Position, f: RoleFilter): boolean {
+  if (f === "ANY") return true;
+  return p.role === f;
+}
+
+/** Shown on the card so a shared or off-register stock is obvious. */
+function lineBadge(p: Position): { text: string; cls: string } | null {
+  const both = p.usedBy.length > 1;
+  if (both) {
+    return { text: "Labels + Flexpack", cls: "bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/30" };
+  }
+  const k = p.kind ?? p.usedBy[0] ?? null;
+  if (k === "LABEL") return { text: "Labels", cls: "bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30" };
+  if (k === "FLEXPACK") return { text: "Flexpack", cls: "bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/30" };
+  return { text: "off register", cls: "bg-muted text-muted-foreground border-border" };
+}
 
 /* ------------------------------------------------------------ horizon lens */
 
@@ -205,24 +297,23 @@ function ordersForStage(lines: Line[], stageId: string, stockId: string | null):
   //   not expected  → requiredFt × (1 − p); a rejected order contributes all of it
   if (stageId === DISPOSITION_EXPECTED || stageId === DISPOSITION_NOT_EXPECTED) {
     const wantExpected = stageId === DISPOSITION_EXPECTED;
+    // An order is classified, never scaled. It runs or it does not, so it lands
+    // wholly in one column at its FULL footage and never appears in both. No
+    // order's footage is ever multiplied by a probability — a half-won job is not
+    // a thing that exists, and buying half a job's material is not a decision
+    // anyone can act on.
     return lines
-      .filter((l) => l.counted && onStock(l))
-      .map((l) => {
-        const req = l.footage?.requiredFt ?? 0;
-        const w = l.weightedFt;
-        return {
-          id: l.id,
-          itemName: l.itemName,
-          customer: l.customer,
-          // Expected value of this one order. Each order appears exactly once —
-          // it is never split into a "won half" and a "lost half", because a job
-          // either runs or it does not.
-          requiredFt: wantExpected ? w : Math.max(0, req - w),
-          weightedFt: w,
-          fullRequiredFt: req,
-          probability: l.probability,
-        };
+      .filter((l) => {
+        if (!l.counted || !onStock(l)) return false;
+        return wantExpected ? l.probability >= 0.5 : l.probability < 0.5;
       })
+      .map((l) => ({
+        id: l.id,
+        itemName: l.itemName,
+        customer: l.customer,
+        requiredFt: l.footage?.requiredFt ?? 0,
+        probability: l.probability,
+      }))
       .filter((o) => o.requiredFt > 0);
   }
 
@@ -500,6 +591,10 @@ export default function ForecastingQuoteStage() {
   // whether a replenishment could arrive before the position runs down, and a
   // fixed 60d window is wrong for a 10d stock and a 63d stock alike.
   const [horizon, setHorizon] = React.useState<Horizon>("LEAD");
+  const [lineFilter, setLineFilter] = React.useState<LineFilter>("ALL");
+  const [trackFilter, setTrackFilter] = React.useState<TrackFilter>("ANY");
+  const [roleFilter, setRoleFilter] = React.useState<RoleFilter>("ANY");
+  const [flowView, setFlowView] = React.useState<"SANKEY" | "FUNNEL">("SANKEY");
   /** { stageId, stockId | null } — stockId scopes the breakdown to one material. */
   const [pickedStage, setPickedStage] = React.useState<{ stageId: string; stockId: string | null } | null>(null);
 
@@ -622,7 +717,65 @@ export default function ForecastingQuoteStage() {
                       <span className={mono}>stock_goal</span> has none set. Most urgent first.
                     </CardDescription>
                   </div>
-                  <div className="flex shrink-0 rounded-md border p-0.5">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <div className="flex rounded-md border p-0.5">
+                    {(["ALL", "LABEL", "FLEXPACK"] as LineFilter[]).map((f) => {
+                      const n = data.positions.filter(
+                        (p) => matchesLine(p, f) && matchesRole(p, roleFilter) && matchesTrack(p, trackFilter),
+                      ).length;
+                      return (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setLineFilter(f)}
+                          className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                            lineFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                          }`}
+                        >
+                          {LINE_LABEL[f]} <span className="opacity-70">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex rounded-md border p-0.5">
+                    {(["ANY", "SUBSTRATE", "LAMINATE"] as RoleFilter[]).map((f) => {
+                      const n = data.positions.filter(
+                        (p) => matchesLine(p, lineFilter) && matchesTrack(p, trackFilter) && matchesRole(p, f),
+                      ).length;
+                      return (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setRoleFilter(f)}
+                          className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                            roleFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                          }`}
+                        >
+                          {ROLE_FILTER_LABEL[f]} <span className="opacity-70">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex rounded-md border p-0.5">
+                    {(["ANY", "TRACKED", "OFF"] as TrackFilter[]).map((f) => {
+                      const n = data.positions.filter(
+                        (p) => matchesLine(p, lineFilter) && matchesRole(p, roleFilter) && matchesTrack(p, f),
+                      ).length;
+                      return (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setTrackFilter(f)}
+                          className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                            trackFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                          }`}
+                        >
+                          {TRACK_LABEL[f]} <span className="opacity-70">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex rounded-md border p-0.5">
                     {(["LEAD", "D30", "D60", "D90"] as Horizon[]).map((h) => (
                       <button
                         key={h}
@@ -635,6 +788,7 @@ export default function ForecastingQuoteStage() {
                         {HORIZON_LABEL[h]}
                       </button>
                     ))}
+                  </div>
                   </div>
                 </div>
                 <div className="mt-2 rounded-md bg-muted/40 p-2.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -650,9 +804,14 @@ export default function ForecastingQuoteStage() {
               <CardContent className="flex flex-col gap-3">
                 <PositionLegend />
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                {data.positions.map((p) => {
+                {data.positions
+                  .filter(
+                    (p) => matchesLine(p, lineFilter) && matchesRole(p, roleFilter) && matchesTrack(p, trackFilter),
+                  )
+                  .map((p) => {
                   const m = DIR[p.direction];
                   const L = lensesFor(p, horizon);
+                  const lb = lineBadge(p);
                   return (
                     <button
                       key={p.stockId}
@@ -663,6 +822,24 @@ export default function ForecastingQuoteStage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`font-semibold ${mono}`}>#{p.stockId}</span>
                         <Chip text={m.label} cls={m.cls} />
+                        {lb && <Chip text={lb.text} cls={lb.cls} />}
+                        {/* Face stock vs second web vs zipper — shown for every material,
+                            because a laminate shortage and a substrate shortage are not
+                            the same problem even at identical footage. */}
+                        {p.role ? (
+                          <Chip
+                            text={ROLE_LABEL[p.role]}
+                            cls={
+                              p.role === "SUBSTRATE"
+                                ? "bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/30"
+                                : "bg-muted text-muted-foreground border-border"
+                            }
+                          />
+                        ) : (
+                          <Chip text="role unknown" cls="bg-muted text-muted-foreground border-border" />
+                        )}
+                        {p.tier === "SPECIALITY" && <Chip text="speciality" cls="bg-muted text-muted-foreground border-border" />}
+                        {p.restricted && <Chip text="restricted" cls="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30" />}
                         {!p.policyFromGoal && <Chip text="derived policy" cls={PROV.DERIVED.cls} />}
                         {!p.onTrackedList && <Chip text="off tracked list" cls="bg-muted text-muted-foreground border-border" />}
                         <span className={`ml-auto text-xs ${mono} ${p.projectedFt < 0 ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground"}`}>
@@ -753,6 +930,44 @@ export default function ForecastingQuoteStage() {
               </Card>
             )}
 
+            {/* ------------------------------------------------ big hitters */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <AlertTriangle className="h-4 w-4" />Big hitters &amp; unclear quantities
+                </CardTitle>
+                <CardDescription>
+                  Orders a human should look at before any material is committed: accepted quotes large enough
+                  to move a stock on their own, and quotes whose quantity spans several monthly releases so the
+                  booked footage overstates what is needed now.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <BigHitters
+                  lines={data.lines
+                    .filter((l) => l.counted && l.source === "HUBSPOT_QUOTE")
+                    .map((l) => ({
+                      id: l.id,
+                      itemName: l.itemName,
+                      customer: l.customer,
+                      stageLabel: l.stageLabel,
+                      probability: l.probability,
+                      qty: l.qty,
+                      projectedMonthlyDemand: l.projectedMonthlyDemand,
+                      releaseSpanMonths: l.releaseSpanMonths,
+                      qtyNeedsClarification: l.qtyNeedsClarification,
+                      requiredFt: l.footage?.requiredFt ?? 0,
+                      substrateStockId: l.substrateStockId,
+                      laminateStockId: l.laminateStockId,
+                    }))}
+                  onPickLine={(id) => {
+                    const line = data.lines.find((x) => x.id === id);
+                    if (line) setPickedLine(line);
+                  }}
+                />
+              </CardContent>
+            </Card>
+
             <ControlTower assumptions={data.assumptions} understating={data.understating} health={data.dataHealth} />
 
             {/* ---------------- per-stock drill-down: flow + POs in flight ---------------- */}
@@ -813,14 +1028,51 @@ export default function ForecastingQuoteStage() {
 
                       <div className="mt-1">
                         <div className="mb-1 text-sm font-semibold">Footage flow — this stock only</div>
+                        {/* Two readings of the same data: where footage SITS and how it
+                            splits (Sankey), or the pipeline in stage order with the
+                            concentration at each step (funnel). Neither replaces the
+                            other, so it is a toggle rather than a choice made for you. */}
                         {stockStages.length > 0 ? (
-                          <FootageFlowSankey
-                            stages={stockStages.map((s) => ({
-                              ...s,
-                              orders: ordersForStage(data.lines, s.stageId, p.stockId),
-                            }))}
-                            onStageClick={(stageId) => setPickedStage({ stageId, stockId: p.stockId })}
-                          />
+                          <>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-[11px] text-muted-foreground">
+                              {flowView === "SANKEY"
+                                ? "Flow: where footage sits by stage, and how it splits into expected vs not."
+                                : "Funnel: current occupancy in pipeline order, with concentration per step."}
+                            </span>
+                            <div className="flex shrink-0 rounded-md border p-0.5">
+                              {(["SANKEY", "FUNNEL"] as const).map((v) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  onClick={() => setFlowView(v)}
+                                  className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                                    flowView === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                                  }`}
+                                >
+                                  {v === "SANKEY" ? "Flow" : "Funnel"}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {flowView === "SANKEY" ? (
+                            <FootageFlowSankey
+                              stages={stockStages.map((s) => ({
+                                ...s,
+                                orders: ordersForStage(data.lines, s.stageId, p.stockId),
+                              }))}
+                              onStageClick={(stageId) => setPickedStage({ stageId, stockId: p.stockId })}
+                            />
+                          ) : (
+                            <FootageFunnel
+                              stages={stockStages.map((s) => ({
+                                ...s,
+                                orders: ordersForStage(data.lines, s.stageId, p.stockId),
+                              }))}
+                              onStageClick={(stageId) => setPickedStage({ stageId, stockId: p.stockId })}
+                            />
+                          )}
+                          </>
                         ) : (
                           <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
                             No open quote demand lands on this stock — its position is driven by firm orders and POs only.
