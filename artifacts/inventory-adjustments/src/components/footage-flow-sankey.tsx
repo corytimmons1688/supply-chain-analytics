@@ -30,10 +30,42 @@ export interface SankeyStage {
   rawFt: number;
   weightedFt: number;
   lineCount: number;
+  /**
+   * Share of the stage held by its single largest estimate. A stage total alone
+   * is ambiguous — 1.39M ft across 12 estimates reads as a trend, but if one
+   * dead job is 80% of it, that is one customer's decision, not a pattern.
+   */
+  topSharePct?: number;
+  /** Largest estimates in the stage, biggest first. */
+  top?: { itemName: string; customer: string | null; requiredFt: number; sharePct: number }[];
+  /**
+   * Every order in the stage. Drives the per-order banding inside the node, so
+   * ribbon thickness reads as "one big job" vs "many small ones" directly from
+   * the diagram rather than only from the tooltip.
+   */
+  orders?: StageOrder[];
 }
+
+export interface StageOrder {
+  id: string;
+  itemName: string;
+  customer: string | null;
+  requiredFt: number;
+  /**
+   * requiredFt × probability. Needed to break the DISPOSITION column down:
+   * "expected to convert" is the sum of these, "not expected" is the remainder.
+   */
+  weightedFt?: number;
+}
+
+/** Synthetic stage ids for the disposition column. */
+export const DISPOSITION_EXPECTED = "DISPOSITION_EXPECTED";
+export const DISPOSITION_NOT_EXPECTED = "DISPOSITION_NOT_EXPECTED";
 
 export interface FootageFlowSankeyProps {
   stages: SankeyStage[];
+  /** Click a stage node or its label to drill into the per-order distribution. */
+  onStageClick?: (stageId: string) => void;
   title?: string;
   subtitle?: string;
 }
@@ -44,7 +76,8 @@ const COL_BOOK = 128;
 const COL_STAGE = 468;
 const COL_DISP = 890;
 const TOP = 52;
-const MIN_LABEL_GAP = 46;
+/** Must exceed the stage-section box height (50) or sections overlap. */
+const MIN_LABEL_GAP = 58;
 const PLOT_H = 400;
 
 const fmt = (v: number) =>
@@ -69,6 +102,61 @@ function ribbon(xs: number, s0: number, s1: number, xt: number, t0: number, t1: 
   return `M${xs},${s0} C${cx},${s0} ${cx},${t0} ${xt},${t0} L${xt},${t1} C${cx},${t1} ${cx},${s1} ${xs},${s1} Z`;
 }
 
+/**
+ * Hover text for a stage. Reports concentration explicitly, because "is this one
+ * huge order or many small ones" changes what the number means and cannot be
+ * read off ribbon width.
+ */
+function stageTooltip(s: SankeyStage): string {
+  const head = `${s.label} — ${fmt(s.rawFt)} ft across ${s.lineCount} estimate${s.lineCount === 1 ? "" : "s"} (p=${s.probability})`;
+  const top = s.top ?? [];
+  if (top.length === 0) return head;
+  const shape =
+    (s.topSharePct ?? 0) >= 60
+      ? `Concentrated: the largest single estimate is ${Math.round(s.topSharePct ?? 0)}% of this stage.`
+      : (s.topSharePct ?? 0) <= 25 && s.lineCount >= 4
+        ? `Spread out: no single estimate is more than ${Math.round(s.topSharePct ?? 0)}% of this stage.`
+        : `Largest estimate is ${Math.round(s.topSharePct ?? 0)}% of this stage.`;
+  const rows = top
+    .map((t, i) => `  ${i + 1}. ${fmt(t.requiredFt)} ft (${Math.round(t.sharePct)}%) — ${t.customer ?? "unknown"}: ${t.itemName}`)
+    .join("\n");
+  return `${head}\n${shape}\n${rows}`;
+}
+
+/**
+ * Concentration summary for an arbitrary set of contributions. Used for the
+ * disposition column, where the question is the same as for a stage — is this
+ * one order's worth of footage or many? — but the value is the weighted (or
+ * unweighted-remainder) contribution rather than the raw requirement.
+ */
+function distTooltip(
+  label: string,
+  items: { name: string; ft: number }[],
+  footer?: string,
+): string {
+  const kept = items.filter((i) => i.ft > 0).sort((a, b) => b.ft - a.ft);
+  const total = kept.reduce((a, i) => a + i.ft, 0);
+  if (kept.length === 0) return label;
+  const topShare = total > 0 ? (kept[0]!.ft / total) * 100 : 0;
+  let acc = 0;
+  let n50 = kept.length;
+  for (let i = 0; i < kept.length; i++) {
+    acc += kept[i]!.ft;
+    if (acc / total >= 0.5) { n50 = i + 1; break; }
+  }
+  const shape =
+    topShare >= 50
+      ? `Dominated by one order — largest is ${Math.round(topShare)}% of this.`
+      : n50 <= Math.max(2, Math.ceil(kept.length * 0.1))
+        ? `Top-heavy — ${n50} of ${kept.length} orders make up half.`
+        : `Well spread — it takes ${n50} of ${kept.length} orders to reach half.`;
+  const rows = kept
+    .slice(0, 3)
+    .map((t, i) => `  ${i + 1}. ${fmt(t.ft)} ft (${Math.round((t.ft / total) * 100)}%) — ${t.name}`)
+    .join("\n");
+  return `${label} — ${fmt(total)} ft across ${kept.length} order${kept.length === 1 ? "" : "s"}\n${shape}\n${rows}${footer ? `\n${footer}` : ""}`;
+}
+
 /** Colour token per outcome. Semantic, not decorative. */
 function colourFor(outcome: string, i: number): string {
   if (outcome === "WON") return "var(--ffs-won)";
@@ -76,7 +164,7 @@ function colourFor(outcome: string, i: number): string {
   return i === 0 ? "var(--ffs-open-1)" : "var(--ffs-open-2)";
 }
 
-export function FootageFlowSankey({ stages, title, subtitle }: FootageFlowSankeyProps) {
+export function FootageFlowSankey({ stages, onStageClick, title, subtitle }: FootageFlowSankeyProps) {
   const model = React.useMemo(() => {
     const withFt = stages.filter((s) => s.rawFt > 0);
     const totalRaw = withFt.reduce((a, s) => a + s.rawFt, 0) || 1;
@@ -99,6 +187,28 @@ export function FootageFlowSankey({ stages, title, subtitle }: FootageFlowSankey
   }, [stages]);
 
   const { nodes, totalRaw, totalWtd, bookH, dispH } = model;
+
+  /**
+   * Disposition contributions per order, flattened across every stage.
+   *  expected      = requiredFt × p
+   *  not expected  = requiredFt × (1 − p)  — a rejected order contributes all of it
+   * Falls back to the stage probability when a line carries no weightedFt.
+   */
+  const disposition = React.useMemo(() => {
+    const expected: { name: string; ft: number }[] = [];
+    const notExpected: { name: string; ft: number }[] = [];
+    for (const s of stages) {
+      for (const o of s.orders ?? []) {
+        const w = o.weightedFt ?? o.requiredFt * (s.probability ?? 0);
+        const name = `${o.customer ?? "unknown"}: ${o.itemName}`;
+        expected.push({ name, ft: w });
+        notExpected.push({ name, ft: Math.max(0, o.requiredFt - w) });
+      }
+    }
+    return { expected, notExpected };
+  }, [stages]);
+
+  const hasOrderDetail = stages.some((s) => (s.orders ?? []).length > 0);
   const bookY = TOP;
   const vbH = Math.max(TOP + bookH, TOP + PLOT_H) + 42;
 
@@ -169,7 +279,7 @@ export function FootageFlowSankey({ stages, title, subtitle }: FootageFlowSankey
           {inbound.map(({ n, s0, s1 }) => (
             <path key={`in-${n.stageId}`} className="rb" fill={n.colour}
               d={ribbon(COL_BOOK + NODE_W, s0, s1, COL_STAGE, n.y, n.y + n.h)}>
-              <title>{`${fmt(n.rawFt)} ft sits in ${n.label} (${n.lineCount} estimates)`}</title>
+              <title>{stageTooltip(n)}</title>
             </path>
           ))}
 
@@ -201,43 +311,119 @@ export function FootageFlowSankey({ stages, title, subtitle }: FootageFlowSankey
           {/* stage nodes + OUTLINED SECTIONS (collision-resolved labels) */}
           {nodes.map((n, i) => {
             const ly = stageLabelY[i]!;
-            const boxTop = ly - 19;
+            const boxTop = ly - 25; // centres the 50px section on its resolved label y
             return (
-              <g key={`st-${n.stageId}`}>
-                <rect x={COL_STAGE} y={n.y} width={NODE_W} height={n.h} rx={3} fill={n.colour} />
-                {/* connector from bar to its section, so pushed-apart labels stay attributable */}
+              <g key={`st-${n.stageId}`} onClick={onStageClick ? () => onStageClick(n.stageId) : undefined}
+                style={onStageClick ? { cursor: "pointer" } : undefined}>
+                <rect x={COL_STAGE} y={n.y} width={NODE_W} height={n.h} rx={3} fill={n.colour}>
+                  <title>{stageTooltip(n)}</title>
+                </rect>
+                {/* Per-order banding: each order gets thickness proportional to its
+                    own requirement, so a single dominant job is visible as one thick
+                    band rather than being averaged into a uniform bar. */}
+                {(n.orders ?? []).length > 1 && (() => {
+                  const ord = [...(n.orders ?? [])].sort((a, b) => b.requiredFt - a.requiredFt);
+                  const tot = ord.reduce((a, o) => a + o.requiredFt, 0) || 1;
+                  let oy = n.y;
+                  return ord.map((o) => {
+                    const oh = (o.requiredFt / tot) * n.h;
+                    const seg = (
+                      <rect key={o.id} x={COL_STAGE} y={oy} width={NODE_W} height={Math.max(0.5, oh)}
+                        fill="none" stroke="hsl(var(--card))" strokeWidth={oh > 2.5 ? 0.9 : 0}
+                        strokeOpacity={0.85}>
+                        <title>{`${o.customer ?? o.itemName}\n${fmt(o.requiredFt)} ft · ${((o.requiredFt / tot) * 100).toFixed(1)}% of ${n.label}`}</title>
+                      </rect>
+                    );
+                    oy += oh;
+                    return seg;
+                  });
+                })()}
+                {/* Connector carries the stage colour, so a label pushed away from
+                    its bar is still unambiguously attributable to it. */}
                 <path d={`M${COL_STAGE + NODE_W + 2},${n.y + n.h / 2} L${COL_STAGE + 24},${ly}`}
-                  stroke="hsl(var(--border))" strokeWidth={1} fill="none" />
+                  stroke={n.colour} strokeWidth={1.75} strokeOpacity={0.75} fill="none" />
+                <circle cx={COL_STAGE + NODE_W + 2} cy={n.y + n.h / 2} r={2.2} fill={n.colour} />
                 {/* the outlined stage section */}
-                <rect x={COL_STAGE + 24} y={boxTop} width={196} height={38} rx={7}
-                  fill="hsl(var(--card))" stroke="var(--ffs-sec)" strokeWidth={1} />
-                <rect x={COL_STAGE + 24} y={boxTop} width={3.5} height={38} rx={1.75} fill={n.colour} />
-                <text x={COL_STAGE + 34} y={boxTop + 16} fontSize={12} fontWeight={650}
+                <rect x={COL_STAGE + 24} y={boxTop} width={228} height={50} rx={7}
+                  fill="hsl(var(--card))" stroke="var(--ffs-sec)" strokeWidth={1}>
+                  <title>{stageTooltip(n)}</title>
+                </rect>
+                <rect x={COL_STAGE + 24} y={boxTop} width={3.5} height={50} rx={1.75} fill={n.colour} />
+                <text x={COL_STAGE + 34} y={boxTop + 15} fontSize={12} fontWeight={650}
                   fill="hsl(var(--foreground))">{n.label}</text>
-                <text x={COL_STAGE + 34} y={boxTop + 30} fontSize={10.5}
+                <text x={COL_STAGE + 34} y={boxTop + 29} fontSize={10.5}
                   fill="hsl(var(--muted-foreground))">
                   {fmt(n.rawFt)} ft · {n.lineCount} est · p={n.probability}
                 </text>
+                {/* Concentration: distinguishes one dominant order from many small ones. */}
+                {n.top && n.top.length > 0 && (
+                  <text x={COL_STAGE + 34} y={boxTop + 43} fontSize={10}
+                    fill={(n.topSharePct ?? 0) >= 60 ? "var(--ffs-lost)" : "hsl(var(--muted-foreground))"}>
+                    {(n.topSharePct ?? 0) >= 60
+                      ? `⚠ top order = ${Math.round(n.topSharePct ?? 0)}% of stage`
+                      : `top order = ${Math.round(n.topSharePct ?? 0)}%`}
+                    {onStageClick ? "  ·  click to break down" : ""}
+                  </text>
+                )}
               </g>
             );
           })}
 
           {/* disposition nodes */}
           {dispH.committed > 0.4 && (
-            <>
+            <g
+              onClick={onStageClick && hasOrderDetail ? () => onStageClick(DISPOSITION_EXPECTED) : undefined}
+              style={onStageClick && hasOrderDetail ? { cursor: "pointer" } : undefined}
+            >
+              <title>{distTooltip("Expected to convert", disposition.expected, "Each order contributes requiredFt × its stage probability.")}</title>
               <rect x={COL_DISP} y={bookY} width={NODE_W} height={dispH.committed} rx={3} fill="var(--ffs-won)" />
+              {/* per-order banding, so one dominant job is visible in the bar itself */}
+              {hasOrderDetail && (() => {
+                const kept = disposition.expected.filter((o) => o.ft > 0).sort((a, b) => b.ft - a.ft);
+                const tot = kept.reduce((a, o) => a + o.ft, 0) || 1;
+                let oy = bookY;
+                return kept.map((o, i) => {
+                  const oh = (o.ft / tot) * dispH.committed;
+                  const seg = (
+                    <rect key={i} x={COL_DISP} y={oy} width={NODE_W} height={Math.max(0.5, oh)}
+                      fill="none" stroke="hsl(var(--card))" strokeWidth={oh > 2.5 ? 0.9 : 0} strokeOpacity={0.85} />
+                  );
+                  oy += oh;
+                  return seg;
+                });
+              })()}
               <text x={COL_DISP + NODE_W + 12} y={bookY + Math.min(dispH.committed / 2, 24) + 2}
                 fontSize={17} fontWeight={700} fill="var(--ffs-won)">{fmt(totalWtd)}</text>
               <text x={COL_DISP + NODE_W + 12} y={bookY + Math.min(dispH.committed / 2, 24) + 17}
                 fontSize={11} fontWeight={600} fill="hsl(var(--foreground))">Expected to convert</text>
               <text x={COL_DISP + NODE_W + 12} y={bookY + Math.min(dispH.committed / 2, 24) + 31}
-                fontSize={10.5} fill="hsl(var(--muted-foreground))">buy against this</text>
-            </>
+                fontSize={10.5} fill="hsl(var(--muted-foreground))">
+                buy against this{onStageClick && hasOrderDetail ? " · click to break down" : ""}
+              </text>
+            </g>
           )}
           {dispH.notExpected > 0.4 && (
-            <>
+            <g
+              onClick={onStageClick && hasOrderDetail ? () => onStageClick(DISPOSITION_NOT_EXPECTED) : undefined}
+              style={onStageClick && hasOrderDetail ? { cursor: "pointer" } : undefined}
+            >
+              <title>{distTooltip("Not expected", disposition.notExpected, "Each order contributes requiredFt × (1 − probability). A rejected order contributes all of its footage.")}</title>
               <rect x={COL_DISP} y={bookY + dispH.committed} width={NODE_W} height={dispH.notExpected} rx={3}
                 fill="var(--ffs-ne)" />
+              {hasOrderDetail && (() => {
+                const kept = disposition.notExpected.filter((o) => o.ft > 0).sort((a, b) => b.ft - a.ft);
+                const tot = kept.reduce((a, o) => a + o.ft, 0) || 1;
+                let oy = bookY + dispH.committed;
+                return kept.map((o, i) => {
+                  const oh = (o.ft / tot) * dispH.notExpected;
+                  const seg = (
+                    <rect key={i} x={COL_DISP} y={oy} width={NODE_W} height={Math.max(0.5, oh)}
+                      fill="none" stroke="hsl(var(--card))" strokeWidth={oh > 2.5 ? 0.9 : 0} strokeOpacity={0.85} />
+                  );
+                  oy += oh;
+                  return seg;
+                });
+              })()}
               <text x={COL_DISP + NODE_W + 12} y={bookY + dispH.committed + Math.min(dispH.notExpected / 2, 30)}
                 fontSize={17} fontWeight={700} fill="hsl(var(--muted-foreground))">
                 {fmt(totalRaw - totalWtd)}
@@ -245,8 +431,10 @@ export function FootageFlowSankey({ stages, title, subtitle }: FootageFlowSankey
               <text x={COL_DISP + NODE_W + 12} y={bookY + dispH.committed + Math.min(dispH.notExpected / 2, 30) + 15}
                 fontSize={11} fontWeight={600} fill="hsl(var(--foreground))">Not expected</text>
               <text x={COL_DISP + NODE_W + 12} y={bookY + dispH.committed + Math.min(dispH.notExpected / 2, 30) + 29}
-                fontSize={10.5} fill="hsl(var(--muted-foreground))">rejected + risk-adjusted</text>
-            </>
+                fontSize={10.5} fill="hsl(var(--muted-foreground))">
+                rejected + risk-adjusted{onStageClick && hasOrderDetail ? " · click to break down" : ""}
+              </text>
+            </g>
           )}
         </svg>
       </div>

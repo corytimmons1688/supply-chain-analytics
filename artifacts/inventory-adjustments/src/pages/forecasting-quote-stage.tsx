@@ -46,7 +46,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { FootageFlowSankey, type SankeyStage } from "@/components/footage-flow-sankey";
+import {
+  FootageFlowSankey,
+  DISPOSITION_EXPECTED,
+  DISPOSITION_NOT_EXPECTED,
+  type SankeyStage,
+  type StageOrder,
+} from "@/components/footage-flow-sankey";
+import { StageDistribution } from "@/components/stage-distribution";
 import {
   Dialog,
   DialogContent,
@@ -81,7 +88,10 @@ interface Footage {
 }
 interface Line {
   id: string; source: "HUBSPOT_QUOTE" | "NETSUITE_SO"; ref: string; itemName: string;
-  customer: string | null; kind: "LABEL" | "FLEXPACK"; stageLabel: string; probability: number;
+  customer: string | null; kind: "LABEL" | "FLEXPACK";
+  /** Present on the response; needed to attribute a line to a Sankey stage. */
+  stageId: string | null;
+  stageLabel: string; probability: number;
   qty: number | null; embellishment: string | null; pressRoute: string; pressCostable: boolean;
   substrateStockId: number | null; laminateStockId: number | null; extraStockIds: number[];
   footage: Footage | null; weightedFt: number; counted: boolean; suppressedBy: string | null;
@@ -126,6 +136,111 @@ const mono = "font-mono tabular-nums";
 const ft = (n: number) =>
   Math.abs(n) >= 1_000_000 ? `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`
     : Math.abs(n) >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n));
+
+/* ------------------------------------------------------------ horizon lens */
+
+type Horizon = "LEAD" | "D30" | "D60" | "D90";
+
+const HORIZON_LABEL: Record<Horizon, string> = {
+  LEAD: "Lead time",
+  D30: "30 days",
+  D60: "60 days",
+  D90: "90 days",
+};
+
+function horizonDays(h: Horizon, p: Position): number {
+  if (h === "LEAD") return Math.max(1, Math.round(p.leadTimeDays || 30));
+  return h === "D30" ? 30 : h === "D60" ? 60 : 90;
+}
+
+/**
+ * Two independent readings of the same position. They are deliberately NOT
+ * combined: `dailyDemandFt` is measured historical consumption and the order
+ * book is future demand for the same material, so subtracting both would count
+ * one requirement twice — the exact error the double-count guard exists to stop.
+ *
+ * Instead each is reported on its own, and their disagreement is the signal: a
+ * book far more negative than the burn rate means the book is front-loaded or
+ * its quotes will not all land.
+ */
+function lensesFor(p: Position, h: Horizon) {
+  const days = horizonDays(h, p);
+  const cutoff = Date.now() + days * 86400000;
+  const poWithin = p.openPos.reduce(
+    (a, po) => (po.promisedIso && Date.parse(po.promisedIso) <= cutoff ? a + po.footageFt : a),
+    0,
+  );
+  const poUndated = p.openPos.reduce((a, po) => (po.promisedIso ? a : a + po.footageFt), 0);
+  const burnFt = (p.dailyDemandFt || 0) * days;
+  return {
+    days,
+    poWithin,
+    poUndated,
+    /** Order book, no time bound — the existing headline number. */
+    book: p.projectedFt,
+    /** Measured burn rate over the horizon, ignoring the order book. */
+    burn: p.onHandFt + poWithin - burnFt,
+    burnFt,
+    /** True when the two lenses disagree enough to matter. */
+    diverges: Math.abs(p.projectedFt - (p.onHandFt + poWithin - burnFt)) > Math.max(2000, p.safetyStockFt * 0.5),
+  };
+}
+
+/**
+ * Orders in a stage, optionally scoped to one stock. `FIRM` is a synthetic stage
+ * on the per-stock diagram (NetSuite sales orders), so it matches on source
+ * rather than stageId.
+ */
+function ordersForStage(lines: Line[], stageId: string, stockId: string | null): StageOrder[] {
+  const sid = stockId === null ? null : Number(stockId);
+  const onStock = (l: Line) =>
+    sid === null ||
+    l.substrateStockId === sid ||
+    l.laminateStockId === sid ||
+    l.extraStockIds.includes(sid);
+
+  // Disposition columns span every stage; the value shown is the contribution to
+  // that column, not the raw requirement.
+  //   expected      → requiredFt × p
+  //   not expected  → requiredFt × (1 − p); a rejected order contributes all of it
+  if (stageId === DISPOSITION_EXPECTED || stageId === DISPOSITION_NOT_EXPECTED) {
+    const wantExpected = stageId === DISPOSITION_EXPECTED;
+    return lines
+      .filter((l) => l.counted && onStock(l))
+      .map((l) => {
+        const req = l.footage?.requiredFt ?? 0;
+        const w = l.weightedFt;
+        return {
+          id: l.id,
+          itemName: l.itemName,
+          customer: l.customer,
+          // Expected value of this one order. Each order appears exactly once —
+          // it is never split into a "won half" and a "lost half", because a job
+          // either runs or it does not.
+          requiredFt: wantExpected ? w : Math.max(0, req - w),
+          weightedFt: w,
+          fullRequiredFt: req,
+          probability: l.probability,
+        };
+      })
+      .filter((o) => o.requiredFt > 0);
+  }
+
+  return lines
+    .filter((l) => {
+      if (!l.counted) return false;
+      const stageMatch = stageId === "FIRM" ? l.source === "NETSUITE_SO" : l.stageId === stageId;
+      return stageMatch && onStock(l);
+    })
+    .map((l) => ({
+      id: l.id,
+      itemName: l.itemName,
+      customer: l.customer,
+      requiredFt: l.footage?.requiredFt ?? 0,
+      weightedFt: l.weightedFt,
+    }))
+    .filter((o) => o.requiredFt > 0);
+}
 
 const DIR: Record<Position["direction"], { label: string; cls: string; bar: string }> = {
   ACT: { label: "Act now", cls: "bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30", bar: "bg-rose-500" },
@@ -381,6 +496,12 @@ function ControlTower({ assumptions, understating, health }: {
 export default function ForecastingQuoteStage() {
   const [pickedStock, setPickedStock] = React.useState<string | null>(null);
   const [pickedLine, setPickedLine] = React.useState<Line | null>(null);
+  // Defaults to the stock's own lead time: the only question that matters is
+  // whether a replenishment could arrive before the position runs down, and a
+  // fixed 60d window is wrong for a 10d stock and a 63d stock alike.
+  const [horizon, setHorizon] = React.useState<Horizon>("LEAD");
+  /** { stageId, stockId | null } — stockId scopes the breakdown to one material. */
+  const [pickedStage, setPickedStage] = React.useState<{ stageId: string; stockId: string | null } | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<Forecast>({
     queryKey: ["forecasting", "quote-stage"],
@@ -492,19 +613,46 @@ export default function ForecastingQuoteStage() {
             {/* positions */}
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base"><Package className="h-4 w-4" />Where we are right now</CardTitle>
-                <CardDescription>
-                  Real on-hand from <span className={mono}>lt_roll</span> against firm orders and weighted quotes.
-                  Safety stock and reorder point are <strong className="text-foreground">derived</strong> from usage and
-                  measured PO lead times — <span className={mono}>stock_goal</span> has none set for these materials, and
-                  every derived value says so. Most urgent first.
-                </CardDescription>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-base"><Package className="h-4 w-4" />Where we are right now</CardTitle>
+                    <CardDescription>
+                      Real on-hand from <span className={mono}>lt_roll</span>. Safety stock and reorder point are{" "}
+                      <strong className="text-foreground">derived</strong> from usage and measured PO lead times —{" "}
+                      <span className={mono}>stock_goal</span> has none set. Most urgent first.
+                    </CardDescription>
+                  </div>
+                  <div className="flex shrink-0 rounded-md border p-0.5">
+                    {(["LEAD", "D30", "D60", "D90"] as Horizon[]).map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => setHorizon(h)}
+                        className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                          horizon === h ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                        }`}
+                      >
+                        {HORIZON_LABEL[h]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-2 rounded-md bg-muted/40 p-2.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <strong className="text-foreground">Two readings, deliberately not combined.</strong>{" "}
+                  <span className="text-foreground">Order book</span> = on hand + open PO − firm − weighted quotes, with{" "}
+                  <em>no time bound</em> (HubSpot&rsquo;s <span className={mono}>due_date</span> is unusable here — 192 of
+                  200 open quotes are already past it).{" "}
+                  <span className="text-foreground">Burn rate</span> = on hand + PO landing inside the window − measured
+                  usage over the window. Subtracting both would count the same demand twice, so where they disagree the
+                  card says so rather than averaging them.
+                </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 <PositionLegend />
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {data.positions.map((p) => {
                   const m = DIR[p.direction];
+                  const L = lensesFor(p, horizon);
                   return (
                     <button
                       key={p.stockId}
@@ -518,7 +666,7 @@ export default function ForecastingQuoteStage() {
                         {!p.policyFromGoal && <Chip text="derived policy" cls={PROV.DERIVED.cls} />}
                         {!p.onTrackedList && <Chip text="off tracked list" cls="bg-muted text-muted-foreground border-border" />}
                         <span className={`ml-auto text-xs ${mono} ${p.projectedFt < 0 ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground"}`}>
-                          projected {ft(p.projectedFt)} ft
+                          book {ft(p.projectedFt)} ft
                         </span>
                       </div>
                       <div className="mt-0.5 truncate text-xs text-muted-foreground">{p.description}</div>
@@ -540,6 +688,29 @@ export default function ForecastingQuoteStage() {
                         <span>SS {ft(p.safetyStockFt)} · ROP {ft(p.reorderPointFt)}</span>
                         <span>lead {p.leadTimeDays ? `${Math.round(p.leadTimeDays)}d` : "—"} ({p.leadTimeSource.replace("_", " ")})</span>
                       </div>
+                      {/* horizon lens — burn rate over the selected window */}
+                      <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 rounded border-l-2 border-l-sky-500/50 bg-sky-500/5 px-2 py-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-400">
+                          {HORIZON_LABEL[horizon]} · {L.days}d
+                        </span>
+                        <span className={`text-[11px] ${mono} ${L.burn < p.safetyStockFt ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>
+                          burn-rate {ft(L.burn)} ft
+                        </span>
+                        <span className={`text-[10px] ${mono} text-muted-foreground`}>
+                          (usage {ft(L.burnFt)} · PO in {ft(L.poWithin)}
+                          {L.poUndated > 0 ? ` · ${ft(L.poUndated)} undated PO excluded` : ""})
+                        </span>
+                        {p.dailyDemandFt <= 0 && (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400">no measured usage — burn lens unavailable</span>
+                        )}
+                      </div>
+                      {L.diverges && p.dailyDemandFt > 0 && (
+                        <p className="mt-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                          The two lenses disagree by {ft(Math.abs(L.book - L.burn))} ft — the order book is
+                          {L.book < L.burn ? " heavier" : " lighter"} than measured consumption implies. Worth checking
+                          whether the quotes are real before acting on the book alone.
+                        </p>
+                      )}
                       <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">{p.directionReason}</p>
                     </button>
                   );
@@ -554,7 +725,12 @@ export default function ForecastingQuoteStage() {
                 <CardTitle className="flex items-center gap-2 text-base"><Layers className="h-4 w-4" />Footage flow by deal stage</CardTitle>
                 <CardDescription>How heavy the requirement is at each stage, and how much is expected to convert.</CardDescription>
               </CardHeader>
-              <CardContent><FootageFlowSankey stages={data.stages} /></CardContent>
+              <CardContent>
+                <FootageFlowSankey
+                  stages={data.stages.map((s) => ({ ...s, orders: ordersForStage(data.lines, s.stageId, null) }))}
+                  onStageClick={(stageId) => setPickedStage({ stageId, stockId: null })}
+                />
+              </CardContent>
             </Card>
 
             <DemandLedger lines={data.lines} onPick={setPickedLine} />
@@ -599,10 +775,17 @@ export default function ForecastingQuoteStage() {
                       rawFt: firm.rawFt, weightedFt: firm.weightedFt, lineCount: firm.lineCount,
                     });
                   }
-                  const lines = data.lines.filter(
-                    (l) => l.counted && (l.substrateStockId === Number(p.stockId) ||
-                      l.laminateStockId === Number(p.stockId) || l.extraStockIds.includes(Number(p.stockId))),
-                  );
+                  // Rejected quotes are excluded here on purpose: they carry p=0,
+                  // add nothing to the position, and only pad the list. They stay
+                  // in the flow diagram above, which is where the rejected volume
+                  // is the point (it is the conversion denominator).
+                  const onThisStock = (l: Line) =>
+                    l.substrateStockId === Number(p.stockId) ||
+                    l.laminateStockId === Number(p.stockId) ||
+                    l.extraStockIds.includes(Number(p.stockId));
+                  const allOnStock = data.lines.filter((l) => l.counted && onThisStock(l));
+                  const lines = allOnStock.filter((l) => l.probability > 0);
+                  const rejectedCount = allOnStock.length - lines.length;
                   return (
                     <>
                       <DialogHeader>
@@ -631,7 +814,13 @@ export default function ForecastingQuoteStage() {
                       <div className="mt-1">
                         <div className="mb-1 text-sm font-semibold">Footage flow — this stock only</div>
                         {stockStages.length > 0 ? (
-                          <FootageFlowSankey stages={stockStages} />
+                          <FootageFlowSankey
+                            stages={stockStages.map((s) => ({
+                              ...s,
+                              orders: ordersForStage(data.lines, s.stageId, p.stockId),
+                            }))}
+                            onStageClick={(stageId) => setPickedStage({ stageId, stockId: p.stockId })}
+                          />
                         ) : (
                           <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
                             No open quote demand lands on this stock — its position is driven by firm orders and POs only.
@@ -652,7 +841,14 @@ export default function ForecastingQuoteStage() {
                       </div>
 
                       <div className="mt-3">
-                        <div className="mb-1 text-sm font-semibold">Demand lines on this stock ({lines.length})</div>
+                        <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-sm font-semibold">Demand lines on this stock ({lines.length})</span>
+                          {rejectedCount > 0 && (
+                            <span className="text-[11px] text-muted-foreground">
+                              · {rejectedCount} rejected quote{rejectedCount === 1 ? "" : "s"} hidden (p=0, no effect on position)
+                            </span>
+                          )}
+                        </div>
                         <div className="max-h-56 overflow-auto rounded-md border">
                           <table className="w-full text-xs">
                             <tbody>
@@ -671,6 +867,62 @@ export default function ForecastingQuoteStage() {
                         </div>
                         <p className="mt-1 text-[10px] text-muted-foreground">Click a line for its spec → feet build-up.</p>
                       </div>
+                    </>
+                  );
+                })()}
+              </DialogContent>
+            </Dialog>
+
+            {/* ---------------- per-stage drill-down: material distribution ---------------- */}
+            <Dialog open={pickedStage !== null} onOpenChange={(o) => !o && setPickedStage(null)}>
+              <DialogContent className="max-h-[88vh] max-w-[900px] overflow-y-auto">
+                {pickedStage && (() => {
+                  const isDisp =
+                    pickedStage.stageId === DISPOSITION_EXPECTED ||
+                    pickedStage.stageId === DISPOSITION_NOT_EXPECTED;
+                  const st = data.stages.find((s) => s.stageId === pickedStage.stageId);
+                  const label =
+                    pickedStage.stageId === DISPOSITION_EXPECTED
+                      ? "Expected to convert"
+                      : pickedStage.stageId === DISPOSITION_NOT_EXPECTED
+                        ? "Not expected"
+                        : (st?.label ?? (pickedStage.stageId === "FIRM" ? "Sales order (firm)" : pickedStage.stageId));
+                  const prob = st?.probability ?? (pickedStage.stageId === "FIRM" ? 1 : 0);
+                  const orders = ordersForStage(data.lines, pickedStage.stageId, pickedStage.stockId);
+                  const stock = pickedStage.stockId
+                    ? data.positions.find((x) => x.stockId === pickedStage.stockId)
+                    : null;
+                  return (
+                    <>
+                      <DialogHeader>
+                        <DialogTitle className="flex flex-wrap items-center gap-2 text-base">
+                          <span>{label}</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            material distribution
+                            {stock ? ` · stock #${stock.stockId}` : " · all stocks"}
+                          </span>
+                        </DialogTitle>
+                        <p className="text-xs text-muted-foreground">
+                          {pickedStage.stageId === DISPOSITION_EXPECTED
+                            ? "Each order contributes its requirement × its stage probability — this is the footage to actually buy against. "
+                            : pickedStage.stageId === DISPOSITION_NOT_EXPECTED
+                              ? "Each order contributes its requirement × (1 − probability). A rejected quote contributes all of its footage, which is why this column is usually the larger one. "
+                              : ""}
+                          {stock
+                            ? `Only footage of #${stock.stockId} is counted here, so an order using several materials appears at its requirement for this one.`
+                            : "Every material each order consumes is counted, so an order using a face stock and a laminate contributes to both."}
+                        </p>
+                      </DialogHeader>
+                      <StageDistribution
+                        stageLabel={label}
+                        probability={prob}
+                        valueNoun={isDisp ? "contribution" : "requirement"}
+                        orders={orders}
+                        onPickOrder={(id) => {
+                          const line = data.lines.find((l) => l.id === id);
+                          if (line) { setPickedStage(null); setPickedLine(line); }
+                        }}
+                      />
                     </>
                   );
                 })()}

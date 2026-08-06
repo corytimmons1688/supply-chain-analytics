@@ -259,6 +259,8 @@ export interface NormalizedJob {
   probability: number;
   location: string | null;
   primaryVendor: string | null;
+  /** Parsed out of `custom_item_name`; HubSpot has no customer property here. */
+  customer: string | null;
   createdAt: string | null;
   dueDate: string | null;
   qty: number | null;
@@ -280,6 +282,74 @@ export interface NormalizedJob {
   notes: string | null;
 }
 
+/**
+ * Only jobs Calyx makes itself consume Calyx roll stock. `location = Internal`
+ * is filtered at the query, but that alone leaks jobs outsourced to another
+ * converter: measured 2026-08-06, 7 of 407 internal forward-stage records carry
+ * a different `primary_vendor` (Ross Print / Packaging, Ted Pack, Virtual
+ * Packaging) — 165,000 units of it sitting in Quote Completed, i.e. live
+ * phantom demand.
+ */
+export const CALYX_VENDOR = "Calyx Containers";
+
+/**
+ * A blank `primary_vendor` is ambiguous, not safe. Dropping blanks silently
+ * would be the worse failure mode, so they are kept and blocked into the review
+ * queue instead. (3 of the 7 above are blank, all Quote Rejected today, so this
+ * costs nothing now and stays correct if that changes.)
+ */
+function vendorScope(
+  primaryVendor: string | null,
+): { inScope: boolean; blocker: string | null } {
+  const v = (primaryVendor ?? "").trim();
+  if (v === "") {
+    return { inScope: true, blocker: "primary_vendor is blank — cannot confirm Calyx makes this job" };
+  }
+  if (v.toLowerCase() !== CALYX_VENDOR.toLowerCase()) {
+    return { inScope: false, blocker: null };
+  }
+  return { inScope: true, blocker: null };
+}
+
+/**
+ * Recover the customer from `custom_item_name`. HubSpot's pre-order object has
+ * no customer property, but the auto-generated name embeds it:
+ *
+ *   CQ-Trulieve-Flexible Packaging-3.5 x 6.5 x -59457295113   → Trulieve
+ *   CQ-doTERRA Manufacturing, LLC-Labels-.9375 x 4…           → doTERRA Manufacturing, LLC
+ *   CQ-Acreage Holdings -Flexible Packaging-6.5 x 8…          → Acreage Holdings
+ *
+ * Only the `CQ-<customer>-<class>` shape is parsed. Internal shop codes
+ * (`GLOR-MI-2174-GRPE`, `BURN-FL-1926-PRLB`) carry no customer and return null
+ * rather than a guess — a wrong customer is worse than an absent one, because
+ * concentration and per-brand analysis silently attribute to the wrong account.
+ */
+/**
+ * Class tokens as they actually appear, typos included: "Flexible Packing" is a
+ * common misspelling in the live data and `Label` shows up singular. Matching
+ * only the correct spellings loses real customers.
+ */
+const CLASS_TOKENS = "Labels?|Flexible Pack(?:ag)?ing|Flex Pack|Roll Stock|Boxe?s?|Rigid|Wavepack";
+/**
+ * An optional leading estimate id is common — `CQ-1725-Sugarhouse Farms-…` —
+ * so a numeric segment straight after `CQ-` is skipped rather than mistaken for
+ * the customer.
+ */
+const CUSTOMER_RE = new RegExp(
+  `^CQ-\\s*(?:\\d+\\s*-\\s*)?(.+?)\\s*-\\s*(?:${CLASS_TOKENS})\\b`,
+  "i",
+);
+
+export function customerFromItemName(itemName: string | null | undefined): string | null {
+  if (!itemName) return null;
+  const m = CUSTOMER_RE.exec(itemName.trim());
+  if (!m) return null;
+  const name = (m[1] ?? "").replace(/[-\s]+$/, "").trim();
+  // A bare id (the `CQ-49878299719 Dark Horse …` shape) is not a customer name.
+  if (!name || /^\d+$/.test(name)) return null;
+  return name;
+}
+
 function kindOf(p: Record<string, string | null>): MaterialKind | null {
   if (p["flexible_packaging_substrate"]) return "FLEXPACK";
   if (p["label_substrate"]) return "LABEL";
@@ -294,7 +364,12 @@ export function normalizePreorder(raw: RawPreorder): NormalizedJob | null {
   const kind = kindOf(p);
   if (!kind) return null; // boxes / rigid / unknown — out of Phase 1 scope
 
+  // Outsourced to another converter ⇒ consumes no Calyx roll stock.
+  const vendor = vendorScope(p["primary_vendor"] ?? null);
+  if (!vendor.inScope) return null;
+
   const blockers: string[] = [];
+  if (vendor.blocker) blockers.push(vendor.blocker);
   const qty = num(p["quantity_needed"]);
   if (qty == null || qty <= 0) blockers.push("quantity_needed is blank or zero");
 
@@ -345,6 +420,7 @@ export function normalizePreorder(raw: RawPreorder): NormalizedJob | null {
     probability: STAGE_PROBABILITY[stageId] ?? 0,
     location: p["location"] ?? null,
     primaryVendor: p["primary_vendor"] ?? null,
+    customer: customerFromItemName(p["custom_item_name"]),
     createdAt: p["hs_createdate"] ?? null,
     dueDate: p["due_date"] ?? null,
     qty,

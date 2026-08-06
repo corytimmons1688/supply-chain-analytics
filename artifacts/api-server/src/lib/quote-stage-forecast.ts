@@ -335,6 +335,13 @@ export interface QuoteStageForecast {
   stages: {
     stageId: string; label: string; outcome: string; probability: number;
     lineCount: number; rawFt: number; weightedFt: number;
+    /**
+     * Concentration. A stage total is ambiguous on its own: 1.39M ft across 12
+     * estimates reads as a trend, but if one dead 1.5M-unit job is most of it,
+     * it is one customer's decision. topSharePct answers which.
+     */
+    topSharePct: number;
+    top: { itemName: string; customer: string | null; requiredFt: number; sharePct: number }[];
   }[];
   positions: StockPosition[];
   lines: QuoteLine[];
@@ -394,7 +401,7 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
       source: "HUBSPOT_QUOTE",
       ref: job.estimateId ?? job.id,
       itemName: job.itemName,
-      customer: null,
+      customer: job.customer,
       kind: job.kind,
       stageId: job.stageId,
       stageLabel: job.stageLabel,
@@ -512,14 +519,29 @@ export async function buildQuoteStageForecast(): Promise<QuoteStageForecast> {
   /* ------------------------------------------------------- stage rollup */
   const stages = FORWARD_STAGES.map((id) => {
     const inStage = counted.filter((l) => l.stageId === id);
+    const rawFt = inStage.reduce((a, l) => a + (l.footage?.requiredFt ?? 0), 0);
+    const ranked = [...inStage]
+      .sort((a, b) => (b.footage?.requiredFt ?? 0) - (a.footage?.requiredFt ?? 0))
+      .slice(0, 3)
+      .map((l) => {
+        const f = l.footage?.requiredFt ?? 0;
+        return {
+          itemName: l.itemName,
+          customer: l.customer,
+          requiredFt: f,
+          sharePct: rawFt > 0 ? (f / rawFt) * 100 : 0,
+        };
+      });
     return {
       stageId: id,
       label: STAGE_LABEL[id] ?? id,
       outcome: STAGE_OUTCOME[id] ?? "OPEN",
       probability: STAGE_PROBABILITY[id] ?? 0,
       lineCount: inStage.length,
-      rawFt: inStage.reduce((a, l) => a + (l.footage?.requiredFt ?? 0), 0),
+      rawFt,
       weightedFt: inStage.reduce((a, l) => a + l.weightedFt, 0),
+      topSharePct: ranked[0]?.sharePct ?? 0,
+      top: ranked,
     };
   });
 
